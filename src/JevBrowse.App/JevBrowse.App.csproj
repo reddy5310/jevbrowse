@@ -28,5 +28,6 @@
     <ProjectReference Include="..\JevBrowse.TrustOS\JevBrowse.TrustOS.csproj" />
     <ProjectReference Include="..\JevBrowse.Brain\JevBrowse.Brain.csproj" />
     <ProjectReference Include="..\JevBrowse.Memory\JevBrowse.Memory.csproj" />
+    <ProjectReference Include="..\JevBrowse.DevSpace\JevBrowse.DevSpace.csproj" />
   </ItemGroup>
 </Project>

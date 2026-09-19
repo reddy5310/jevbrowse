@@ -45,7 +45,8 @@ Each phase maps to a milestone in the architecture doc (Table A.14).
 | 6 Trust OS | DONE 2026-09-20 | ADR 0008; 20 trust tests + 5 kernel integration tests; Private container zero-trace verified |
 | 7 JevBrain | DONE 2026-09-20 (Jev endpoint shape pending user confirmation) | ADR 0009; 15 brain tests; AI off by default; decision log |
 | 8 Browser Memory | DONE 2026-09-20 | ADR 0010; FTS5 index gated by Trust OS, 200 MB budget, optional rerank |
-| 9 DevSpace | next | |
+| 9 DevSpace | DONE 2026-09-20 | ADR 0011; optional module, explicit environments, error/network intelligence |
+| 10 Agent Gateway | next | |
 
 ### Phase 0 — Foundations (M0 Feasibility)
 - Repo skeleton per §17, `Directory.Build.props`, solution, CI skeleton, docs (Constitution, ADR 0001–0005, cost-card template).

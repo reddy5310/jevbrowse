@@ -4,6 +4,7 @@
       <Platform Project="x64" />
     </Project>
     <Project Path="src/JevBrowse.Brain/JevBrowse.Brain.csproj" />
+    <Project Path="src/JevBrowse.DevSpace/JevBrowse.DevSpace.csproj" />
     <Project Path="src/JevBrowse.Diagnostics/JevBrowse.Diagnostics.csproj" />
     <Project Path="src/JevBrowse.Domain/JevBrowse.Domain.csproj" />
     <Project Path="src/JevBrowse.Memory/JevBrowse.Memory.csproj" />
@@ -17,6 +18,7 @@
   <Folder Name="/tests/" />
   <Folder Name="/tests/Unit/">
     <Project Path="tests/Unit/JevBrowse.Brain.Tests/JevBrowse.Brain.Tests.csproj" />
+    <Project Path="tests/Unit/JevBrowse.DevSpace.Tests/JevBrowse.DevSpace.Tests.csproj" />
     <Project Path="tests/Unit/JevBrowse.Domain.Tests/JevBrowse.Domain.Tests.csproj" />
     <Project Path="tests/Unit/JevBrowse.Kernel.Tests/JevBrowse.Kernel.Tests.csproj" />
     <Project Path="tests/Unit/JevBrowse.Memory.Tests/JevBrowse.Memory.Tests.csproj" />

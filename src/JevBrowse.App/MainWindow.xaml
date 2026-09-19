@@ -94,10 +94,18 @@
                     <Button Content="Ask" Click="OnAsk" ToolTipService.ToolTip="Summarize this page (explicit; you confirm before anything is sent)"/>
                     <Button Content="Brain" Click="OnBrain" ToolTipService.ToolTip="AI switches and the decision log"/>
                     <Button Content="Memory" Click="OnMemory" ToolTipService.ToolTip="Search everything you've read (local index of public pages)"/>
+                    <Button Content="Dev" Click="OnDev" ToolTipService.ToolTip="DevSpace: environment, localhost, errors, network (optional module)"/>
                 </StackPanel>
             </Grid>
-            <Grid x:Name="WebHost" Grid.Row="1">
-                <TextBlock x:Name="VirtualPlaceholder" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.5" Text="No live renderer. Select a tab."/>
+            <Grid Grid.Row="1">
+                <Grid x:Name="WebHost">
+                    <TextBlock x:Name="VirtualPlaceholder" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.5" Text="No live renderer. Select a tab."/>
+                </Grid>
+                <!-- DevSpace PROD chrome: unmissable, drawn over the page edges, hit-test transparent. -->
+                <Border x:Name="ProdBorder" BorderBrush="#E0FF3B30" BorderThickness="4" IsHitTestVisible="False" Visibility="Collapsed"/>
+                <Border x:Name="EnvBadge" Background="#E0FF3B30" CornerRadius="0,0,6,0" Padding="10,3" HorizontalAlignment="Left" VerticalAlignment="Top" IsHitTestVisible="False" Visibility="Collapsed">
+                    <TextBlock x:Name="EnvBadgeText" Foreground="White" FontWeight="Bold" FontSize="12" Text="PROD"/>
+                </Border>
             </Grid>
             <TextBlock x:Name="StatusText" Grid.Row="2" Padding="8,4" FontFamily="Consolas" FontSize="12" TextWrapping="Wrap"/>
         </Grid>

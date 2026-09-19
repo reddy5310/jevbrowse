@@ -1,7 +1,9 @@
 using System.Collections.ObjectModel;
 using System.Text.Json;
+using JevBrowse.App.DevSpace;
 using JevBrowse.App.Renderer;
 using JevBrowse.App.Shield;
+using JevBrowse.DevSpace;
 using JevBrowse.App.Trust;
 using JevBrowse.Brain;
 using JevBrowse.Brain.Providers;
@@ -43,6 +45,7 @@ public sealed partial class MainWindow : Window
     private IReadOnlyList<IAiProvider> _providers = [];
     private BrowserMemory? _memory;
     private MemoryIndexer? _indexer;
+    private DevSpaceAdapter? _dev;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _tick;
     private ResourcePlan? _lastPlan;
     private bool _syncingSelection;
@@ -65,8 +68,11 @@ public sealed partial class MainWindow : Window
         _shield = new ShieldAdapter(_siteSettings);
         // Trust OS: permission prompts are owned by the window; policy decides most without UI.
         _permissions = new PermissionAdapter(new SitePermissionsRepository(_db), PromptPermissionAsync);
-        _leases.OnCoreCreated = (core, id, _) => { _shield.Attach(core, id); _permissions.Attach(core); };
-        _leases.OnCoreDisposed = _shield.Detach;
+        // DevSpace: optional module. Off unless JEVBROWSE_DEVSPACE=1 or toggled in the Dev panel; attaches nothing when off.
+        _dev = new DevSpaceAdapter(Path.Combine(DataDir, "devspace", "projects.json"));
+        _dev.SetEnabled(Environment.GetEnvironmentVariable("JEVBROWSE_DEVSPACE") == "1");
+        _leases.OnCoreCreated = (core, id, _) => { _shield.Attach(core, id); _permissions.Attach(core); _dev.Attach(core, id); };
+        _leases.OnCoreDisposed = id => { _shield.Detach(id); _dev.Detach(id); };
         if (!_filters.HasActiveLists && Environment.GetEnvironmentVariable("JEVBROWSE_NO_FILTER_UPDATE") is null)
             await UpdateFilterListsAsync();
         else
@@ -135,7 +141,7 @@ public sealed partial class MainWindow : Window
             _syncingSelection = false;
             AddressBox.Text = _kernel!.Active?.Url.ToString() ?? "";
         }
-        if (e.Kind is "activated" or "navigated" or "signals") UpdateClassBadge();
+        if (e.Kind is "activated" or "navigated" or "signals") { UpdateClassBadge(); UpdateEnvChrome(); }
         VirtualPlaceholder.Visibility = _kernel!.Active is null ? Visibility.Visible : Visibility.Collapsed;
         UpdatePoolText();
         StatusText.Text = $"{e.Kind} {e.Reason}";
@@ -304,6 +310,93 @@ public sealed partial class MainWindow : Window
             });
         });
         return await tcs.Task;
+    }
+
+    // ---- DevSpace ----
+
+    private void UpdateEnvChrome()
+    {
+        if (_dev is null || !_dev.Enabled || _kernel?.Active is not { } t) { ProdBorder.Visibility = EnvBadge.Visibility = Visibility.Collapsed; return; }
+        var r = _dev.Resolver.Resolve(t.Url);
+        var show = r.Environment != DeployEnvironment.Unknown;
+        EnvBadge.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        EnvBadgeText.Text = r.Environment.ToString().ToUpperInvariant();
+        var color = r.Environment switch
+        {
+            DeployEnvironment.Prod => Windows.UI.Color.FromArgb(0xE0, 0xFF, 0x3B, 0x30),
+            DeployEnvironment.Staging => Windows.UI.Color.FromArgb(0xE0, 0xFF, 0x95, 0x00),
+            DeployEnvironment.Dev => Windows.UI.Color.FromArgb(0xE0, 0x00, 0x7A, 0xFF),
+            _ => Windows.UI.Color.FromArgb(0xE0, 0x34, 0xC7, 0x59),
+        };
+        EnvBadge.Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(color);
+        ProdBorder.BorderBrush = new Microsoft.UI.Xaml.Media.SolidColorBrush(color);
+        ProdBorder.Visibility = r.Environment == DeployEnvironment.Prod ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private async void OnDev(object s, RoutedEventArgs e)
+    {
+        if (_dev is null || _kernel is null) return;
+        var enable = new ToggleSwitch { Header = "DevSpace enabled (attaches DevTools listeners to new renderers)", IsOn = _dev.Enabled };
+        var panel = new StackPanel { Spacing = 8, Children = { enable } };
+
+        if (_dev.Projects.Count == 0)
+        {
+            var hint = new TextBlock { TextWrapping = TextWrapping.Wrap, Text = $"No projects configured. Environments are never guessed. Create an example at:\n{_dev.ProjectsPath}" };
+            var mk = new Button { Content = "Create example projects.json" };
+            mk.Click += (_, _) => { ProjectStore.Save(_dev.ProjectsPath, [ProjectStore.Example()]); _dev.ReloadProjects(); hint.Text = "Example written. Edit it, then reopen this panel."; };
+            panel.Children.Add(hint); panel.Children.Add(mk);
+        }
+        else
+        {
+            var reload = new Button { Content = "Reload projects.json" };
+            reload.Click += (_, _) => { _dev.ReloadProjects(); UpdateEnvChrome(); };
+            panel.Children.Add(new TextBlock { Text = $"Projects: {string.Join(", ", _dev.Projects.Select(p => p.Name))} ({_dev.ProjectsPath})", TextWrapping = TextWrapping.Wrap, Opacity = 0.8 });
+            panel.Children.Add(reload);
+        }
+
+        if (_kernel.Active is { } t)
+        {
+            var r = _dev.Resolver.Resolve(t.Url);
+            panel.Children.Add(new TextBlock { Text = $"Environment: {r.Environment} — {r.Reason}", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
+
+            var services = _dev.Projects.SelectMany(p => p.LocalServices).Distinct().ToList();
+            if (services.Count > 0)
+            {
+                var probe = await LocalServiceProbe.ProbeAsync(services);
+                panel.Children.Add(new TextBlock { Text = "Localhost: " + string.Join("  ", probe.Select(x => $"{x.Name}:{x.Port} {(x.Up ? "● up" : "○ down")}")), FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas") });
+            }
+
+            if (_dev.Data.TryGetValue(t.Id, out var data))
+            {
+                var groups = ErrorGrouper.Group(data.Console.ToList());
+                var net = NetworkGrouper.Summarize(data.Network.ToList(), t.Url.Host);
+                panel.Children.Add(new TextBlock { Text = $"Network: {net.Total} requests — api {net.Counts[NetKind.Api]}, static {net.Counts[NetKind.Static]}, third-party {net.Counts[NetKind.ThirdParty]}, failed {net.Counts[NetKind.Failed]}, slow {net.Counts[NetKind.Slow]}, duplicate {net.Counts[NetKind.Duplicate]}", TextWrapping = TextWrapping.Wrap });
+                foreach (var f in net.Failed.Take(5)) panel.Children.Add(new TextBlock { Text = $"  ✕ {f.Status} {f.Method} {f.Url}", FontSize = 11, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap });
+                panel.Children.Add(new TextBlock { Text = $"Console errors: {groups.Sum(g => g.Count)} in {groups.Count} group(s)", TextWrapping = TextWrapping.Wrap });
+                foreach (var g in groups.Take(5)) panel.Children.Add(new TextBlock { Text = $"  ×{g.Count}{(g.Cascade.Count > 0 ? $" (+{g.Cascade.Count} cascaded)" : "")} {g.Headline}", FontSize = 11, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap });
+
+                if (groups.Count > 0)
+                {
+                    var explain = new Button { Content = "Explain top error (AI, explicit)" };
+                    explain.Click += async (_, _) =>
+                    {
+                        var top = groups[0];
+                        var input = $"Error (×{top.Count}): {top.First.Message}\nSource: {top.First.Source}:{top.First.Line}\nFollowed by: {string.Join(" | ", top.Cascade.Take(3).Select(c => c.Message))}";
+                        var d = await _brain!.DecideAsync(new DecisionRequest(BrainTask.ExplainError, input, _kernel.ClassOf(t), _kernel.ContainerOf(t), ExplicitUserAction: true, t.Url), default);
+                        explain.Content = d.WasDenied ? $"Not answered: {d.Rule}" : "Explained below";
+                        panel.Children.Add(new TextBlock { Text = d.WasDenied ? "" : d.Output, TextWrapping = TextWrapping.Wrap });
+                    };
+                    panel.Children.Add(explain);
+                }
+            }
+            else if (_dev.Enabled) panel.Children.Add(new TextBlock { Text = "No data for this tab yet (listeners attach to renderers created after enabling).", Opacity = 0.7 });
+        }
+
+        var dlg = new ContentDialog { Title = "DevSpace", Content = new ScrollViewer { MaxHeight = 520, Content = panel }, PrimaryButtonText = "Save", CloseButtonText = "Close", XamlRoot = Content.XamlRoot };
+        if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
+        _dev.SetEnabled(enable.IsOn);
+        UpdateEnvChrome();
+        StatusText.Text = $"DevSpace {(enable.IsOn ? "enabled for new renderers" : "disabled")}";
     }
 
     // ---- Browser Memory ----
