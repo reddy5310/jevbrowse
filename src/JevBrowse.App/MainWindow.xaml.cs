@@ -1,5 +1,10 @@
+using System.Collections.ObjectModel;
 using System.Text.Json;
+using JevBrowse.App.Renderer;
 using JevBrowse.Diagnostics;
+using JevBrowse.Domain;
+using JevBrowse.Storage;
+using JevBrowse.VirtualTabs;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
@@ -8,99 +13,147 @@ using Windows.System;
 
 namespace JevBrowse.App;
 
-/// <summary>
-/// Phase 0 (M0 Feasibility) shell: one WebView2 + a "Memory Lab" that answers the question the whole
-/// architecture rests on: how much RAM does disposing a renderer actually give back?
-/// </summary>
 public sealed partial class MainWindow : Window
 {
     private static readonly string DataDir =
         Environment.GetEnvironmentVariable("JEVBROWSE_DATA_DIR")
         ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "JevBrowse");
 
+    public ObservableCollection<TabItem> Items { get; } = [];
+
     private CoreWebView2Environment? _env;
-    private WebView2? _view;
+    private WebView2LeaseManager? _leases;
+    private BrowserDb? _db;
+    private TabKernel? _kernel;
+    private bool _syncingSelection;
 
     public MainWindow()
     {
         InitializeComponent();
+        Closed += (_, _) => _db?.Dispose();
         _ = InitAsync();
     }
 
     private async Task InitAsync()
     {
-        // User-data folder lives under the data dir (D: in dev) so profiles never land on C:.
         var udf = Path.Combine(DataDir, "profiles", "personal");
         Directory.CreateDirectory(udf);
         _env = await CoreWebView2Environment.CreateWithOptionsAsync(null, udf, new CoreWebView2EnvironmentOptions());
-        await AttachNewViewAsync("https://example.com");
+        _leases = new WebView2LeaseManager(WebHost, _env) { MaxLive = 5 };
+        _db = new BrowserDb(Path.Combine(DataDir, "db", "browser.db"));
+        _kernel = new TabKernel(_leases, new TabRepository(_db));
+        _kernel.Changed += OnKernelChanged;
+        _kernel.Load();
+        RebuildList();
 
-        // Headless-ish benchmark mode used by scripts/CI: run the lab, write the report, exit.
         if (Environment.GetCommandLineArgs().Contains("--memory-lab"))
         {
             try { await RunMemoryLabAsync(); }
             catch (Exception ex) { await File.WriteAllTextAsync(Path.Combine(DataDir, "benchmarks", "memory-lab-error.txt"), ex.ToString()); }
             Application.Current.Exit();
+            return;
         }
+
+        if (_kernel.Tabs.Count == 0) _kernel.Open(new Uri("https://example.com"));
+        await _kernel.ActivateAsync(_kernel.Tabs[0].Id);
     }
 
-    private async Task<WebView2> AttachNewViewAsync(string url)
+    // ---- kernel → UI ----
+
+    private void OnKernelChanged(KernelEvent e)
     {
-        var v = new WebView2();
-        WebHost.Children.Add(v);
-        await v.EnsureCoreWebView2Async(_env);
-        v.CoreWebView2.SourceChanged += (_, _) => AddressBox.Text = v.Source?.ToString() ?? "";
-        v.CoreWebView2.Navigate(url);
-        _view = v;
-        Status($"live renderer attached. {Sample()}");
-        return v;
+        if (e.Kind is "opened" or "closed" or "loaded") RebuildList();
+        else foreach (var i in Items) i.Refresh();
+
+        if (e.Kind == "activated")
+        {
+            _syncingSelection = true;
+            TabList.SelectedItem = Items.FirstOrDefault(i => i.Id == e.Id);
+            _syncingSelection = false;
+            AddressBox.Text = _kernel!.Active?.Url.ToString() ?? "";
+        }
+        VirtualPlaceholder.Visibility = _kernel!.Active is null ? Visibility.Visible : Visibility.Collapsed;
+        UpdatePoolText();
+        StatusText.Text = $"{e.Kind} {e.Reason}";
     }
 
-    private string Sample()
+    private void RebuildList()
     {
-        if (_env is null) return "no env";
-        var pids = _env.GetProcessInfos().Select(p => p.ProcessId);
-        var s = ProcessGroupProbe.Sample(pids);
-        return $"procs={s.ProcessCount} ws={s.WorkingSetMb:F0}MB private={s.PrivateMb:F0}MB (measured)";
+        Items.Clear();
+        foreach (var t in _kernel!.Tabs) Items.Add(new TabItem(t));
     }
 
-    private void Status(string msg) => StatusText.Text = msg;
-
-    private void OnBack(object s, RoutedEventArgs e) { if (_view?.CanGoBack == true) _view.GoBack(); }
-    private void OnForward(object s, RoutedEventArgs e) { if (_view?.CanGoForward == true) _view.GoForward(); }
-
-    private void OnAddressKeyDown(object s, KeyRoutedEventArgs e)
+    private void UpdatePoolText()
     {
-        if (e.Key != VirtualKey.Enter || _view?.CoreWebView2 is null) return;
+        var s = ProcessGroupProbe.Sample(_leases!.ProcessIds);
+        PoolText.Text = $"{_kernel!.Tabs.Count} tabs • {_kernel.LiveCount}/{_leases.MaxLive} live\n{s.ProcessCount} procs • {s.PrivateMb:F0} MB private (measured)";
+    }
+
+    // ---- UI → kernel ----
+
+    private async void OnTabSelected(object s, SelectionChangedEventArgs e)
+    {
+        if (_syncingSelection || TabList.SelectedItem is not TabItem item || _kernel is null) return;
+        await _kernel.ActivateAsync(item.Id);
+    }
+
+    private async void OnNewTab(object s, RoutedEventArgs e)
+    {
+        var t = _kernel!.Open(new Uri("https://duckduckgo.com"));
+        await _kernel.ActivateAsync(t.Id);
+        AddressBox.Focus(FocusState.Programmatic);
+        AddressBox.SelectAll();
+    }
+
+    private async void OnCloseTab(object s, RoutedEventArgs e)
+    {
+        if ((s as Button)?.Tag is not ResourceId id) return;
+        var wasActive = _kernel!.Active?.Id == id;
+        await _kernel.CloseAsync(id);
+        if (wasActive && _kernel.Tabs.Count > 0) await _kernel.ActivateAsync(_kernel.Tabs[^1].Id);
+    }
+
+    private async void OnHibernateCurrent(object s, RoutedEventArgs e)
+    {
+        if (_kernel?.Active is null) return;
+        var r = await _kernel.VirtualizeAsync(_kernel.Active.Id, Cause.User);
+        StatusText.Text = r.Reason;
+    }
+
+    private async void OnHibernateAll(object s, RoutedEventArgs e)
+    {
+        var keep = _kernel!.Active?.Id;
+        foreach (var t in _kernel.Tabs.Where(t => t.Id != keep && t.State.HasLiveRenderer()).ToList())
+            await _kernel.VirtualizeAsync(t.Id, Cause.Scheduler); // scheduler cause: protection is honoured
+        UpdatePoolText();
+    }
+
+    private void OnBack(object s, RoutedEventArgs e) => WithActiveLease(l => { if (l.View.CanGoBack) l.View.GoBack(); });
+    private void OnForward(object s, RoutedEventArgs e) => WithActiveLease(l => { if (l.View.CanGoForward) l.View.GoForward(); });
+
+    private void WithActiveLease(Action<WebView2Lease> a)
+    {
+        if (_kernel?.Active is { } t && _leases!.TryGet(t.Id, out var l)) a((WebView2Lease)l);
+    }
+
+    private async void OnAddressKeyDown(object s, KeyRoutedEventArgs e)
+    {
+        if (e.Key != VirtualKey.Enter || _kernel is null) return;
         var t = AddressBox.Text.Trim();
         if (!t.Contains("://")) t = t.Contains('.') && !t.Contains(' ')
             ? "https://" + t
             : "https://duckduckgo.com/?q=" + Uri.EscapeDataString(t);
-        _view.CoreWebView2.Navigate(t);
+        var url = new Uri(t);
+        if (_kernel.Active is null) { var nt = _kernel.Open(url); await _kernel.ActivateAsync(nt.Id); return; }
+        WithActiveLease(l => l.Navigate(url));
     }
 
-    /// <summary>Dispose = the lease is released; this is what VIRTUAL state will rely on.</summary>
-    private void OnDispose(object s, RoutedEventArgs e)
-    {
-        if (_view is null) { Status("no live renderer (virtual)."); return; }
-        var before = Sample();
-        DisposeView(_view);
-        _view = null;
-        Status($"disposed. before: {before}");
-    }
-
-    private void DisposeView(WebView2 v)
-    {
-        WebHost.Children.Remove(v);
-        v.Close();
-    }
+    // ---- Memory Lab (Phase 0 benchmark, kept as CI hook) ----
 
     private async void OnMemoryLab(object s, RoutedEventArgs e)
     {
-        LabButton.IsEnabled = false;
         try { await RunMemoryLabAsync(); }
-        catch (Exception ex) { Status("lab failed: " + ex.Message); }
-        finally { LabButton.IsEnabled = true; }
+        catch (Exception ex) { StatusText.Text = "lab failed: " + ex.Message; }
     }
 
     private async Task RunMemoryLabAsync()
@@ -110,53 +163,45 @@ public sealed partial class MainWindow : Window
             "https://example.com", "https://en.wikipedia.org/wiki/Web_browser", "https://learn.microsoft.com/en-us/microsoft-edge/webview2/",
             "https://github.com", "https://news.ycombinator.com",
         ];
-
-        if (_view is not null) { DisposeView(_view); _view = null; }
-        await Task.Delay(2000);
+        var k = _kernel!;
         Directory.CreateDirectory(Path.Combine(DataDir, "benchmarks"));
         var report = new List<object>();
-        void Record(string step) { var m = ProcessGroupProbe.Sample(_env!.GetProcessInfos().Select(p => p.ProcessId)); report.Add(new { step, m.ProcessCount, m.WorkingSetMb, m.PrivateMb }); Status($"{step}: procs={m.ProcessCount} ws={m.WorkingSetMb:F0}MB priv={m.PrivateMb:F0}MB"); }
+        void Record(string step)
+        {
+            var m = ProcessGroupProbe.Sample(_leases!.ProcessIds);
+            report.Add(new { step, live = k.LiveCount, m.ProcessCount, m.WorkingSetMb, m.PrivateMb });
+            StatusText.Text = $"{step}: live={k.LiveCount} procs={m.ProcessCount} priv={m.PrivateMb:F0}MB";
+        }
 
-        Record("baseline (0 views)");
-        var views = new List<WebView2>();
+        foreach (var t in k.Tabs.ToList()) await k.CloseAsync(t.Id);
+        await Task.Delay(2000);
+        Record("baseline");
+
+        _leases!.MaxLive = 5;
+        var opened = new List<VirtualTab>();
         foreach (var u in urls)
         {
-            var v = new WebView2();
-            WebHost.Children.Add(v);
-            await v.EnsureCoreWebView2Async(_env);
-            var done = new TaskCompletionSource();
-            v.CoreWebView2.NavigationCompleted += (_, _) => done.TrySetResult();
-            v.CoreWebView2.Navigate(u);
-            await Task.WhenAny(done.Task, Task.Delay(20000));
-            views.Add(v);
-            Record($"live x{views.Count}");
+            var t = k.Open(new Uri(u));
+            await k.ActivateAsync(t.Id);
+            opened.Add(t);
+            await Task.Delay(4000);
+            Record($"live x{k.LiveCount}");
         }
-        await Task.Delay(3000);
-        Record("5 live, settled");
 
-        // WebView2 requires the view to be hidden before it can be suspended.
-        foreach (var v in views.Skip(1)) v.Visibility = Visibility.Collapsed;
-        await Task.Delay(500);
-        int suspended = 0;
-        foreach (var v in views.Skip(1)) { if (v.CoreWebView2 is not null && await v.CoreWebView2.TrySuspendAsync()) suspended++; }
+        foreach (var t in opened.Skip(1)) if (_leases.TryGet(t.Id, out var l)) await l.TrySuspendAsync();
         await Task.Delay(3000);
-        report.Add(new { step = "suspend result", suspended });
         Record("4 suspended, 1 live");
 
-        foreach (var v in views.Skip(1)) DisposeView(v);
-        GC.Collect(); GC.WaitForPendingFinalizers();
+        foreach (var t in opened.Skip(1)) await k.VirtualizeAsync(t.Id, Cause.User);
         await Task.Delay(5000);
-        Record("4 disposed, 1 live");
+        Record("4 virtual, 1 live");
 
-        DisposeView(views[0]);
+        await k.VirtualizeAsync(opened[0].Id, Cause.User);
         await Task.Delay(5000);
-        Record("all disposed (virtual)");
+        Record("all virtual");
 
-        var dir = Path.Combine(DataDir, "benchmarks");
-        Directory.CreateDirectory(dir);
-        var file = Path.Combine(dir, $"memory-lab-{DateTime.Now:yyyyMMdd-HHmmss}.json");
+        var file = Path.Combine(DataDir, "benchmarks", $"memory-lab-{DateTime.Now:yyyyMMdd-HHmmss}.json");
         await File.WriteAllTextAsync(file, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
-        Status($"report written: {file}");
-        await AttachNewViewAsync("https://example.com");
+        StatusText.Text = $"report written: {file}";
     }
 }

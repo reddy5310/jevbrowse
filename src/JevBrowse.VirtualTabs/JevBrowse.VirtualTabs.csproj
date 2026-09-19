@@ -4,5 +4,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\JevBrowse.Domain\JevBrowse.Domain.csproj" />
+    <ProjectReference Include="..\JevBrowse.Renderer.Abstractions\JevBrowse.Renderer.Abstractions.csproj" />
+    <ProjectReference Include="..\JevBrowse.Storage\JevBrowse.Storage.csproj" />
   </ItemGroup>
 </Project>

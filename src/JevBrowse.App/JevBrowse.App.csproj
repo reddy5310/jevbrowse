@@ -21,5 +21,8 @@
   <ItemGroup>
     <ProjectReference Include="..\JevBrowse.Domain\JevBrowse.Domain.csproj" />
     <ProjectReference Include="..\JevBrowse.Diagnostics\JevBrowse.Diagnostics.csproj" />
+    <ProjectReference Include="..\JevBrowse.VirtualTabs\JevBrowse.VirtualTabs.csproj" />
+    <ProjectReference Include="..\JevBrowse.Storage\JevBrowse.Storage.csproj" />
+    <ProjectReference Include="..\JevBrowse.Renderer.Abstractions\JevBrowse.Renderer.Abstractions.csproj" />
   </ItemGroup>
 </Project>

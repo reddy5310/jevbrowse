@@ -32,7 +32,15 @@ C: is nearly full, so everything lives on D:.
 
 Each phase maps to a milestone in the architecture doc (Table A.14).
 
-### Phase 0 — Foundations (M0 Feasibility) ← we start here
+## Status
+
+| Phase | State | Evidence |
+|---|---|---|
+| 0 Foundations | DONE 2026-09-20 | ADR 0003; `--memory-lab` report: dispose −44%, suspend −6% |
+| 1 Virtual Tab Kernel | DONE 2026-09-20 | 9 kernel tests (50 visible / 5 live, restart survival); real-pool lab: 5 live 765 MB → 1 live 319 MB |
+| 2 Hibernation | next | |
+
+### Phase 0 — Foundations (M0 Feasibility)
 - Repo skeleton per §17, `Directory.Build.props`, solution, CI skeleton, docs (Constitution, ADR 0001–0005, cost-card template).
 - WinUI 3 shell hosting one WebView2, with address bar.
 - Process-group memory instrumentation (WebView2 process tree via `CoreWebView2.BrowserProcessId` + `ProcessInfo`, private working set).
