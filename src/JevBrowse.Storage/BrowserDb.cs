@@ -5,7 +5,7 @@ namespace JevBrowse.Storage;
 /// <summary>Durable logical state (Architecture §16: db\browser.db). WAL mode; schema versioned via user_version.</summary>
 public sealed class BrowserDb : IDisposable
 {
-    private const int SchemaVersion = 6;
+    private const int SchemaVersion = 7;
 
     public BrowserDb(string path)
     {
@@ -122,6 +122,34 @@ public sealed class BrowserDb : IDisposable
                     version TEXT NOT NULL
                 );
                 CREATE INDEX decision_log_at ON decision_log(at DESC);
+                """);
+        }
+        if (v < 7)
+        {
+            // Browser Memory (§8). External-content FTS5 keeps one copy of the text; triggers keep the index in sync.
+            Exec("""
+                CREATE TABLE memory_docs (
+                    id TEXT PRIMARY KEY,
+                    url TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    site TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    captured_at INTEGER NOT NULL,
+                    bytes INTEGER NOT NULL,
+                    text TEXT NOT NULL
+                );
+                CREATE INDEX memory_docs_at ON memory_docs(captured_at DESC);
+                CREATE VIRTUAL TABLE memory_fts USING fts5(title, text, content='memory_docs', content_rowid='rowid', tokenize='unicode61 remove_diacritics 2');
+                CREATE TRIGGER memory_ai AFTER INSERT ON memory_docs BEGIN
+                    INSERT INTO memory_fts(rowid, title, text) VALUES (new.rowid, new.title, new.text);
+                END;
+                CREATE TRIGGER memory_ad AFTER DELETE ON memory_docs BEGIN
+                    INSERT INTO memory_fts(memory_fts, rowid, title, text) VALUES ('delete', old.rowid, old.title, old.text);
+                END;
+                CREATE TRIGGER memory_au AFTER UPDATE ON memory_docs BEGIN
+                    INSERT INTO memory_fts(memory_fts, rowid, title, text) VALUES ('delete', old.rowid, old.title, old.text);
+                    INSERT INTO memory_fts(rowid, title, text) VALUES (new.rowid, new.title, new.text);
+                END;
                 """);
         }
         if (v < SchemaVersion) Exec($"PRAGMA user_version={SchemaVersion}");

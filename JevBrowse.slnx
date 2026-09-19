@@ -6,6 +6,7 @@
     <Project Path="src/JevBrowse.Brain/JevBrowse.Brain.csproj" />
     <Project Path="src/JevBrowse.Diagnostics/JevBrowse.Diagnostics.csproj" />
     <Project Path="src/JevBrowse.Domain/JevBrowse.Domain.csproj" />
+    <Project Path="src/JevBrowse.Memory/JevBrowse.Memory.csproj" />
     <Project Path="src/JevBrowse.Renderer.Abstractions/JevBrowse.Renderer.Abstractions.csproj" />
     <Project Path="src/JevBrowse.ResourceOS/JevBrowse.ResourceOS.csproj" />
     <Project Path="src/JevBrowse.Shield/JevBrowse.Shield.csproj" />
@@ -18,6 +19,7 @@
     <Project Path="tests/Unit/JevBrowse.Brain.Tests/JevBrowse.Brain.Tests.csproj" />
     <Project Path="tests/Unit/JevBrowse.Domain.Tests/JevBrowse.Domain.Tests.csproj" />
     <Project Path="tests/Unit/JevBrowse.Kernel.Tests/JevBrowse.Kernel.Tests.csproj" />
+    <Project Path="tests/Unit/JevBrowse.Memory.Tests/JevBrowse.Memory.Tests.csproj" />
     <Project Path="tests/Unit/JevBrowse.ResourceOS.Tests/JevBrowse.ResourceOS.Tests.csproj" />
     <Project Path="tests/Unit/JevBrowse.Shield.Tests/JevBrowse.Shield.Tests.csproj" />
     <Project Path="tests/Unit/JevBrowse.TrustOS.Tests/JevBrowse.TrustOS.Tests.csproj" />

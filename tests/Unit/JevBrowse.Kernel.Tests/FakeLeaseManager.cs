@@ -67,6 +67,8 @@ public sealed class FakeLease(ResourceId id, Uri url, FakeLeaseManager owner) : 
     }
 
     public void ApplyCheckpoint(Checkpoint cp) { Applied = cp; ScrollY = cp.ScrollY; }
+    public string? ReadableText { get; set; }
+    public Task<string?> ExtractReadableTextAsync(CancellationToken ct) => Task.FromResult(ReadableText);
 
     public event Action<NavigationInfo>? NavigationChanged;
     public event Action? Loaded;

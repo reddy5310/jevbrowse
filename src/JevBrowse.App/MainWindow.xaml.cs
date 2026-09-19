@@ -6,6 +6,7 @@ using JevBrowse.App.Trust;
 using JevBrowse.Brain;
 using JevBrowse.Brain.Providers;
 using JevBrowse.Diagnostics;
+using JevBrowse.Memory;
 using JevBrowse.Shield;
 using JevBrowse.TrustOS;
 using JevBrowse.Domain;
@@ -40,6 +41,8 @@ public sealed partial class MainWindow : Window
     private BrainRouter? _brain;
     private DecisionLogRepository? _decisions;
     private IReadOnlyList<IAiProvider> _providers = [];
+    private BrowserMemory? _memory;
+    private MemoryIndexer? _indexer;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _tick;
     private ResourcePlan? _lastPlan;
     private bool _syncingSelection;
@@ -82,6 +85,11 @@ public sealed partial class MainWindow : Window
         RebuildWorkspaces();
         RebuildList();
 
+        // Browser Memory: indexes only what Trust OS allows (PUBLIC by default); 200 MB budget.
+        _memory = new BrowserMemory(_db);
+        _indexer = new MemoryIndexer(_kernel, _leases, _memory);
+        _indexer.Decided += (_, why) => DispatcherQueue.TryEnqueue(() => StatusText.Text = "memory: " + why);
+
         foreach (var m in Enum.GetValues<MemoryMode>()) ModeBox.Items.Add(m.ToString());
         ModeBox.SelectedIndex = (int)MemoryMode.Balanced;
 
@@ -92,14 +100,15 @@ public sealed partial class MainWindow : Window
         _tick.Start();
 
         var args = Environment.GetCommandLineArgs();
-        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check"))
+        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check"))
         {
             Directory.CreateDirectory(Path.Combine(DataDir, "benchmarks"));
             try
             {
                 if (args.Contains("--memory-lab")) await RunMemoryLabAsync();
                 else if (args.Contains("--restore-bench")) await RunRestoreBenchAsync();
-                else await RunShieldCheckAsync();
+                else if (args.Contains("--shield-check")) await RunShieldCheckAsync();
+                else await RunMemoryCheckAsync();
             }
             catch (Exception ex) { await File.WriteAllTextAsync(Path.Combine(DataDir, "benchmarks", "bench-error.txt"), ex.ToString()); }
             Application.Current.Exit();
@@ -295,6 +304,82 @@ public sealed partial class MainWindow : Window
             });
         });
         return await tcs.Task;
+    }
+
+    // ---- Browser Memory ----
+
+    private async void OnMemory(object s, RoutedEventArgs e)
+    {
+        if (_memory is null || _kernel is null) return;
+        var (docs, bytes) = _memory.Stats();
+        var box = new TextBox { PlaceholderText = "e.g. webview2 process model", Text = "" };
+        var results = new ListView { SelectionMode = ListViewSelectionMode.Single, MaxHeight = 320 };
+        var hits = new List<MemoryHit>();
+        var info = new TextBlock { Opacity = 0.7, FontSize = 12, Text = $"{docs} pages indexed • {bytes / 1024.0 / 1024.0:F1} MB • local only" };
+        void RunSearch()
+        {
+            hits = _memory.Search(box.Text, 20, _kernel.ActiveWorkspace).ToList();
+            results.Items.Clear();
+            foreach (var h in hits)
+            {
+                var open = _kernel.Tabs.Any(t => t.Id == h.Id);
+                results.Items.Add(new StackPanel { Children = {
+                    new TextBlock { Text = $"{h.Title}  {(open ? "" : "(closed — will reopen)")}", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold },
+                    new TextBlock { Text = h.Snippet, TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = 0.8 },
+                    new TextBlock { Text = $"{h.Site} • {h.CapturedAt.ToLocalTime():ddd d MMM HH:mm}", FontSize = 11, Opacity = 0.6 } } });
+            }
+            if (hits.Count == 0 && box.Text.Length > 1) results.Items.Add(new TextBlock { Text = "No matches.", Opacity = 0.6 });
+        }
+        box.TextChanged += (_, _) => RunSearch();
+        var dlg = new ContentDialog
+        {
+            Title = "Browser Memory",
+            Content = new StackPanel { Spacing = 8, Children = { box, info, results } },
+            PrimaryButtonText = "Open", CloseButtonText = "Close", XamlRoot = Content.XamlRoot,
+        };
+        box.Loaded += (_, _) => box.Focus(FocusState.Programmatic);
+        if (await dlg.ShowAsync() != ContentDialogResult.Primary || results.SelectedIndex < 0 || results.SelectedIndex >= hits.Count) return;
+        var hit = hits[results.SelectedIndex];
+        if (_kernel.Tabs.Any(t => t.Id == hit.Id)) await _kernel.ActivateAsync(hit.Id);
+        else { var t = _kernel.Open(hit.Url); await _kernel.ActivateAsync(t.Id); }
+    }
+
+    /// <summary>Phase 8 gate: real pages → readable text → FTS index → search; plus proof that a login page is skipped.</summary>
+    private async Task RunMemoryCheckAsync()
+    {
+        var k = _kernel!;
+        foreach (var t in k.Tabs.ToList()) await k.CloseAsync(t.Id);
+        var pages = new[]
+        {
+            "https://en.wikipedia.org/wiki/Web_browser", "https://en.wikipedia.org/wiki/Memory_management",
+            "https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/process-model",
+            "https://github.com/login", // password field → SECRET → must be skipped
+        };
+        var decisions = new List<string>();
+        _indexer!.Decided += (id, why) => decisions.Add($"{k.Tabs.FirstOrDefault(t => t.Id == id)?.Url.Host}: {why}");
+        foreach (var u in pages)
+        {
+            var t = k.Open(new Uri(u));
+            var loaded = new TaskCompletionSource();
+            void OnEv(KernelEvent e) { if (e.Kind == "restored" && e.Id == t.Id) loaded.TrySetResult(); }
+            k.Changed += OnEv;
+            await k.ActivateAsync(t.Id);
+            await Task.WhenAny(loaded.Task, Task.Delay(20000));
+            k.Changed -= OnEv;
+            await Task.Delay(2500); // let the indexer and the page's password-field scan finish
+        }
+        var (docs, bytes) = _memory!.Stats();
+        var q1 = _memory.Search("renderer process");
+        var q2 = _memory.Search("garbage collection");
+        var result = new
+        {
+            pagesLoaded = pages.Length, indexed = _indexer.Indexed, skipped = _indexer.Skipped, docs, kb = bytes / 1024,
+            decisions,
+            search_renderer_process = q1.Select(h => new { h.Title, h.Site, score = Math.Round(h.Score, 3), snippet = h.Snippet[..Math.Min(90, h.Snippet.Length)] }).ToList(),
+            search_garbage_collection = q2.Select(h => h.Title).ToList(),
+        };
+        var file = Path.Combine(DataDir, "benchmarks", $"memory-check-{DateTime.Now:yyyyMMdd-HHmmss}.json");
+        await File.WriteAllTextAsync(file, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
     }
 
     // ---- JevBrain ----

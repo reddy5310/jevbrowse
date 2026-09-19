@@ -24,6 +24,8 @@ public interface IRendererLease
     Task<Checkpoint> CaptureCheckpointAsync(string thumbnailDir, CancellationToken ct);
     /// <summary>Apply scroll position etc. once the page the lease is loading has finished.</summary>
     void ApplyCheckpoint(Checkpoint checkpoint);
+    /// <summary>Readable main text with boilerplate reduced (§8). Caller must clear Trust OS IndexContent first.</summary>
+    Task<string?> ExtractReadableTextAsync(CancellationToken ct);
 
     event Action<NavigationInfo>? NavigationChanged;
     /// <summary>Fires when the page finishes loading; used for restore timing.</summary>

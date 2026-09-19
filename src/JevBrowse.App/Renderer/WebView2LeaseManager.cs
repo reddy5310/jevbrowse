@@ -246,6 +246,42 @@ public sealed class WebView2Lease : IRendererLease
         return new Checkpoint(ResourceId, url, core.DocumentTitle, sx, sy, favicon, _lastThumbnail, DateTimeOffset.UtcNow);
     }
 
+    // Readability-lite: prefer <article>/<main>/role=main, else the densest text container; strip nav/aside/footer/
+    // script/style/forms. Runs in the page, returns text only. Password/secret inputs are never part of innerText.
+    private const string ReadableScript = """
+        (() => {
+          const kill = 'nav, aside, footer, header, script, style, noscript, form, iframe, svg, [role="navigation"], [role="banner"], [role="contentinfo"], [aria-hidden="true"]';
+          const clone = (document.querySelector('article, main, [role="main"]') || document.body);
+          if (!clone) return '';
+          const c = clone.cloneNode(true);
+          c.querySelectorAll(kill).forEach(n => n.remove());
+          let text = (c.innerText || '').replace(/\s+/g, ' ').trim();
+          if (text.length < 400 && document.body) {
+            // fall back to the block with the most text
+            let best = '', bestLen = 0;
+            document.body.querySelectorAll('div, section, td').forEach(el => {
+              const t = (el.innerText || '').trim();
+              if (t.length > bestLen && el.querySelectorAll('p').length >= 2) { best = t; bestLen = t.length; }
+            });
+            if (bestLen > text.length) text = best.replace(/\s+/g, ' ');
+          }
+          return text.slice(0, 200000);
+        })()
+        """;
+
+    public async Task<string?> ExtractReadableTextAsync(CancellationToken ct)
+    {
+        var core = View.CoreWebView2;
+        if (core is null) return null;
+        try
+        {
+            var task = core.ExecuteScriptAsync(ReadableScript).AsTask();
+            if (await Task.WhenAny(task, Task.Delay(CaptureTimeout, ct)) != task) return null;
+            return JsonSerializer.Deserialize<string>(await task);
+        }
+        catch (Exception) { return null; }
+    }
+
     public void ApplyCheckpoint(Checkpoint cp)
     {
         if (cp.ScrollX == 0 && cp.ScrollY == 0) return;
