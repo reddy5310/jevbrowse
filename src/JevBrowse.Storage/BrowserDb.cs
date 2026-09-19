@@ -5,7 +5,7 @@ namespace JevBrowse.Storage;
 /// <summary>Durable logical state (Architecture §16: db\browser.db). WAL mode; schema versioned via user_version.</summary>
 public sealed class BrowserDb : IDisposable
 {
-    private const int SchemaVersion = 2;
+    private const int SchemaVersion = 3;
 
     public BrowserDb(string path)
     {
@@ -50,6 +50,16 @@ public sealed class BrowserDb : IDisposable
                     favicon_url TEXT,
                     thumbnail_path TEXT,
                     captured_at INTEGER NOT NULL
+                );
+                """);
+        }
+        if (v < 3)
+        {
+            Exec("""
+                CREATE TABLE site_settings (
+                    site TEXT PRIMARY KEY,
+                    shield_enabled INTEGER NOT NULL DEFAULT 1,
+                    updated_at INTEGER NOT NULL
                 );
                 """);
         }

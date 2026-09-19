@@ -1,7 +1,9 @@
 using System.Collections.ObjectModel;
 using System.Text.Json;
 using JevBrowse.App.Renderer;
+using JevBrowse.App.Shield;
 using JevBrowse.Diagnostics;
+using JevBrowse.Shield;
 using JevBrowse.Domain;
 using JevBrowse.ResourceOS;
 using JevBrowse.Storage;
@@ -27,6 +29,8 @@ public sealed partial class MainWindow : Window
     private BrowserDb? _db;
     private TabKernel? _kernel;
     private readonly DefaultScheduler _scheduler = new();
+    private ShieldAdapter? _shield;
+    private FilterListStore? _filters;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _tick;
     private ResourcePlan? _lastPlan;
     private bool _syncingSelection;
@@ -45,6 +49,17 @@ public sealed partial class MainWindow : Window
         _env = await CoreWebView2Environment.CreateWithOptionsAsync(null, udf, new CoreWebView2EnvironmentOptions());
         _leases = new WebView2LeaseManager(WebHost, _env, Path.Combine(DataDir, "thumbnails")) { MaxLive = 5 };
         _db = new BrowserDb(Path.Combine(DataDir, "db", "browser.db"));
+
+        // Shield: compile whatever lists are on disk before the first renderer exists; fetch lists if there are none.
+        _filters = new FilterListStore(Path.Combine(DataDir, "filters"));
+        _shield = new ShieldAdapter(_env, new SiteSettingsRepository(_db));
+        _leases.OnCoreCreated = _shield.Attach;
+        _leases.OnCoreDisposed = _shield.Detach;
+        if (!_filters.HasActiveLists && Environment.GetEnvironmentVariable("JEVBROWSE_NO_FILTER_UPDATE") is null)
+            await UpdateFilterListsAsync();
+        else
+            CompileFilters();
+
         _kernel = new TabKernel(_leases, new TabRepository(_db), new CheckpointRepository(_db), Path.Combine(DataDir, "thumbnails"));
         _kernel.Changed += OnKernelChanged;
         _kernel.Load();
@@ -60,10 +75,15 @@ public sealed partial class MainWindow : Window
         _tick.Start();
 
         var args = Environment.GetCommandLineArgs();
-        if (args.Contains("--memory-lab") || args.Contains("--restore-bench"))
+        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check"))
         {
             Directory.CreateDirectory(Path.Combine(DataDir, "benchmarks"));
-            try { if (args.Contains("--memory-lab")) await RunMemoryLabAsync(); else await RunRestoreBenchAsync(); }
+            try
+            {
+                if (args.Contains("--memory-lab")) await RunMemoryLabAsync();
+                else if (args.Contains("--restore-bench")) await RunRestoreBenchAsync();
+                else await RunShieldCheckAsync();
+            }
             catch (Exception ex) { await File.WriteAllTextAsync(Path.Combine(DataDir, "benchmarks", "bench-error.txt"), ex.ToString()); }
             Application.Current.Exit();
             return;
@@ -102,7 +122,90 @@ public sealed partial class MainWindow : Window
     {
         var s = ProcessGroupProbe.Sample(_leases!.ProcessIds);
         var band = _lastPlan is null ? "" : $" • {_lastPlan.Band} band, budget {_lastPlan.TargetLiveRenderers}";
-        PoolText.Text = $"{_kernel!.Tabs.Count} tabs • {_kernel.LiveCount}/{_leases.MaxLive} live{band}\n{s.ProcessCount} procs • {s.PrivateMb:F0} MB private (measured)";
+        var blocked = _shield is null ? 0 : _shield.Stats.Values.Sum(x => x.Blocked);
+        PoolText.Text = $"{_kernel!.Tabs.Count} tabs • {_kernel.LiveCount}/{_leases.MaxLive} live{band}\n{s.ProcessCount} procs • {s.PrivateMb:F0} MB private (measured)\nShield: {blocked} blocked this session";
+    }
+
+    // ---- Shield ----
+
+    private long _filterCompileMs;
+    private FilterEngine? _engine;
+
+    private void CompileFilters()
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        _engine = FilterEngine.Compile(_filters!.ReadActiveLines());
+        _filterCompileMs = sw.ElapsedMilliseconds;
+        _shield!.SetEngine(_engine);
+        StatusText.Text = $"Shield: {_engine.RuleCount:N0} rules compiled in {_filterCompileMs} ms ({_engine.SkippedLines:N0} unsupported lines skipped)";
+    }
+
+    private async Task UpdateFilterListsAsync()
+    {
+        StatusText.Text = "Shield: downloading filter lists…";
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("JevBrowse/0.1 (+filter-list-update)");
+        var r = await _filters!.UpdateAsync(http);
+        CompileFilters();
+        StatusText.Text += r.Activated ? " • lists updated" : " • update failed: " + string.Join("; ", r.Details.Select(kv => $"{kv.Key} {kv.Value}"));
+    }
+
+    private async void OnShield(object s, RoutedEventArgs e)
+    {
+        if (_kernel?.Active is not { } t || _shield is null) return;
+        var site = NetworkRequest.SiteOf(t.Url.Host);
+        var enabled = _shield.IsEnabledFor(site);
+        _shield.Stats.TryGetValue(t.Id, out var st);
+        var lines = new List<string>
+        {
+            $"{site}: Shield {(enabled ? "ON" : "OFF")}",
+            st is null ? "no requests seen yet" : $"{st.Blocked} blocked of {st.Total} requests on this page",
+            $"{_shield.RuleCount:N0} rules active",
+            "",
+        };
+        if (st is not null) lines.AddRange(st.Recent.Reverse().Take(15).Select(x => $"✕ {x.Host}\n    {x.Rule}"));
+        var dlg = new ContentDialog
+        {
+            Title = "Shield",
+            Content = new ScrollViewer { Content = new TextBlock { Text = string.Join("\n", lines), FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap }, MaxHeight = 400 },
+            PrimaryButtonText = enabled ? $"Disable for {site}" : $"Enable for {site}",
+            SecondaryButtonText = "Update lists",
+            CloseButtonText = "Close",
+            XamlRoot = Content.XamlRoot,
+        };
+        var result = await dlg.ShowAsync();
+        if (result == ContentDialogResult.Primary)
+        {
+            _shield.SetEnabledFor(site, !enabled);
+            WithActiveLease(l => l.View.CoreWebView2.Reload());
+            StatusText.Text = $"Shield {(enabled ? "disabled" : "enabled")} for {site}; page reloaded";
+        }
+        else if (result == ContentDialogResult.Secondary) await UpdateFilterListsAsync();
+    }
+
+    /// <summary>Phase 4 gate: load ad-heavy pages with the real engine and report blocked/total per page.</summary>
+    private async Task RunShieldCheckAsync()
+    {
+        string[] urls = ["https://www.theverge.com", "https://www.cnn.com", "https://www.forbes.com", "https://en.wikipedia.org/wiki/Advertising"];
+        var k = _kernel!;
+        foreach (var t in k.Tabs.ToList()) await k.CloseAsync(t.Id);
+        var rows = new List<object>();
+        foreach (var u in urls)
+        {
+            var t = k.Open(new Uri(u));
+            await k.ActivateAsync(t.Id);
+            await Task.Delay(15000);
+            _shield!.Stats.TryGetValue(t.Id, out var st);
+            rows.Add(new { url = u, total = st?.Total ?? 0, blocked = st?.Blocked ?? 0, sample = st?.Recent.Take(5).Select(x => x.Host + " ← " + x.Rule).ToList() });
+            await k.VirtualizeAsync(t.Id, Cause.User);
+        }
+        // Lookup latency against the real compiled lists, over a realistic mix of URLs seen on these pages.
+        var sample = _shield!.Stats.Values.SelectMany(s => s.Recent).Select(x => new NetworkRequest(new Uri("https://" + x.Host + "/a.js"), new Uri("https://www.cnn.com/"), RequestType.Script)).ToList();
+        for (int i = 0; i < 200; i++) sample.Add(new NetworkRequest(new Uri($"https://static{i}.example-cdn.com/assets/app.{i}.js?v=3"), new Uri("https://www.example.com/"), RequestType.Script));
+        var (p50, p95) = _engine!.Benchmark(sample);
+        var result = new { rules = _shield!.RuleCount, skippedLines = _engine.SkippedLines, compileMs = _filterCompileMs, lookupP50Us = Math.Round(p50, 1), lookupP95Us = Math.Round(p95, 1), pages = rows };
+        var file = Path.Combine(DataDir, "benchmarks", $"shield-check-{DateTime.Now:yyyyMMdd-HHmmss}.json");
+        await File.WriteAllTextAsync(file, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
     }
 
     // ---- Resource OS ----

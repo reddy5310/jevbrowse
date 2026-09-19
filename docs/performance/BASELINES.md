@@ -33,6 +33,20 @@ Marginal cost per live page ≈ 150–240 MB; fixed browser/GPU/utility overhead
 - live pool over budget+1 on < 15% of ticks
 - < 400 virtualizations total, ≤ 10 re-virtualizations within 2 minutes, ≤ 30 per tab
 
+## Shield (`JevBrowse.App --shield-check`, live EasyList + EasyPrivacy, 2026-09-20)
+
+| Metric | Value |
+|---|---|
+| rules compiled | 110,839 (28,621 unsupported lines skipped: cosmetic, regex, unknown options) |
+| compile time | 226 ms (Debug) |
+| lookup p50 / p95 | 62.5 µs / 85.9 µs (Debug, 400-URL mix) |
+| cnn.com | 26 blocked / 153 requests |
+| forbes.com | 18 / 79 |
+| theverge.com | 11 / 171 |
+| en.wikipedia.org | 0 / 27 (no false positives) |
+
+Known optimisation headroom: token enumeration is O(L²) per URL run; a suffix/prefix trie would cut p95 further if needed.
+
 ## Gates for future PRs
 
 A PR that moves restore p95 or the 5-live private figure by more than 10% needs an ADR (Architecture §22).

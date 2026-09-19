@@ -31,6 +31,10 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
     public IReadOnlyCollection<ResourceId> LiveResources => _live.Keys;
     public IEnumerable<int> ProcessIds => _env.GetProcessInfos().Select(p => p.ProcessId);
 
+    /// <summary>Called once per new CoreWebView2 before its first navigation. Shield and Trust OS attach here.</summary>
+    public Action<CoreWebView2, ResourceId>? OnCoreCreated { get; set; }
+    public Action<ResourceId>? OnCoreDisposed { get; set; }
+
     public bool TryGet(ResourceId id, out IRendererLease lease)
     {
         var ok = _live.TryGetValue(id, out var l);
@@ -43,6 +47,7 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
         var view = new WebView2 { Visibility = Visibility.Collapsed };
         _host.Children.Add(view);
         await view.EnsureCoreWebView2Async(_env);
+        OnCoreCreated?.Invoke(view.CoreWebView2, id);
         var lease = await WebView2Lease.CreateAsync(id, view, _thumbnailDir);
         _live[id] = lease;
         view.CoreWebView2.Navigate(initialUrl.ToString());
@@ -56,6 +61,7 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
         _live.Remove(id);
         _host.Children.Remove(lease.View);
         lease.View.Close();
+        OnCoreDisposed?.Invoke(id);
     }
 }
 
