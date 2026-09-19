@@ -29,5 +29,6 @@
     <ProjectReference Include="..\JevBrowse.Brain\JevBrowse.Brain.csproj" />
     <ProjectReference Include="..\JevBrowse.Memory\JevBrowse.Memory.csproj" />
     <ProjectReference Include="..\JevBrowse.DevSpace\JevBrowse.DevSpace.csproj" />
+    <ProjectReference Include="..\JevBrowse.AgentGateway\JevBrowse.AgentGateway.csproj" />
   </ItemGroup>
 </Project>

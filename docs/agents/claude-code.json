@@ -1,0 +1,12 @@
+{
+  "agent": "Claude Code",
+  "workspace": "JevBrowse Development",
+  "allowDomains": ["localhost", "127.0.0.1", "github.com", "learn.microsoft.com"],
+  "denyDataClasses": ["Authenticated", "Sensitive", "Secret"],
+  "actions": ["Navigate", "Read", "Click", "TypeNonSecret", "Screenshot"],
+  "destructiveActions": "confirm",
+  "maxLivePages": 3,
+  "sessionMinutes": 60,
+  "maxActions": 200,
+  "container": "Disposable"
+}

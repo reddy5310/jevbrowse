@@ -27,6 +27,12 @@ public interface IRendererLease
     /// <summary>Readable main text with boilerplate reduced (§8). Caller must clear Trust OS IndexContent first.</summary>
     Task<string?> ExtractReadableTextAsync(CancellationToken ct);
 
+    // ---- Agent Gateway surface (§12). Structured and narrow: no script evaluation, no raw DOM. ----
+    Task<PageMap?> GetPageMapAsync(CancellationToken ct);
+    Task<ActionResult> ClickAsync(string selector, CancellationToken ct);
+    /// <summary>Types into a non-secret field. Implementations must refuse password/credit-card inputs.</summary>
+    Task<ActionResult> TypeAsync(string selector, string text, CancellationToken ct);
+
     event Action<NavigationInfo>? NavigationChanged;
     /// <summary>Fires when the page finishes loading; used for restore timing.</summary>
     event Action? Loaded;

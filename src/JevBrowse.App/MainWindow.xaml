@@ -95,6 +95,7 @@
                     <Button Content="Brain" Click="OnBrain" ToolTipService.ToolTip="AI switches and the decision log"/>
                     <Button Content="Memory" Click="OnMemory" ToolTipService.ToolTip="Search everything you've read (local index of public pages)"/>
                     <Button Content="Dev" Click="OnDev" ToolTipService.ToolTip="DevSpace: environment, localhost, errors, network (optional module)"/>
+                    <Button Content="Agents" Click="OnAgents" ToolTipService.ToolTip="Agent Gateway: scoped sessions, quotas, audit; opt-in local endpoint"/>
                 </StackPanel>
             </Grid>
             <Grid Grid.Row="1">

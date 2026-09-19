@@ -282,6 +282,70 @@ public sealed class WebView2Lease : IRendererLease
         catch (Exception) { return null; }
     }
 
+    // ---- Agent Gateway surface. Scripts return structure only; values of inputs are never read. ----
+    private const string PageMapScript = """
+        (() => {
+          const txt = e => (e.innerText || e.textContent || '').replace(/\s+/g, ' ').trim();
+          const heads = [...document.querySelectorAll('h1,h2,h3')].slice(0, 40).map(txt).filter(Boolean);
+          const links = [...document.querySelectorAll('a[href]')].slice(0, 150).map(a => ({ t: txt(a).slice(0, 80), h: a.href })).filter(l => l.t);
+          const fields = [...document.querySelectorAll('input,textarea,select')].slice(0, 60).map(f => {
+            const lab = f.labels && f.labels[0] ? txt(f.labels[0]) : (f.getAttribute('aria-label') || f.placeholder || null);
+            return { n: f.name || f.id || '', t: (f.type || f.tagName).toLowerCase(), l: lab };
+          });
+          const main = document.querySelector('article, main, [role="main"]') || document.body;
+          return JSON.stringify({ title: document.title, heads, links, fields, text: main ? txt(main).slice(0, 4000) : '' });
+        })()
+        """;
+
+    public async Task<PageMap?> GetPageMapAsync(CancellationToken ct)
+    {
+        var core = View.CoreWebView2;
+        if (core is null) return null;
+        try
+        {
+            var task = core.ExecuteScriptAsync(PageMapScript).AsTask();
+            if (await Task.WhenAny(task, Task.Delay(CaptureTimeout, ct)) != task) return null;
+            using var doc = JsonDocument.Parse(JsonSerializer.Deserialize<string>(await task) ?? "{}");
+            var r = doc.RootElement;
+            var url = Uri.TryCreate(core.Source, UriKind.Absolute, out var u) ? u : new Uri("about:blank");
+            return new PageMap(url, r.GetProperty("title").GetString() ?? "",
+                r.GetProperty("heads").EnumerateArray().Select(x => x.GetString() ?? "").ToList(),
+                r.GetProperty("links").EnumerateArray().Select(x => new PageLink(x.GetProperty("t").GetString() ?? "", x.GetProperty("h").GetString() ?? "")).ToList(),
+                r.GetProperty("fields").EnumerateArray().Select(x => new PageField(x.GetProperty("n").GetString() ?? "", x.GetProperty("t").GetString() ?? "", x.TryGetProperty("l", out var l) && l.ValueKind == JsonValueKind.String ? l.GetString() : null)).ToList(),
+                r.GetProperty("text").GetString() ?? "");
+        }
+        catch (Exception) { return null; }
+    }
+
+    public Task<ActionResult> ClickAsync(string selector, CancellationToken ct) => RunActionAsync($$"""
+        (() => { const e = document.querySelector({{JsonSerializer.Serialize(selector)}}); if (!e) return 'not found'; e.scrollIntoView({block:'center'}); e.click(); return 'ok'; })()
+        """, ct);
+
+    public Task<ActionResult> TypeAsync(string selector, string text, CancellationToken ct) => RunActionAsync($$"""
+        (() => {
+          const e = document.querySelector({{JsonSerializer.Serialize(selector)}}); if (!e) return 'not found';
+          const t = (e.type || '').toLowerCase(); const ac = (e.autocomplete || '').toLowerCase();
+          if (t === 'password' || ac.startsWith('cc-') || ac.includes('password') || ac === 'one-time-code') return 'refused: secret field';
+          e.focus(); e.value = {{JsonSerializer.Serialize(text)}};
+          e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true }));
+          return 'ok';
+        })()
+        """, ct);
+
+    private async Task<ActionResult> RunActionAsync(string script, CancellationToken ct)
+    {
+        var core = View.CoreWebView2;
+        if (core is null) return new(false, "no renderer");
+        try
+        {
+            var task = core.ExecuteScriptAsync(script).AsTask();
+            if (await Task.WhenAny(task, Task.Delay(CaptureTimeout, ct)) != task) return new(false, "timeout");
+            var msg = JsonSerializer.Deserialize<string>(await task) ?? "";
+            return new(msg == "ok", msg);
+        }
+        catch (Exception ex) { return new(false, ex.GetType().Name); }
+    }
+
     public void ApplyCheckpoint(Checkpoint cp)
     {
         if (cp.ScrollX == 0 && cp.ScrollY == 0) return;

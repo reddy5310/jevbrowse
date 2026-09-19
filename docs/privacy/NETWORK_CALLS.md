@@ -10,6 +10,12 @@ Anything not on this list is a bug.
 | OpenRouter (optional AI) | `https://openrouter.ai/api/v1/chat/completions` | Only when the user presses an AI action (e.g. **Ask**) and both AI switches are on | Redacted page text (see `docs/AI_POLICY.md`), model name, `HTTP-Referer`/`X-Title` identifying JevBrowse | Leave `OPENROUTER_API_KEY` unset, or turn AI/Cloud off in the Brain panel |
 | Jev (optional AI) | `$JEV_API_BASE/chat/completions` (endpoint shape pending confirmation) | Same as above, when Jev is the preferred provider for the task | Redacted text, model name | Leave `JEV_API_KEY`/`JEV_API_BASE` unset |
 
+## Inbound (local only)
+
+| Purpose | Endpoint | When | Disable |
+|---|---|---|---|
+| Agent Gateway local host | `http://127.0.0.1:<random port>/` with a per-run bearer token | Only after the user enables it in the Agents panel | Toggle it off; it never starts on its own |
+
 Not yet implemented, will be listed when they are: WebView2/Windows App SDK updates (handled by Windows, not by JevBrowse).
 
 Telemetry: none. Crash reports: none are sent anywhere.

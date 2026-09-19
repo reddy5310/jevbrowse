@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Text.Json;
+using JevBrowse.AgentGateway;
 using JevBrowse.App.DevSpace;
 using JevBrowse.App.Renderer;
 using JevBrowse.App.Shield;
@@ -46,6 +47,8 @@ public sealed partial class MainWindow : Window
     private BrowserMemory? _memory;
     private MemoryIndexer? _indexer;
     private DevSpaceAdapter? _dev;
+    private AgentGateway.AgentGateway? _agents;
+    private LocalAgentHost? _agentHost;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _tick;
     private ResourcePlan? _lastPlan;
     private bool _syncingSelection;
@@ -53,7 +56,7 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        Closed += (_, _) => { _leases?.Shutdown(); _db?.Dispose(); };
+        Closed += (_, _) => { _agentHost?.Dispose(); _leases?.Shutdown(); _db?.Dispose(); };
         _ = InitAsync();
     }
 
@@ -90,6 +93,12 @@ public sealed partial class MainWindow : Window
         _kernel.Load();
         RebuildWorkspaces();
         RebuildList();
+
+        // Agent Gateway: in-process always; the loopback HTTP host is opt-in from the Agents panel.
+        var auditDir = Path.Combine(DataDir, "agents", "audit");
+        Directory.CreateDirectory(auditDir);
+        _agents = new AgentGateway.AgentGateway(_kernel, _leases, Path.Combine(DataDir, "agents", "screenshots"), ConfirmAgentActionAsync,
+            (s, e) => File.AppendAllText(Path.Combine(auditDir, s.Id + ".jsonl"), JsonSerializer.Serialize(new { e.At, s.Manifest.Agent, e.Action, e.Target, e.Allowed, e.Reason }) + "\n"));
 
         // Browser Memory: indexes only what Trust OS allows (PUBLIC by default); 200 MB budget.
         _memory = new BrowserMemory(_db);
@@ -310,6 +319,55 @@ public sealed partial class MainWindow : Window
             });
         });
         return await tcs.Task;
+    }
+
+    // ---- Agent Gateway ----
+
+    private Task<bool> ConfirmAgentActionAsync(AgentSession s, AgentRequest r)
+    {
+        var tcs = new TaskCompletionSource<bool>();
+        DispatcherQueue.TryEnqueue(async () =>
+        {
+            var dlg = new ContentDialog
+            {
+                Title = $"{s.Manifest.Agent} wants to {r.Action}",
+                Content = new TextBlock { TextWrapping = TextWrapping.Wrap, Text = $"Target: {r.Selector ?? r.Url}\n{(r.Text is null ? "" : $"Text: {r.Text}\n")}\nThis looks destructive. Allow it?" },
+                PrimaryButtonText = "Allow once", CloseButtonText = "Deny", XamlRoot = Content.XamlRoot,
+            };
+            tcs.TrySetResult(await dlg.ShowAsync() == ContentDialogResult.Primary);
+        });
+        return tcs.Task;
+    }
+
+    private async void OnAgents(object s, RoutedEventArgs e)
+    {
+        if (_agents is null) return;
+        var running = _agentHost?.IsRunning == true;
+        var toggle = new ToggleSwitch { Header = "Local endpoint for external agents (127.0.0.1, bearer token, this run only)", IsOn = running };
+        var panel = new StackPanel { Spacing = 8, Children = { toggle } };
+        if (running)
+        {
+            var url = $"http://127.0.0.1:{_agentHost!.Port}/";
+            panel.Children.Add(new TextBlock { Text = $"Base URL: {url}", IsTextSelectionEnabled = true, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas") });
+            panel.Children.Add(new TextBlock { Text = $"Token:    {_agentHost.Token}", IsTextSelectionEnabled = true, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas") });
+            panel.Children.Add(new TextBlock { Text = "Sessions:", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+            foreach (var ses in _agentHost.Sessions)
+                panel.Children.Add(new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 12, Text = $"{ses.Manifest.Agent} [{ses.Id}] {(ses.Closed ? "closed" : "open")} • {ses.ActionsUsed}/{ses.Manifest.MaxActions} actions • {_agents.LiveAgentPages(ses)}/{ses.Manifest.MaxLivePages} live • expires {ses.ExpiresAt.ToLocalTime():HH:mm}\n" + string.Join("\n", ses.Audit.TakeLast(6).Select(a => $"   {(a.Allowed ? "✓" : "✕")} {a.Action} {a.Target} — {a.Reason}")) });
+        }
+        panel.Children.Add(new TextBlock { TextWrapping = TextWrapping.Wrap, Opacity = 0.7, FontSize = 12, Text = "Agents get a manifest-scoped session: allowed domains, allowed actions, data-class ceiling, a live-page quota, and a time/action budget. Destructive clicks ask you. Every request is written to data/agents/audit/<session>.jsonl. See docs/AGENT_SECURITY.md." });
+        var dlg = new ContentDialog { Title = "Agent Gateway", Content = new ScrollViewer { MaxHeight = 480, Content = panel }, PrimaryButtonText = "Apply", CloseButtonText = "Close", XamlRoot = Content.XamlRoot };
+        if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
+        if (toggle.IsOn && !running)
+        {
+            _agentHost = new LocalAgentHost(_agents);
+            _agentHost.Start();
+            StatusText.Text = $"agent endpoint listening on 127.0.0.1:{_agentHost.Port} (token in Agents panel)";
+        }
+        else if (!toggle.IsOn && running)
+        {
+            _agentHost!.Dispose(); _agentHost = null;
+            StatusText.Text = "agent endpoint stopped";
+        }
     }
 
     // ---- DevSpace ----

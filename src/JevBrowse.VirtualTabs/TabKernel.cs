@@ -52,6 +52,14 @@ public sealed class TabKernel
 
     public DataClass ClassOf(VirtualTab t) => _classifier.Classify(t.Url, ContainerOf(t), _signals.GetValueOrDefault(t.Id));
 
+    /// <summary>
+    /// Sensitivity of the page content itself, ignoring the container. An ephemeral container changes what we
+    /// persist, not whether a banking page is a banking page; agents and AI ceilings use this.
+    /// </summary>
+    public DataClass ContentClassOf(VirtualTab t) => _classifier.Classify(t.Url, IdentityContainer.Personal, _signals.GetValueOrDefault(t.Id));
+
+    public PageSignals SignalsOf(VirtualTab t) => _signals.GetValueOrDefault(t.Id);
+
     /// <summary>Every persistence decision goes through here. Nothing else in the kernel writes to disk directly.</summary>
     public TrustDecision May(VirtualTab t, DataOperation op) =>
         _trust.Evaluate(new ResourceContext(t.Url, ClassOf(t), ContainerOf(t)), op);

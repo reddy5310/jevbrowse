@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/JevBrowse.AgentGateway/JevBrowse.AgentGateway.csproj" />
     <Project Path="src/JevBrowse.App/JevBrowse.App.csproj">
       <Platform Project="x64" />
     </Project>
@@ -17,6 +18,7 @@
   </Folder>
   <Folder Name="/tests/" />
   <Folder Name="/tests/Unit/">
+    <Project Path="tests/Unit/JevBrowse.AgentGateway.Tests/JevBrowse.AgentGateway.Tests.csproj" />
     <Project Path="tests/Unit/JevBrowse.Brain.Tests/JevBrowse.Brain.Tests.csproj" />
     <Project Path="tests/Unit/JevBrowse.DevSpace.Tests/JevBrowse.DevSpace.Tests.csproj" />
     <Project Path="tests/Unit/JevBrowse.Domain.Tests/JevBrowse.Domain.Tests.csproj" />

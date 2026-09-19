@@ -70,6 +70,18 @@ public sealed class FakeLease(ResourceId id, Uri url, FakeLeaseManager owner) : 
     public string? ReadableText { get; set; }
     public Task<string?> ExtractReadableTextAsync(CancellationToken ct) => Task.FromResult(ReadableText);
 
+    public PageMap? Map { get; set; }
+    public List<string> Clicked { get; } = [];
+    public List<(string Selector, string Text)> Typed { get; } = [];
+    public Task<PageMap?> GetPageMapAsync(CancellationToken ct) => Task.FromResult<PageMap?>(Map ?? new PageMap(Url, "t", [], [], [], ""));
+    public Task<ActionResult> ClickAsync(string selector, CancellationToken ct) { Clicked.Add(selector); return Task.FromResult(new ActionResult(true, "clicked")); }
+    public Task<ActionResult> TypeAsync(string selector, string text, CancellationToken ct)
+    {
+        if (selector.Contains("password", StringComparison.OrdinalIgnoreCase)) return Task.FromResult(new ActionResult(false, "refused: secret field"));
+        Typed.Add((selector, text));
+        return Task.FromResult(new ActionResult(true, "typed"));
+    }
+
     public event Action<NavigationInfo>? NavigationChanged;
     public event Action? Loaded;
     public event Action<ProtectionFlags>? DetectedProtectionChanged;
