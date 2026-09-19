@@ -18,7 +18,8 @@ jobs:
           $hits = Get-ChildItem src -Recurse -Include *.cs | Select-String -Pattern 'AddHostObjectToScript'
           if ($hits) { $hits | ForEach-Object { Write-Error "$($_.Path):$($_.LineNumber): $($_.Line.Trim())" }; exit 1 }
           # AI_POLICY.md: keys never live in the repo.
-          $keys = Get-ChildItem -Recurse -File -Exclude *.md | Where-Object { $_.FullName -notmatch '\\(artifacts|\.git)\\' } | Select-String -Pattern '(sk-or-v1-|OPENROUTER_API_KEY\s*=\s*\S{10,}|JEV_API_KEY\s*=\s*\S{10,})'
+          # The scanner itself and docs are excluded; everything else in the tree is checked.
+          $keys = Get-ChildItem -Recurse -File -Exclude *.md | Where-Object { $_.FullName -notmatch '\\(artifacts|\.git|\.github)\\' } | Select-String -Pattern '(sk-or-v1-|OPENROUTER_API_KEY\s*=\s*\S{10,}|JEV_API_KEY\s*=\s*\S{10,})'
           if ($keys) { $keys | ForEach-Object { Write-Error "possible secret: $($_.Path):$($_.LineNumber)" }; exit 1 }
           Write-Host "invariant gates passed"
 
@@ -30,7 +31,7 @@ jobs:
         run: dotnet restore
 
       - name: Unit tests
-        run: dotnet test --no-restore --nologo --logger "trx;LogFileName=results.trx"
+        run: dotnet test --no-restore --nologo --logger trx --results-directory artifacts/testresults
 
       - name: Build shell (x64, unpackaged)
         run: dotnet build src/JevBrowse.App -c Release -p:Platform=x64 --no-restore --nologo
@@ -40,7 +41,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-results
-          path: '**/results.trx'
+          path: artifacts/testresults/*.trx
 
   # Performance CI (Architecture §22). Runs the measured benchmarks and publishes the raw JSON. It is informational
   # until a stable benchmark machine exists; hosted runners vary too much to gate on absolute numbers.
