@@ -131,6 +131,18 @@ public class SchedulerTests
     }
 
     [Fact]
+    public void Background_workspace_tabs_go_idle_sooner()
+    {
+        var s = new DefaultScheduler(); // Balanced: idle threshold 20 min
+        var fg = Live("1", TimeSpan.FromMinutes(8), TimeSpan.FromMinutes(10));
+        var bg = Live("2", TimeSpan.FromMinutes(8), TimeSpan.FromMinutes(10)) with { WorkspacePriority = 0.3 }; // threshold 6 min
+        var plan = s.Evaluate(Pressure(0.5), [fg, bg], T0);
+        Assert.Single(plan.Virtualize);
+        Assert.Equal(bg.Id, plan.Virtualize[0].Id);
+        Assert.Equal("idle", plan.Virtualize[0].Reasons["trigger"]);
+    }
+
+    [Fact]
     public void Explain_is_human_readable()
     {
         var s = new DefaultScheduler(SchedulerPolicy.For(MemoryMode.Balanced) with { MaxLive = 1 });

@@ -62,7 +62,9 @@ public sealed class DefaultScheduler : IResourceScheduler
             else if (_lastAutomatedTransition.TryGetValue(r.Id, out var last) && now - last < Policy.Cooldown) veto = "cooldown";
 
             bool required = over > 0;                       // pool above budget: must shrink
-            bool opportunistic = idle >= Policy.IdleBeforeVirtualize;
+            // Context OS: a background workspace with priority 0.3 reaches the idle threshold ~3× sooner (§7).
+            var idleThreshold = Policy.IdleBeforeVirtualize * Math.Clamp(r.WorkspacePriority, 0.1, 1.0);
+            bool opportunistic = idle >= idleThreshold;
             if (!required && !opportunistic) continue;
             reasons["trigger"] = required ? "over_budget" : "idle";
 

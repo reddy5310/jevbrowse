@@ -3,7 +3,7 @@ using Microsoft.Data.Sqlite;
 
 namespace JevBrowse.Storage;
 
-public sealed record TabRow(ResourceId Id, Uri Url, string Title, ResourceState State, ProtectionFlags Protection, int Ordinal, DateTimeOffset LastStateChange);
+public sealed record TabRow(ResourceId Id, Uri Url, string Title, ResourceState State, ProtectionFlags Protection, int Ordinal, DateTimeOffset LastStateChange, ContextId WorkspaceId);
 
 public sealed class TabRepository
 {
@@ -14,9 +14,9 @@ public sealed class TabRepository
     {
         using var cmd = _db.Connection.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO tabs (id, url, title, state, protection, ordinal, last_state_change)
-            VALUES ($id, $url, $title, $state, $prot, $ord, $ts)
-            ON CONFLICT(id) DO UPDATE SET url=$url, title=$title, state=$state, protection=$prot, ordinal=$ord, last_state_change=$ts
+            INSERT INTO tabs (id, url, title, state, protection, ordinal, last_state_change, workspace_id)
+            VALUES ($id, $url, $title, $state, $prot, $ord, $ts, $ws)
+            ON CONFLICT(id) DO UPDATE SET url=$url, title=$title, state=$state, protection=$prot, ordinal=$ord, last_state_change=$ts, workspace_id=$ws
             """;
         cmd.Parameters.AddWithValue("$id", tab.Id.ToString());
         cmd.Parameters.AddWithValue("$url", tab.Url.ToString());
@@ -26,6 +26,7 @@ public sealed class TabRepository
         cmd.Parameters.AddWithValue("$prot", (int)tab.UserProtection); // detected flags are transient
         cmd.Parameters.AddWithValue("$ord", ordinal);
         cmd.Parameters.AddWithValue("$ts", tab.LastStateChange.ToUnixTimeMilliseconds());
+        cmd.Parameters.AddWithValue("$ws", tab.WorkspaceId.ToString());
         cmd.ExecuteNonQuery();
     }
 
@@ -40,7 +41,7 @@ public sealed class TabRepository
     public IReadOnlyList<TabRow> LoadAll()
     {
         using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = "SELECT id, url, title, state, protection, ordinal, last_state_change FROM tabs ORDER BY ordinal";
+        cmd.CommandText = "SELECT id, url, title, state, protection, ordinal, last_state_change, workspace_id FROM tabs ORDER BY ordinal";
         using var r = cmd.ExecuteReader();
         var rows = new List<TabRow>();
         while (r.Read())
@@ -52,7 +53,8 @@ public sealed class TabRepository
                 (ResourceState)r.GetInt32(3),
                 (ProtectionFlags)r.GetInt32(4),
                 r.GetInt32(5),
-                DateTimeOffset.FromUnixTimeMilliseconds(r.GetInt64(6))));
+                DateTimeOffset.FromUnixTimeMilliseconds(r.GetInt64(6)),
+                new ContextId(Guid.ParseExact(r.GetString(7), "N"))));
         }
         return rows;
     }

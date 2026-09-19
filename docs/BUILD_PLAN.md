@@ -41,7 +41,8 @@ Each phase maps to a milestone in the architecture doc (Table A.14).
 | 2 Hibernation | DONE 2026-09-20 | ADR 0004; 7 hibernation tests; `--restore-bench`: p50 350 ms, p95 1.24 s, 8/8 checkpoints+thumbnails |
 | 3 Resource OS | DONE 2026-09-20 | ADR 0005; 10 scheduler tests incl. 2 h thrash simulation; baselines in docs/performance |
 | 4 Shield | DONE 2026-09-20 | ADR 0006; 27 shield tests; `--shield-check`: 110,839 live rules, CNN 28/161 blocked, Wikipedia 0 false positives |
-| 5 Context OS | next | |
+| 5 Context OS | DONE 2026-09-20 | ADR 0007; 6 context tests incl. 2×40 drain and lazy Time Travel restore |
+| 6 Trust OS | next | |
 
 ### Phase 0 — Foundations (M0 Feasibility)
 - Repo skeleton per §17, `Directory.Build.props`, solution, CI skeleton, docs (Constitution, ADR 0001–0005, cost-card template).

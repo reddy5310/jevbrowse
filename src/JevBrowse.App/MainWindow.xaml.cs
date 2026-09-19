@@ -60,9 +60,10 @@ public sealed partial class MainWindow : Window
         else
             CompileFilters();
 
-        _kernel = new TabKernel(_leases, new TabRepository(_db), new CheckpointRepository(_db), Path.Combine(DataDir, "thumbnails"));
+        _kernel = new TabKernel(_leases, new TabRepository(_db), new CheckpointRepository(_db), Path.Combine(DataDir, "thumbnails"), null, new WorkspaceRepository(_db));
         _kernel.Changed += OnKernelChanged;
         _kernel.Load();
+        RebuildWorkspaces();
         RebuildList();
 
         foreach (var m in Enum.GetValues<MemoryMode>()) ModeBox.Items.Add(m.ToString());
@@ -97,7 +98,9 @@ public sealed partial class MainWindow : Window
 
     private void OnKernelChanged(KernelEvent e)
     {
-        if (e.Kind is "opened" or "closed" or "loaded") RebuildList();
+        if (e.Kind is "workspace-created" or "context-restored") RebuildWorkspaces();
+        if (e.Kind is "workspace-switched") { SyncWorkspaceBox(); RebuildList(); }
+        else if (e.Kind is "opened" or "closed" or "loaded" or "moved" or "context-restored") RebuildList();
         else foreach (var i in Items) i.Refresh();
 
         if (e.Kind == "activated")
@@ -112,10 +115,94 @@ public sealed partial class MainWindow : Window
         StatusText.Text = $"{e.Kind} {e.Reason}";
     }
 
+    /// <summary>The sidebar shows the active workspace only; other workspaces' tabs stay durable and (eventually) virtual.</summary>
     private void RebuildList()
     {
         Items.Clear();
-        foreach (var t in _kernel!.Tabs) Items.Add(new TabItem(t));
+        foreach (var t in _kernel!.TabsIn(_kernel.ActiveWorkspace)) Items.Add(new TabItem(t));
+    }
+
+    // ---- Context OS ----
+
+    private bool _syncingWorkspace;
+
+    private void RebuildWorkspaces()
+    {
+        _syncingWorkspace = true;
+        WorkspaceBox.Items.Clear();
+        foreach (var w in _kernel!.Workspaces) WorkspaceBox.Items.Add($"{w.Name} ({_kernel.TabsIn(w.Id).Count()})");
+        _syncingWorkspace = false;
+        SyncWorkspaceBox();
+    }
+
+    private void SyncWorkspaceBox()
+    {
+        _syncingWorkspace = true;
+        var idx = _kernel!.Workspaces.ToList().FindIndex(w => w.Id == _kernel.ActiveWorkspace);
+        if (idx >= 0 && idx < WorkspaceBox.Items.Count) WorkspaceBox.SelectedIndex = idx;
+        _syncingWorkspace = false;
+    }
+
+    private async void OnWorkspaceChanged(object s, SelectionChangedEventArgs e)
+    {
+        if (_syncingWorkspace || _kernel is null || WorkspaceBox.SelectedIndex < 0 || WorkspaceBox.SelectedIndex >= _kernel.Workspaces.Count) return;
+        await _kernel.SwitchWorkspaceAsync(_kernel.Workspaces[WorkspaceBox.SelectedIndex].Id);
+        RebuildWorkspaces();
+        VirtualPlaceholder.Visibility = _kernel.Active is null ? Visibility.Visible : Visibility.Collapsed;
+        UpdatePoolText();
+    }
+
+    private async void OnNewWorkspace(object s, RoutedEventArgs e)
+    {
+        var box = new TextBox { PlaceholderText = "Workspace name, e.g. Job search" };
+        var dlg = new ContentDialog { Title = "New workspace", Content = box, PrimaryButtonText = "Create", CloseButtonText = "Cancel", XamlRoot = Content.XamlRoot };
+        if (await dlg.ShowAsync() != ContentDialogResult.Primary || string.IsNullOrWhiteSpace(box.Text)) return;
+        var w = _kernel!.CreateWorkspace(box.Text.Trim());
+        await _kernel.SwitchWorkspaceAsync(w.Id);
+        RebuildWorkspaces();
+        VirtualPlaceholder.Visibility = Visibility.Visible;
+    }
+
+    private void OnMoveMenuOpening(object s, object e)
+    {
+        MoveMenu.Items.Clear();
+        if (_kernel?.Active is not { } t) return;
+        foreach (var w in _kernel.Workspaces.Where(w => w.Id != t.WorkspaceId))
+        {
+            var item = new MenuFlyoutItem { Text = w.Name };
+            var target = w.Id;
+            item.Click += (_, _) => { _kernel.MoveToWorkspace(t.Id, target); RebuildWorkspaces(); StatusText.Text = $"moved to {w.Name}"; };
+            MoveMenu.Items.Add(item);
+        }
+        if (MoveMenu.Items.Count == 0) MoveMenu.Items.Add(new MenuFlyoutItem { Text = "No other workspaces", IsEnabled = false });
+    }
+
+    private async void OnTimeline(object s, RoutedEventArgs e)
+    {
+        var timeline = _kernel!.Timeline();
+        var list = new ListView { SelectionMode = ListViewSelectionMode.Single, MaxHeight = 400 };
+        foreach (var c in timeline)
+            list.Items.Add($"{c.At.ToLocalTime():ddd HH:mm} — {c.WorkspaceName} — {c.Resources.Count} resources — {c.LiveCount} live");
+        var dlg = new ContentDialog
+        {
+            Title = "Time Travel",
+            Content = timeline.Count == 0 ? new TextBlock { Text = "No context checkpoints yet. One is recorded every 5 minutes and on every workspace switch." } : list,
+            PrimaryButtonText = "Restore", CloseButtonText = "Close", XamlRoot = Content.XamlRoot,
+            IsPrimaryButtonEnabled = timeline.Count > 0,
+        };
+        if (await dlg.ShowAsync() != ContentDialogResult.Primary || list.SelectedIndex < 0) return;
+        var n = await _kernel.RestoreContextAsync(timeline[list.SelectedIndex]);
+        StatusText.Text = $"context restored: {n} tabs recreated (virtual), only the active one loaded";
+    }
+
+    private int _ticksSinceCheckpoint;
+
+    private void MaybeRecordContextCheckpoint()
+    {
+        if (++_ticksSinceCheckpoint < 30) return; // 30 × 10 s = 5 min
+        _ticksSinceCheckpoint = 0;
+        _kernel!.RecordContextCheckpoint();
+        new WorkspaceRepository(_db!).PruneCheckpoints(keepPerWorkspace: 50, maxAge: TimeSpan.FromDays(30), DateTimeOffset.UtcNow);
     }
 
     private void UpdatePoolText()
@@ -221,6 +308,7 @@ public sealed partial class MainWindow : Window
             _lastPlan = _scheduler.Evaluate(pressure, _kernel.Snapshot(), DateTimeOffset.UtcNow);
             var n = await _kernel.ApplyPlanAsync(_lastPlan);
             if (n > 0) StatusText.Text = $"Resource OS: virtualized {n} ({_lastPlan.Band}, {os.AvailableBytes >> 20} MB free)";
+            MaybeRecordContextCheckpoint();
             UpdatePoolText();
         }
         catch (Exception ex) { StatusText.Text = "scheduler tick failed: " + ex.Message; }

@@ -23,20 +23,108 @@ public sealed class TabKernel
     private readonly IRendererLeaseManager _leases;
     private readonly TabRepository _repo;
     private readonly CheckpointRepository _checkpoints;
+    private readonly WorkspaceRepository? _workspaces;
+    private readonly List<Workspace> _workspaceList = [];
     private readonly string _thumbnailDir;
     private readonly Func<DateTimeOffset> _clock;
 
-    public TabKernel(IRendererLeaseManager leases, TabRepository repo, CheckpointRepository checkpoints, string thumbnailDir, Func<DateTimeOffset>? clock = null)
+    public TabKernel(IRendererLeaseManager leases, TabRepository repo, CheckpointRepository checkpoints, string thumbnailDir, Func<DateTimeOffset>? clock = null, WorkspaceRepository? workspaces = null)
     {
         _leases = leases;
         _repo = repo;
         _checkpoints = checkpoints;
+        _workspaces = workspaces;
         _thumbnailDir = thumbnailDir;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
     }
 
     public IReadOnlyList<VirtualTab> Tabs => _tabs;
     public VirtualTab? Active { get; private set; }
+
+    // ---- Context OS ----
+
+    public IReadOnlyList<Workspace> Workspaces => _workspaceList;
+    public ContextId ActiveWorkspace { get; private set; } = ContextId.Default;
+    public IEnumerable<VirtualTab> TabsIn(ContextId ws) => _tabs.Where(t => t.WorkspaceId == ws);
+
+    public Workspace CreateWorkspace(string name)
+    {
+        var w = new Workspace(ContextId.New(), name) { CreatedAt = _clock() };
+        _workspaceList.Add(w);
+        _workspaces?.Upsert(w);
+        Changed?.Invoke(new("workspace-created", default, name));
+        return w;
+    }
+
+    public void MoveToWorkspace(ResourceId id, ContextId ws)
+    {
+        var t = Find(id);
+        t.MoveTo(ws);
+        Persist(t);
+        Changed?.Invoke(new("moved", id, ws.ToString()));
+    }
+
+    /// <summary>
+    /// Switching changes scheduling priority, not renderer lifetime (§7). Live tabs of the old workspace stay live
+    /// and the Resource OS drains them on its own schedule; the new workspace's last-active tab is activated if any.
+    /// </summary>
+    public async Task SwitchWorkspaceAsync(ContextId ws, CancellationToken ct = default)
+    {
+        if (ws == ActiveWorkspace) return;
+        RecordContextCheckpoint();
+        if (Active is not null && Active.State == ResourceState.Hot)
+        {
+            Active.TryTransition(ResourceState.Warm, Cause.User, _clock());
+            if (_leases.TryGet(Active.Id, out var prev)) prev.SetVisible(false);
+            Persist(Active);
+        }
+        Active = null;
+        ActiveWorkspace = ws;
+        var next = TabsIn(ws).OrderByDescending(t => _lastActive.GetValueOrDefault(t.Id, DateTimeOffset.MinValue)).FirstOrDefault();
+        Changed?.Invoke(new("workspace-switched", default, ws.ToString()));
+        if (next is not null) await ActivateAsync(next.Id, ct);
+    }
+
+    public ContextCheckpoint RecordContextCheckpoint()
+    {
+        var ws = _workspaceList.FirstOrDefault(w => w.Id == ActiveWorkspace);
+        var entries = TabsIn(ActiveWorkspace).Select(t => new ContextCheckpointEntry(t.Id, t.Url, t.Title, t.State.HasLiveRenderer())).ToList();
+        var cp = new ContextCheckpoint(Guid.NewGuid(), ActiveWorkspace, ws?.Name ?? "Default", _clock(), Active?.Id, entries, entries.Count(e => e.WasLive));
+        _workspaces?.SaveCheckpoint(cp);
+        return cp;
+    }
+
+    public IReadOnlyList<ContextCheckpoint> Timeline() => _workspaces?.ListCheckpoints() ?? [];
+
+    /// <summary>
+    /// Restore a context lazily: tabs that still exist are left alone, missing ones are recreated VIRTUAL, and only
+    /// the checkpoint's active resource gets a renderer.
+    /// </summary>
+    public async Task<int> RestoreContextAsync(ContextCheckpoint cp, CancellationToken ct = default)
+    {
+        int recreated = 0;
+        foreach (var e in cp.Resources)
+        {
+            if (_tabs.Any(t => t.Id == e.Id)) continue;
+            var t = new VirtualTab(e.Id, e.Url, e.Title, cp.WorkspaceId);
+            _tabs.Add(t);
+            _repo.Upsert(t, _tabs.Count - 1);
+            recreated++;
+        }
+        if (_workspaceList.All(w => w.Id != cp.WorkspaceId))
+        {
+            var w = new Workspace(cp.WorkspaceId, cp.WorkspaceName) { CreatedAt = _clock() };
+            _workspaceList.Add(w);
+            _workspaces?.Upsert(w);
+        }
+        Changed?.Invoke(new("context-restored", default, $"{recreated} recreated"));
+        await SwitchWorkspaceAsync(cp.WorkspaceId, ct);
+        if (cp.ActiveResource is { } a && _tabs.Any(t => t.Id == a)) await ActivateAsync(a, ct);
+        return recreated;
+    }
+
+    private double PriorityOf(VirtualTab t) =>
+        t.WorkspaceId == ActiveWorkspace ? 1.0 : _workspaceList.FirstOrDefault(w => w.Id == t.WorkspaceId)?.BackgroundPriority ?? 0.3;
     public int LiveCount => _leases.LiveResources.Count;
     /// <summary>Milliseconds from activation of a VIRTUAL tab to its page load completing. Feeds the restore p50/p95 metric.</summary>
     public List<double> RestoreTimingsMs { get; } = [];
@@ -46,9 +134,12 @@ public sealed class TabKernel
     public void Load()
     {
         _tabs.Clear();
+        _workspaceList.Clear();
+        if (_workspaces is not null) _workspaceList.AddRange(_workspaces.LoadAll());
+        if (_workspaceList.Count == 0) _workspaceList.Add(new Workspace(ContextId.Default, "Default"));
         foreach (var row in _repo.LoadAll())
         {
-            var t = new VirtualTab(row.Id, row.Url, row.Title);
+            var t = new VirtualTab(row.Id, row.Url, row.Title, row.WorkspaceId);
             t.SetProtection(row.Protection);
             if (row.State == ResourceState.Archived) t.TryTransition(ResourceState.Archived, Cause.Recovery, row.LastStateChange);
             _tabs.Add(t);
@@ -58,7 +149,7 @@ public sealed class TabKernel
 
     public VirtualTab Open(Uri url)
     {
-        var t = new VirtualTab(ResourceId.New(), url);
+        var t = new VirtualTab(ResourceId.New(), url, "", ActiveWorkspace);
         _tabs.Add(t);
         _repo.Upsert(t, _tabs.Count - 1);
         Changed?.Invoke(new("opened", t.Id, url.Host));
@@ -75,7 +166,7 @@ public sealed class TabKernel
         _tabs.Select(t => new ResourceRuntime(
             t.Id, t.State, t.Protection, Active?.Id == t.Id,
             _lastActive.GetValueOrDefault(t.Id, t.LastStateChange), t.LastStateChange,
-            _visits.GetValueOrDefault(t.Id))).ToList();
+            _visits.GetValueOrDefault(t.Id), PriorityOf(t))).ToList();
 
     /// <summary>
     /// Execute a scheduler plan. Protection is re-checked inside VirtualizeAsync at execution time, so a plan can
@@ -101,6 +192,7 @@ public sealed class TabKernel
     {
         var tab = Find(id);
         var now = _clock();
+        if (tab.WorkspaceId != ActiveWorkspace) { ActiveWorkspace = tab.WorkspaceId; Changed?.Invoke(new("workspace-switched", default, ActiveWorkspace.ToString())); }
 
         if (Active is not null && Active.Id != id && Active.State == ResourceState.Hot)
         {

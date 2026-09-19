@@ -34,14 +34,17 @@ public sealed class VirtualTab
         [ResourceState.Archived] = [],
     };
 
-    public VirtualTab(ResourceId id, Uri url, string title = "")
+    public VirtualTab(ResourceId id, Uri url, string title = "", ContextId? workspace = null)
     {
         Id = id;
         Url = url;
         Title = title;
+        WorkspaceId = workspace ?? ContextId.Default;
     }
 
     public ResourceId Id { get; }
+    public ContextId WorkspaceId { get; private set; }
+    public void MoveTo(ContextId workspace) => WorkspaceId = workspace;
     public Uri Url { get; private set; }
     public string Title { get; private set; }
     public ResourceState State { get; private set; } = ResourceState.Virtual;

@@ -23,6 +23,16 @@
                     <Button Content="Lab" Click="OnMemoryLab"/>
                 </StackPanel>
                 <ComboBox x:Name="ModeBox" HorizontalAlignment="Stretch" SelectionChanged="OnModeChanged" ToolTipService.ToolTip="Memory budget mode (Resource OS)"/>
+                <Grid ColumnSpacing="4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <ComboBox x:Name="WorkspaceBox" HorizontalAlignment="Stretch" SelectionChanged="OnWorkspaceChanged" ToolTipService.ToolTip="Workspace (Context OS)"/>
+                    <Button Grid.Column="1" Content="+" Click="OnNewWorkspace" ToolTipService.ToolTip="New workspace"/>
+                    <Button Grid.Column="2" Content="&#xE81C;" FontFamily="Segoe MDL2 Assets" Click="OnTimeline" ToolTipService.ToolTip="Time Travel: restore an earlier context"/>
+                </Grid>
             </StackPanel>
             <ListView x:Name="TabList" Grid.Row="1" SelectionMode="Single" SelectionChanged="OnTabSelected" ItemsSource="{x:Bind Items}">
                 <ListView.ItemTemplate>
@@ -65,6 +75,11 @@
                 <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4">
                     <Button Content="Hibernate" Click="OnHibernateCurrent" ToolTipService.ToolTip="Dispose this renderer; keep the tab"/>
                     <Button Content="Pin" Click="OnPinCurrent" ToolTipService.ToolTip="Never auto-hibernate this tab"/>
+                    <Button x:Name="MoveButton" Content="Move to…" ToolTipService.ToolTip="Move this tab to another workspace">
+                        <Button.Flyout>
+                            <MenuFlyout x:Name="MoveMenu" Opening="OnMoveMenuOpening"/>
+                        </Button.Flyout>
+                    </Button>
                     <Button Content="Explain" Click="OnExplain" ToolTipService.ToolTip="Why did the scheduler last touch this tab?"/>
                     <Button x:Name="ShieldButton" Content="Shield" Click="OnShield" ToolTipService.ToolTip="Blocked requests on this page; disable per site"/>
                 </StackPanel>
