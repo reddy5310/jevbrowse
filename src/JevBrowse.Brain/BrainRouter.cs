@@ -1,0 +1,107 @@
+using JevBrowse.Domain;
+using JevBrowse.TrustOS;
+
+namespace JevBrowse.Brain;
+
+/// <summary>User-controllable AI policy. Everything defaults to off (Constitution rules 2, 5).</summary>
+public sealed class BrainPolicy
+{
+    /// <summary>Global kill switch. Off = the router answers every request from rules or refuses.</summary>
+    public bool AiEnabled { get; set; }
+    /// <summary>Cloud providers allowed at all. Local providers may still run when AiEnabled.</summary>
+    public bool CloudEnabled { get; set; }
+    /// <summary>Provider preference per task, first configured wins. Table A.8 defaults.</summary>
+    public Dictionary<BrainTask, Provider[]> Preference { get; } = new()
+    {
+        [BrainTask.ScheduleHint] = [Provider.Rules, Provider.Local, Provider.Jev],
+        [BrainTask.ClassifyPage] = [Provider.Jev, Provider.Local, Provider.OpenRouter],
+        [BrainTask.SummarizePage] = [Provider.OpenRouter, Provider.Jev, Provider.Local],
+        [BrainTask.ExplainError] = [Provider.OpenRouter, Provider.Jev, Provider.Local],
+        [BrainTask.RerankSearch] = [Provider.Jev, Provider.Local],
+    };
+    public int MaxInputChars { get; set; } = 12_000;
+}
+
+/// <summary>
+/// JevBrain (§11): a policy-controlled decision bus, not an assistant. Layers, highest first:
+///   1 hard safety / user policy   2 deterministic rules   3 local scoring   4 Jev   5 LLM.
+/// No lower layer can override a higher one; providers are only reached after Trust OS agrees and text is redacted.
+/// </summary>
+public sealed class BrainRouter : IBrainRouter
+{
+    private readonly ITrustPolicy _trust;
+    private readonly BrainPolicy _policy;
+    private readonly IReadOnlyList<IAiProvider> _providers;
+    private readonly Action<Decision>? _log;
+    private readonly Func<DateTimeOffset> _clock;
+
+    public BrainRouter(ITrustPolicy trust, BrainPolicy policy, IReadOnlyList<IAiProvider> providers, Action<Decision>? log = null, Func<DateTimeOffset>? clock = null)
+    {
+        _trust = trust;
+        _policy = policy;
+        _providers = providers;
+        _log = log;
+        _clock = clock ?? (() => DateTimeOffset.UtcNow);
+    }
+
+    public async Task<Decision> DecideAsync(DecisionRequest req, CancellationToken ct)
+    {
+        var d = await RouteAsync(req, ct);
+        _log?.Invoke(d);
+        return d;
+    }
+
+    private async Task<Decision> RouteAsync(DecisionRequest req, CancellationToken ct)
+    {
+        var now = _clock();
+        Decision Deny(string rule) => new("", Provider.None, rule, null, false, 0, req.Input.Length, now);
+
+        // ---- Layer 1: hard safety / user policy ----
+        if (!_policy.AiEnabled) return Deny("hard:ai_disabled");
+        if (req.DataClass is DataClass.Secret or DataClass.Ephemeral || req.Container.IsEphemeral())
+            return Deny($"hard:class_{req.DataClass.ToString().ToLower()}_never_leaves_device");
+        if (req.Input.Length > _policy.MaxInputChars) return Deny("hard:input_too_large");
+
+        // ---- Layer 2: deterministic rules ----
+        if (req.Task == BrainTask.ScheduleHint)
+            return new("no_hint", Provider.Rules, "rules:schedule_is_local", null, false, 0, req.Input.Length, now);
+
+        // Cloud gate: Trust OS says yes, OR the user explicitly asked on a non-sensitive page (Table A.8 override).
+        var ctx = new ResourceContext(req.Url ?? new Uri("about:blank"), req.DataClass, req.Container);
+        bool cloudAllowed = _policy.CloudEnabled &&
+            (_trust.Evaluate(ctx, DataOperation.SendToCloudAI).Allowed ||
+             (req.ExplicitUserAction && req.DataClass <= DataClass.Authenticated));
+        bool needsExplicit = req.Task is BrainTask.SummarizePage or BrainTask.ExplainError;
+        if (needsExplicit && !req.ExplicitUserAction) return Deny("policy:task_requires_explicit_user_action");
+
+        // ---- Layers 3–5: first configured, permitted provider in preference order ----
+        foreach (var kind in _policy.Preference.GetValueOrDefault(req.Task, []))
+        {
+            var p = _providers.FirstOrDefault(x => x.Kind == kind && x.IsConfigured);
+            if (p is null) continue;
+            bool isCloud = kind is Provider.Jev or Provider.OpenRouter or Provider.Custom;
+            if (isCloud && !cloudAllowed) continue;
+
+            var red = isCloud ? Redactor.Redact(req.Input) : new Redactor.Result(req.Input, 0, []);
+            try
+            {
+                var output = await p.CompleteAsync(SystemPromptFor(req.Task), red.Text, ct);
+                return new(output, kind, $"provider:{kind.ToString().ToLower()}:{(isCloud ? "cloud" : "local")}", p.Model, red.Count > 0, red.Count, req.Input.Length, now);
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException)
+            {
+                return new("", Provider.None, $"provider_failed:{kind.ToString().ToLower()}:{ex.GetType().Name}", p.Model, red.Count > 0, red.Count, req.Input.Length, now);
+            }
+        }
+        return Deny(cloudAllowed ? "policy:no_provider_configured" : "policy:cloud_not_permitted_for_class");
+    }
+
+    private static string SystemPromptFor(BrainTask t) => t switch
+    {
+        BrainTask.SummarizePage => "You summarize web pages for a privacy-focused browser. Be concise: 5 bullet points max, then one line 'Key takeaway:'. Do not invent facts not in the text.",
+        BrainTask.ExplainError => "You explain developer console/network errors. Give the likely cause first, then 2–3 concrete fixes. Be brief.",
+        BrainTask.ClassifyPage => "Classify the page as one of: PUBLIC, AUTHENTICATED, SENSITIVE. Answer with the single word only.",
+        BrainTask.RerankSearch => "Given a query and numbered candidates, answer with the candidate numbers in best-first order, comma-separated.",
+        _ => "Answer briefly.",
+    };
+}

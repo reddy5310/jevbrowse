@@ -3,6 +3,7 @@
     <Project Path="src/JevBrowse.App/JevBrowse.App.csproj">
       <Platform Project="x64" />
     </Project>
+    <Project Path="src/JevBrowse.Brain/JevBrowse.Brain.csproj" />
     <Project Path="src/JevBrowse.Diagnostics/JevBrowse.Diagnostics.csproj" />
     <Project Path="src/JevBrowse.Domain/JevBrowse.Domain.csproj" />
     <Project Path="src/JevBrowse.Renderer.Abstractions/JevBrowse.Renderer.Abstractions.csproj" />
@@ -14,6 +15,7 @@
   </Folder>
   <Folder Name="/tests/" />
   <Folder Name="/tests/Unit/">
+    <Project Path="tests/Unit/JevBrowse.Brain.Tests/JevBrowse.Brain.Tests.csproj" />
     <Project Path="tests/Unit/JevBrowse.Domain.Tests/JevBrowse.Domain.Tests.csproj" />
     <Project Path="tests/Unit/JevBrowse.Kernel.Tests/JevBrowse.Kernel.Tests.csproj" />
     <Project Path="tests/Unit/JevBrowse.ResourceOS.Tests/JevBrowse.ResourceOS.Tests.csproj" />

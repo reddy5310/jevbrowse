@@ -91,6 +91,8 @@
                     </Button>
                     <Button Content="Explain" Click="OnExplain" ToolTipService.ToolTip="Why did the scheduler last touch this tab?"/>
                     <Button x:Name="ShieldButton" Content="Shield" Click="OnShield" ToolTipService.ToolTip="Blocked requests on this page; disable per site"/>
+                    <Button Content="Ask" Click="OnAsk" ToolTipService.ToolTip="Summarize this page (explicit; you confirm before anything is sent)"/>
+                    <Button Content="Brain" Click="OnBrain" ToolTipService.ToolTip="AI switches and the decision log"/>
                 </StackPanel>
             </Grid>
             <Grid x:Name="WebHost" Grid.Row="1">

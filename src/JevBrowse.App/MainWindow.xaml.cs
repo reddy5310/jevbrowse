@@ -3,6 +3,8 @@ using System.Text.Json;
 using JevBrowse.App.Renderer;
 using JevBrowse.App.Shield;
 using JevBrowse.App.Trust;
+using JevBrowse.Brain;
+using JevBrowse.Brain.Providers;
 using JevBrowse.Diagnostics;
 using JevBrowse.Shield;
 using JevBrowse.TrustOS;
@@ -34,6 +36,10 @@ public sealed partial class MainWindow : Window
     private readonly DefaultScheduler _scheduler = new();
     private ShieldAdapter? _shield;
     private FilterListStore? _filters;
+    private readonly BrainPolicy _brainPolicy = new();
+    private BrainRouter? _brain;
+    private DecisionLogRepository? _decisions;
+    private IReadOnlyList<IAiProvider> _providers = [];
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _tick;
     private ResourcePlan? _lastPlan;
     private bool _syncingSelection;
@@ -62,6 +68,12 @@ public sealed partial class MainWindow : Window
             await UpdateFilterListsAsync();
         else
             CompileFilters();
+
+        // JevBrain: off by default; providers exist only if their keys are in the environment.
+        _decisions = new DecisionLogRepository(_db);
+        _providers = OpenAiCompatibleProvider.FromEnvironment();
+        _brain = new BrainRouter(new DefaultTrustPolicy(), _brainPolicy, _providers,
+            d => _decisions.Append(d.At, "?", d.Source.ToString(), d.Rule, d.Model, "?", d.Redacted, d.RedactionCount, d.InputChars, d.Output, d.Version));
 
         var classifier = new DataClassifier(site => _siteSettings.DataClassOverride(site) is { } c ? (DataClass)c : null);
         _kernel = new TabKernel(_leases, new TabRepository(_db), new CheckpointRepository(_db), Path.Combine(DataDir, "thumbnails"), null, new WorkspaceRepository(_db), new DefaultTrustPolicy(), classifier);
@@ -283,6 +295,67 @@ public sealed partial class MainWindow : Window
             });
         });
         return await tcs.Task;
+    }
+
+    // ---- JevBrain ----
+
+    private async void OnAsk(object s, RoutedEventArgs e)
+    {
+        if (_kernel?.Active is not { } t || _brain is null) return;
+        var cls = _kernel.ClassOf(t);
+        var container = _kernel.ContainerOf(t);
+
+        // Extract visible text locally. Nothing has left the machine yet.
+        string text = "";
+        if (_leases!.TryGet(t.Id, out var l))
+        {
+            var raw = await ((WebView2Lease)l).View.CoreWebView2.ExecuteScriptAsync("document.body ? document.body.innerText.slice(0, 12000) : ''");
+            text = JsonSerializer.Deserialize<string>(raw) ?? "";
+        }
+        var redacted = Redactor.Redact(text);
+        var provider = _providers.FirstOrDefault(p => p.IsConfigured && (_brainPolicy.Preference[BrainTask.SummarizePage].Contains(p.Kind)));
+
+        var preview = new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap,
+            Text = !_brainPolicy.AiEnabled ? "AI is off. Turn it on in the Brain panel first."
+                 : cls >= DataClass.Sensitive ? $"This page is {cls}. Its content never leaves the device (hard rule)."
+                 : provider is null ? "No AI provider is configured (set OPENROUTER_API_KEY or JEV_API_KEY in the environment)."
+                 : $"Send {redacted.Text.Length:N0} characters of this {cls} page to {provider.Kind} ({provider.Model})?\n" +
+                   $"{redacted.Count} item(s) were redacted first{(redacted.Count > 0 ? ": " + string.Join(", ", redacted.Kinds) : "")}.\n" +
+                   "The page URL and your identity are not sent.",
+        };
+        var canSend = _brainPolicy.AiEnabled && cls < DataClass.Sensitive && provider is not null;
+        var dlg = new ContentDialog { Title = "Ask: summarize this page", Content = preview, PrimaryButtonText = "Send", CloseButtonText = "Cancel", IsPrimaryButtonEnabled = canSend, XamlRoot = Content.XamlRoot };
+        if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
+
+        StatusText.Text = $"asking {provider!.Kind}…";
+        var d = await _brain.DecideAsync(new DecisionRequest(BrainTask.SummarizePage, text, cls, container, ExplicitUserAction: true, t.Url), default);
+        var result = new ContentDialog
+        {
+            Title = d.WasDenied ? "Not answered" : $"Summary via {d.Source} ({d.Model})",
+            Content = new ScrollViewer { MaxHeight = 420, Content = new TextBlock { Text = d.WasDenied ? $"Rule: {d.Rule}" : d.Output, TextWrapping = TextWrapping.Wrap } },
+            CloseButtonText = "Close", XamlRoot = Content.XamlRoot,
+        };
+        StatusText.Text = $"brain: {d.Rule}{(d.Redacted ? $" • {d.RedactionCount} redacted" : "")}";
+        await result.ShowAsync();
+    }
+
+    private async void OnBrain(object s, RoutedEventArgs e)
+    {
+        var ai = new ToggleSwitch { Header = "AI enabled", IsOn = _brainPolicy.AiEnabled };
+        var cloud = new ToggleSwitch { Header = "Cloud providers allowed", IsOn = _brainPolicy.CloudEnabled };
+        var providers = new TextBlock { TextWrapping = TextWrapping.Wrap, Text = "Providers: " + string.Join(", ", _providers.Select(p => $"{p.Kind} {(p.IsConfigured ? "✓ " + p.Model : "(not configured)")}")) };
+        var byClass = _decisions!.CloudCallsByClass();
+        var metric = new TextBlock { Text = "Cloud calls by data class: " + (byClass.Count == 0 ? "none" : string.Join(", ", byClass.Select(kv => $"{kv.Key}={kv.Value}"))), Opacity = 0.8 };
+        var log = new TextBlock { FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), FontSize = 11, TextWrapping = TextWrapping.Wrap,
+            Text = string.Join("\n", _decisions.Recent(25).Select(r => $"{r.At.ToLocalTime():HH:mm:ss} {r.Source,-10} {r.Rule}{(r.Redacted ? $" (redacted {r.RedactionCount})" : "")}")) };
+        var panel = new StackPanel { Spacing = 8, Children = { ai, cloud, providers, metric, new TextBlock { Text = "Decision log (newest first):", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold }, new ScrollViewer { MaxHeight = 260, Content = log } } };
+        var dlg = new ContentDialog { Title = "JevBrain", Content = panel, PrimaryButtonText = "Save", CloseButtonText = "Close", XamlRoot = Content.XamlRoot };
+        if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
+        _brainPolicy.AiEnabled = ai.IsOn;
+        _brainPolicy.CloudEnabled = cloud.IsOn;
+        StatusText.Text = $"brain: AI {(ai.IsOn ? "on" : "off")}, cloud {(cloud.IsOn ? "on" : "off")}";
     }
 
     // ---- Shield ----

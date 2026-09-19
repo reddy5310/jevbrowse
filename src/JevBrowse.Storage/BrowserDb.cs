@@ -5,7 +5,7 @@ namespace JevBrowse.Storage;
 /// <summary>Durable logical state (Architecture §16: db\browser.db). WAL mode; schema versioned via user_version.</summary>
 public sealed class BrowserDb : IDisposable
 {
-    private const int SchemaVersion = 5;
+    private const int SchemaVersion = 6;
 
     public BrowserDb(string path)
     {
@@ -102,6 +102,26 @@ public sealed class BrowserDb : IDisposable
                     granted_at INTEGER NOT NULL,
                     PRIMARY KEY (site, kind)
                 );
+                """);
+        }
+        if (v < 6)
+        {
+            Exec("""
+                CREATE TABLE decision_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    at INTEGER NOT NULL,
+                    task TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    rule TEXT NOT NULL,
+                    model TEXT,
+                    data_class TEXT NOT NULL,
+                    redacted INTEGER NOT NULL,
+                    redaction_count INTEGER NOT NULL,
+                    input_chars INTEGER NOT NULL,
+                    output_preview TEXT NOT NULL,
+                    version TEXT NOT NULL
+                );
+                CREATE INDEX decision_log_at ON decision_log(at DESC);
                 """);
         }
         if (v < SchemaVersion) Exec($"PRAGMA user_version={SchemaVersion}");
