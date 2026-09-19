@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/JevBrowse.App/JevBrowse.App.csproj">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="src/JevBrowse.Diagnostics/JevBrowse.Diagnostics.csproj" />
+    <Project Path="src/JevBrowse.Domain/JevBrowse.Domain.csproj" />
+    <Project Path="src/JevBrowse.Renderer.Abstractions/JevBrowse.Renderer.Abstractions.csproj" />
+    <Project Path="src/JevBrowse.ResourceOS/JevBrowse.ResourceOS.csproj" />
+    <Project Path="src/JevBrowse.Storage/JevBrowse.Storage.csproj" />
+  </Folder>
+  <Folder Name="/tests/" />
+  <Folder Name="/tests/Unit/">
+    <Project Path="tests/Unit/JevBrowse.Domain.Tests/JevBrowse.Domain.Tests.csproj" />
+  </Folder>
+</Solution>
