@@ -11,7 +11,7 @@ public sealed class WorkspaceRepository
     public IReadOnlyList<Workspace> LoadAll()
     {
         using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = "SELECT id, name, background_priority, notifications_muted, created_at FROM workspaces ORDER BY created_at";
+        cmd.CommandText = "SELECT id, name, background_priority, notifications_muted, created_at, container FROM workspaces ORDER BY created_at";
         using var r = cmd.ExecuteReader();
         var list = new List<Workspace>();
         while (r.Read())
@@ -20,6 +20,7 @@ public sealed class WorkspaceRepository
                 BackgroundPriority = r.GetDouble(2),
                 NotificationsMuted = r.GetInt32(3) != 0,
                 CreatedAt = DateTimeOffset.FromUnixTimeMilliseconds(r.GetInt64(4)),
+                Container = (IdentityContainer)r.GetInt32(5),
             });
         return list;
     }
@@ -28,10 +29,11 @@ public sealed class WorkspaceRepository
     {
         using var cmd = _db.Connection.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO workspaces (id, name, background_priority, notifications_muted, created_at)
-            VALUES ($id, $name, $prio, $muted, $at)
-            ON CONFLICT(id) DO UPDATE SET name=$name, background_priority=$prio, notifications_muted=$muted
+            INSERT INTO workspaces (id, name, background_priority, notifications_muted, created_at, container)
+            VALUES ($id, $name, $prio, $muted, $at, $c)
+            ON CONFLICT(id) DO UPDATE SET name=$name, background_priority=$prio, notifications_muted=$muted, container=$c
             """;
+        cmd.Parameters.AddWithValue("$c", (int)w.Container);
         cmd.Parameters.AddWithValue("$id", w.Id.ToString());
         cmd.Parameters.AddWithValue("$name", w.Name);
         cmd.Parameters.AddWithValue("$prio", w.BackgroundPriority);

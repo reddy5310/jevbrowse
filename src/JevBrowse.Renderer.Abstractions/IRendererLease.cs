@@ -30,6 +30,8 @@ public interface IRendererLease
     event Action? Loaded;
     /// <summary>Live-page conditions that veto demotion: audible, download, dirty form.</summary>
     event Action<ProtectionFlags>? DetectedProtectionChanged;
+    /// <summary>Live-page signals Trust OS classifies on: password field, payment field.</summary>
+    event Action<PageSignals>? PageSignalsChanged;
 }
 
 /// <summary>Architecture §18. Bounded pool of live renderers; the kernel decides who gets one.</summary>
@@ -38,6 +40,7 @@ public interface IRendererLeaseManager
     int MaxLive { get; set; }
     IReadOnlyCollection<ResourceId> LiveResources { get; }
     bool TryGet(ResourceId id, out IRendererLease lease);
-    Task<IRendererLease> AcquireAsync(ResourceId id, Uri initialUrl, RenderIntent intent, CancellationToken ct);
+    /// <summary>The container selects the cookie/storage silo the renderer runs in (§10.1).</summary>
+    Task<IRendererLease> AcquireAsync(ResourceId id, Uri initialUrl, RenderIntent intent, IdentityContainer container, CancellationToken ct);
     Task ReleaseAsync(ResourceId id, ReleaseDisposition disposition, CancellationToken ct);
 }

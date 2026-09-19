@@ -22,9 +22,12 @@ public sealed class FakeLeaseManager : IRendererLeaseManager
         return ok;
     }
 
-    public Task<IRendererLease> AcquireAsync(ResourceId id, Uri url, RenderIntent intent, CancellationToken ct)
+    public readonly Dictionary<ResourceId, IdentityContainer> Containers = [];
+
+    public Task<IRendererLease> AcquireAsync(ResourceId id, Uri url, RenderIntent intent, IdentityContainer container, CancellationToken ct)
     {
         Acquires++;
+        Containers[id] = container;
         var l = new FakeLease(id, url, this);
         _live[id] = l;
         return Task.FromResult<IRendererLease>(l);
@@ -53,10 +56,14 @@ public sealed class FakeLease(ResourceId id, Uri url, FakeLeaseManager owner) : 
     public Task<bool> TrySuspendAsync() { IsSuspended = true; return Task.FromResult(true); }
     public void Resume() => IsSuspended = false;
 
+    public string? ThumbnailToWrite { get; set; }
+
     public Task<Checkpoint> CaptureCheckpointAsync(string dir, CancellationToken ct)
     {
         if (owner.FailNextCapture) { owner.FailNextCapture = false; throw new InvalidOperationException("renderer gone"); }
-        return Task.FromResult(new Checkpoint(id, Url, "t", 0, ScrollY, null, null, DateTimeOffset.UnixEpoch));
+        string? thumb = null;
+        if (ThumbnailToWrite is not null) { thumb = Path.Combine(dir, ThumbnailToWrite); File.WriteAllBytes(thumb, [1, 2, 3]); }
+        return Task.FromResult(new Checkpoint(id, Url, "t", 0, ScrollY, null, thumb, DateTimeOffset.UnixEpoch));
     }
 
     public void ApplyCheckpoint(Checkpoint cp) { Applied = cp; ScrollY = cp.ScrollY; }
@@ -64,7 +71,9 @@ public sealed class FakeLease(ResourceId id, Uri url, FakeLeaseManager owner) : 
     public event Action<NavigationInfo>? NavigationChanged;
     public event Action? Loaded;
     public event Action<ProtectionFlags>? DetectedProtectionChanged;
+    public event Action<PageSignals>? PageSignalsChanged;
     public void RaiseNavigation(Uri u, string t) { Url = u; NavigationChanged?.Invoke(new(u, t)); }
     public void RaiseLoaded() => Loaded?.Invoke();
     public void RaiseDetected(ProtectionFlags f) => DetectedProtectionChanged?.Invoke(f);
+    public void RaiseSignals(PageSignals s) => PageSignalsChanged?.Invoke(s);
 }

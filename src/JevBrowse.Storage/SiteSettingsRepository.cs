@@ -28,6 +28,29 @@ public sealed class SiteSettingsRepository
         cmd.ExecuteNonQuery();
     }
 
+    /// <summary>User override of the data class for a site (null = let the classifier decide).</summary>
+    public int? DataClassOverride(string site)
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT data_class FROM site_settings WHERE site=$s";
+        cmd.Parameters.AddWithValue("$s", site);
+        var r = cmd.ExecuteScalar();
+        return r is null or DBNull ? null : Convert.ToInt32(r);
+    }
+
+    public void SetDataClassOverride(string site, int? dataClass)
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO site_settings (site, shield_enabled, data_class, updated_at) VALUES ($s, 1, $d, $t)
+            ON CONFLICT(site) DO UPDATE SET data_class=$d, updated_at=$t
+            """;
+        cmd.Parameters.AddWithValue("$s", site);
+        cmd.Parameters.AddWithValue("$d", (object?)dataClass ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        cmd.ExecuteNonQuery();
+    }
+
     public IReadOnlyList<string> DisabledSites()
     {
         using var cmd = _db.Connection.CreateCommand();

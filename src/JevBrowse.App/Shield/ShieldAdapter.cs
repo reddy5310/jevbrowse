@@ -19,14 +19,12 @@ public sealed class TabShieldStats
 /// </summary>
 public sealed class ShieldAdapter
 {
-    private readonly CoreWebView2Environment _env;
     private readonly SiteSettingsRepository _sites;
     private readonly HashSet<string> _disabledSites;
     private volatile FilterEngine _engine = FilterEngine.Compile([]);
 
-    public ShieldAdapter(CoreWebView2Environment env, SiteSettingsRepository sites)
+    public ShieldAdapter(SiteSettingsRepository sites)
     {
-        _env = env;
         _sites = sites;
         _disabledSites = new HashSet<string>(sites.DisabledSites(), StringComparer.OrdinalIgnoreCase);
     }
@@ -59,7 +57,7 @@ public sealed class ShieldAdapter
             if (decision.Verdict != Verdict.Block) return;
             stats.Blocked++;
             stats.Record(url.Host, decision.Rule ?? "");
-            e.Response = _env.CreateWebResourceResponse(null, 403, "Blocked by JevBrowse Shield", "Content-Type: text/plain");
+            e.Response = core.Environment.CreateWebResourceResponse(null, 403, "Blocked by JevBrowse Shield", "Content-Type: text/plain");
         };
     }
 

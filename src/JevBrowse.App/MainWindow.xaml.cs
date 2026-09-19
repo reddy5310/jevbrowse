@@ -2,8 +2,10 @@ using System.Collections.ObjectModel;
 using System.Text.Json;
 using JevBrowse.App.Renderer;
 using JevBrowse.App.Shield;
+using JevBrowse.App.Trust;
 using JevBrowse.Diagnostics;
 using JevBrowse.Shield;
+using JevBrowse.TrustOS;
 using JevBrowse.Domain;
 using JevBrowse.ResourceOS;
 using JevBrowse.Storage;
@@ -24,8 +26,9 @@ public sealed partial class MainWindow : Window
 
     public ObservableCollection<TabItem> Items { get; } = [];
 
-    private CoreWebView2Environment? _env;
     private WebView2LeaseManager? _leases;
+    private PermissionAdapter? _permissions;
+    private SiteSettingsRepository? _siteSettings;
     private BrowserDb? _db;
     private TabKernel? _kernel;
     private readonly DefaultScheduler _scheduler = new();
@@ -38,29 +41,30 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        Closed += (_, _) => _db?.Dispose();
+        Closed += (_, _) => { _leases?.Shutdown(); _db?.Dispose(); };
         _ = InitAsync();
     }
 
     private async Task InitAsync()
     {
-        var udf = Path.Combine(DataDir, "profiles", "personal");
-        Directory.CreateDirectory(udf);
-        _env = await CoreWebView2Environment.CreateWithOptionsAsync(null, udf, new CoreWebView2EnvironmentOptions());
-        _leases = new WebView2LeaseManager(WebHost, _env, Path.Combine(DataDir, "thumbnails")) { MaxLive = 5 };
+        _leases = new WebView2LeaseManager(WebHost, Path.Combine(DataDir, "profiles"), Path.Combine(DataDir, "thumbnails")) { MaxLive = 5 };
         _db = new BrowserDb(Path.Combine(DataDir, "db", "browser.db"));
+        _siteSettings = new SiteSettingsRepository(_db);
 
         // Shield: compile whatever lists are on disk before the first renderer exists; fetch lists if there are none.
         _filters = new FilterListStore(Path.Combine(DataDir, "filters"));
-        _shield = new ShieldAdapter(_env, new SiteSettingsRepository(_db));
-        _leases.OnCoreCreated = _shield.Attach;
+        _shield = new ShieldAdapter(_siteSettings);
+        // Trust OS: permission prompts are owned by the window; policy decides most without UI.
+        _permissions = new PermissionAdapter(new SitePermissionsRepository(_db), PromptPermissionAsync);
+        _leases.OnCoreCreated = (core, id, _) => { _shield.Attach(core, id); _permissions.Attach(core); };
         _leases.OnCoreDisposed = _shield.Detach;
         if (!_filters.HasActiveLists && Environment.GetEnvironmentVariable("JEVBROWSE_NO_FILTER_UPDATE") is null)
             await UpdateFilterListsAsync();
         else
             CompileFilters();
 
-        _kernel = new TabKernel(_leases, new TabRepository(_db), new CheckpointRepository(_db), Path.Combine(DataDir, "thumbnails"), null, new WorkspaceRepository(_db));
+        var classifier = new DataClassifier(site => _siteSettings.DataClassOverride(site) is { } c ? (DataClass)c : null);
+        _kernel = new TabKernel(_leases, new TabRepository(_db), new CheckpointRepository(_db), Path.Combine(DataDir, "thumbnails"), null, new WorkspaceRepository(_db), new DefaultTrustPolicy(), classifier);
         _kernel.Changed += OnKernelChanged;
         _kernel.Load();
         RebuildWorkspaces();
@@ -110,6 +114,7 @@ public sealed partial class MainWindow : Window
             _syncingSelection = false;
             AddressBox.Text = _kernel!.Active?.Url.ToString() ?? "";
         }
+        if (e.Kind is "activated" or "navigated" or "signals") UpdateClassBadge();
         VirtualPlaceholder.Visibility = _kernel!.Active is null ? Visibility.Visible : Visibility.Collapsed;
         UpdatePoolText();
         StatusText.Text = $"{e.Kind} {e.Reason}";
@@ -130,7 +135,7 @@ public sealed partial class MainWindow : Window
     {
         _syncingWorkspace = true;
         WorkspaceBox.Items.Clear();
-        foreach (var w in _kernel!.Workspaces) WorkspaceBox.Items.Add($"{w.Name} ({_kernel.TabsIn(w.Id).Count()})");
+        foreach (var w in _kernel!.Workspaces) WorkspaceBox.Items.Add($"{w.Name} · {w.Container} ({_kernel.TabsIn(w.Id).Count()})");
         _syncingWorkspace = false;
         SyncWorkspaceBox();
     }
@@ -155,9 +160,14 @@ public sealed partial class MainWindow : Window
     private async void OnNewWorkspace(object s, RoutedEventArgs e)
     {
         var box = new TextBox { PlaceholderText = "Workspace name, e.g. Job search" };
-        var dlg = new ContentDialog { Title = "New workspace", Content = box, PrimaryButtonText = "Create", CloseButtonText = "Cancel", XamlRoot = Content.XamlRoot };
+        var container = new ComboBox { HorizontalAlignment = HorizontalAlignment.Stretch, Header = "Identity container" };
+        foreach (var c in Enum.GetValues<IdentityContainer>()) container.Items.Add(c + (c.IsEphemeral() ? " (nothing persisted)" : ""));
+        container.SelectedIndex = 0;
+        var dlg = new ContentDialog { Title = "New workspace", Content = new StackPanel { Spacing = 8, Children = { box, container } }, PrimaryButtonText = "Create", CloseButtonText = "Cancel", XamlRoot = Content.XamlRoot };
         if (await dlg.ShowAsync() != ContentDialogResult.Primary || string.IsNullOrWhiteSpace(box.Text)) return;
         var w = _kernel!.CreateWorkspace(box.Text.Trim());
+        w.Container = (IdentityContainer)container.SelectedIndex;
+        new WorkspaceRepository(_db!).Upsert(w);
         await _kernel.SwitchWorkspaceAsync(w.Id);
         RebuildWorkspaces();
         VirtualPlaceholder.Visibility = Visibility.Visible;
@@ -211,6 +221,68 @@ public sealed partial class MainWindow : Window
         var band = _lastPlan is null ? "" : $" • {_lastPlan.Band} band, budget {_lastPlan.TargetLiveRenderers}";
         var blocked = _shield is null ? 0 : _shield.Stats.Values.Sum(x => x.Blocked);
         PoolText.Text = $"{_kernel!.Tabs.Count} tabs • {_kernel.LiveCount}/{_leases.MaxLive} live{band}\n{s.ProcessCount} procs • {s.PrivateMb:F0} MB private (measured)\nShield: {blocked} blocked this session";
+    }
+
+    // ---- Trust OS ----
+
+    private void UpdateClassBadge()
+    {
+        if (_kernel?.Active is not { } t) { ClassBadgeText.Text = ""; return; }
+        var cls = _kernel.ClassOf(t);
+        ClassBadgeText.Text = $"{_kernel.ContainerOf(t).ToString().ToUpperInvariant()} • {cls.ToString().ToUpperInvariant()}";
+        ClassBadge.Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(cls switch
+        {
+            DataClass.Public => Microsoft.UI.Colors.DarkSeaGreen,
+            DataClass.Authenticated => Microsoft.UI.Colors.SteelBlue,
+            DataClass.Sensitive => Microsoft.UI.Colors.DarkOrange,
+            DataClass.Secret => Microsoft.UI.Colors.Firebrick,
+            _ => Microsoft.UI.Colors.SlateGray,
+        });
+    }
+
+    private async void OnClassBadgeTapped(object s, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
+    {
+        if (_kernel?.Active is not { } t) return;
+        var site = DataClassifier.Site(t.Url.Host);
+        var current = _kernel.ClassOf(t);
+        var box = new ComboBox { HorizontalAlignment = HorizontalAlignment.Stretch };
+        box.Items.Add("Let JevBrowse decide");
+        foreach (var c in new[] { DataClass.Public, DataClass.Authenticated, DataClass.Sensitive }) box.Items.Add(c.ToString());
+        var over = _siteSettings!.DataClassOverride(site);
+        box.SelectedIndex = over is null ? 0 : (int)over + 1;
+        var dlg = new ContentDialog
+        {
+            Title = $"Data class for {site}",
+            Content = new StackPanel { Spacing = 8, Children = {
+                new TextBlock { Text = $"Currently {current}. Higher classes persist less and never send content to AI. A password field on the page always forces SECRET.", TextWrapping = TextWrapping.Wrap },
+                box } },
+            PrimaryButtonText = "Save", CloseButtonText = "Cancel", XamlRoot = Content.XamlRoot,
+        };
+        if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
+        _siteSettings.SetDataClassOverride(site, box.SelectedIndex == 0 ? null : box.SelectedIndex - 1);
+        UpdateClassBadge();
+    }
+
+    private async Task<PermissionAdapter.Choice> PromptPermissionAsync(string site, PermissionKind kind)
+    {
+        var tcs = new TaskCompletionSource<PermissionAdapter.Choice>();
+        DispatcherQueue.TryEnqueue(async () =>
+        {
+            var dlg = new ContentDialog
+            {
+                Title = $"{site} wants {kind}",
+                Content = new TextBlock { Text = "Grants can be temporary. Denied by default if you close this.", TextWrapping = TextWrapping.Wrap },
+                PrimaryButtonText = "Allow for 1 hour", SecondaryButtonText = "Allow once", CloseButtonText = "Block", XamlRoot = Content.XamlRoot,
+            };
+            var r = await dlg.ShowAsync();
+            tcs.TrySetResult(r switch
+            {
+                ContentDialogResult.Primary => PermissionAdapter.Choice.AllowForHour,
+                ContentDialogResult.Secondary => PermissionAdapter.Choice.AllowOnce,
+                _ => PermissionAdapter.Choice.Block,
+            });
+        });
+        return await tcs.Task;
     }
 
     // ---- Shield ----

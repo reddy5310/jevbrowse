@@ -7,5 +7,6 @@
     <ProjectReference Include="..\JevBrowse.Renderer.Abstractions\JevBrowse.Renderer.Abstractions.csproj" />
     <ProjectReference Include="..\JevBrowse.ResourceOS\JevBrowse.ResourceOS.csproj" />
     <ProjectReference Include="..\JevBrowse.Storage\JevBrowse.Storage.csproj" />
+    <ProjectReference Include="..\JevBrowse.TrustOS\JevBrowse.TrustOS.csproj" />
   </ItemGroup>
 </Project>

@@ -3,6 +3,7 @@ using JevBrowse.Domain;
 using JevBrowse.Renderer.Abstractions;
 using JevBrowse.ResourceOS;
 using JevBrowse.Storage;
+using JevBrowse.TrustOS;
 
 namespace JevBrowse.VirtualTabs;
 
@@ -27,8 +28,12 @@ public sealed class TabKernel
     private readonly List<Workspace> _workspaceList = [];
     private readonly string _thumbnailDir;
     private readonly Func<DateTimeOffset> _clock;
+    private readonly ITrustPolicy _trust;
+    private readonly DataClassifier _classifier;
+    private readonly Dictionary<ResourceId, PageSignals> _signals = [];
 
-    public TabKernel(IRendererLeaseManager leases, TabRepository repo, CheckpointRepository checkpoints, string thumbnailDir, Func<DateTimeOffset>? clock = null, WorkspaceRepository? workspaces = null)
+    public TabKernel(IRendererLeaseManager leases, TabRepository repo, CheckpointRepository checkpoints, string thumbnailDir,
+        Func<DateTimeOffset>? clock = null, WorkspaceRepository? workspaces = null, ITrustPolicy? trust = null, DataClassifier? classifier = null)
     {
         _leases = leases;
         _repo = repo;
@@ -36,7 +41,20 @@ public sealed class TabKernel
         _workspaces = workspaces;
         _thumbnailDir = thumbnailDir;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
+        _trust = trust ?? new DefaultTrustPolicy();
+        _classifier = classifier ?? new DataClassifier();
     }
+
+    // ---- Trust OS ----
+
+    public IdentityContainer ContainerOf(VirtualTab t) =>
+        _workspaceList.FirstOrDefault(w => w.Id == t.WorkspaceId)?.Container ?? IdentityContainer.Personal;
+
+    public DataClass ClassOf(VirtualTab t) => _classifier.Classify(t.Url, ContainerOf(t), _signals.GetValueOrDefault(t.Id));
+
+    /// <summary>Every persistence decision goes through here. Nothing else in the kernel writes to disk directly.</summary>
+    public TrustDecision May(VirtualTab t, DataOperation op) =>
+        _trust.Evaluate(new ResourceContext(t.Url, ClassOf(t), ContainerOf(t)), op);
 
     public IReadOnlyList<VirtualTab> Tabs => _tabs;
     public VirtualTab? Active { get; private set; }
@@ -151,7 +169,7 @@ public sealed class TabKernel
     {
         var t = new VirtualTab(ResourceId.New(), url, "", ActiveWorkspace);
         _tabs.Add(t);
-        _repo.Upsert(t, _tabs.Count - 1);
+        Persist(t);
         Changed?.Invoke(new("opened", t.Id, url.Host));
         return t;
     }
@@ -207,9 +225,10 @@ public sealed class TabKernel
             var checkpoint = _checkpoints.Get(id);
             var sw = Stopwatch.StartNew();
             _restoreTimers[id] = sw;
-            lease = await _leases.AcquireAsync(id, checkpoint?.Url ?? tab.Url, RenderIntent.Foreground, ct);
+            lease = await _leases.AcquireAsync(id, checkpoint?.Url ?? tab.Url, RenderIntent.Foreground, ContainerOf(tab), ct);
             lease.NavigationChanged += n => { tab.UpdateNavigation(n.Url, n.Title); Persist(tab); Changed?.Invoke(new("navigated", tab.Id, n.Title)); };
             lease.DetectedProtectionChanged += f => { tab.SetDetected(f); Changed?.Invoke(new("protection", tab.Id, f.ToString())); };
+            lease.PageSignalsChanged += s => { _signals[tab.Id] = s; Changed?.Invoke(new("signals", tab.Id, ClassOf(tab).ToString())); };
             lease.Loaded += () =>
             {
                 if (_restoreTimers.Remove(id, out var timer))
@@ -258,6 +277,13 @@ public sealed class TabKernel
             catch (Exception ex) { Changed?.Invoke(new("checkpoint-failed", id, ex.Message)); }
         }
 
+        // Trust OS gate (Table A.10): the class decides what of the capture may survive the renderer.
+        if (cp is not null)
+        {
+            if (!May(tab, DataOperation.PersistCheckpoint).Allowed) { DeleteThumb(cp.ThumbnailPath); cp = null; }
+            else if (cp.ThumbnailPath is not null && !May(tab, DataOperation.PersistThumbnail).Allowed) { DeleteThumb(cp.ThumbnailPath); cp = cp with { ThumbnailPath = null }; }
+        }
+
         foreach (var s in path)
         {
             var r = tab.TryTransition(s, cause, now);
@@ -267,10 +293,11 @@ public sealed class TabKernel
         // 2. commit atomically
         using (var tx = _repo.BeginTransaction())
         {
-            if (cp is not null) _checkpoints.Upsert(cp);
+            if (cp is not null && May(tab, DataOperation.PersistTabRow).Allowed) _checkpoints.Upsert(cp);
             Persist(tab);
             tx.Commit();
         }
+        _signals.Remove(id); // nothing left to detect from
 
         // 3. dispose
         await _leases.ReleaseAsync(id, ReleaseDisposition.Dispose, ct);
@@ -314,13 +341,22 @@ public sealed class TabKernel
         }
     }
 
-    private void Persist(VirtualTab t) => _repo.Upsert(t, _tabs.IndexOf(t));
+    private void Persist(VirtualTab t)
+    {
+        if (May(t, DataOperation.PersistTabRow).Allowed) _repo.Upsert(t, _tabs.IndexOf(t));
+    }
 
     private void Reorder()
     {
         using var tx = _repo.BeginTransaction();
-        for (int i = 0; i < _tabs.Count; i++) _repo.Upsert(_tabs[i], i);
+        for (int i = 0; i < _tabs.Count; i++) Persist(_tabs[i]);
         tx.Commit();
+    }
+
+    private static void DeleteThumb(string? path)
+    {
+        if (path is null) return;
+        try { File.Delete(path); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 
     private VirtualTab Find(ResourceId id) =>

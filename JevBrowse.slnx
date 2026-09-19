@@ -9,6 +9,7 @@
     <Project Path="src/JevBrowse.ResourceOS/JevBrowse.ResourceOS.csproj" />
     <Project Path="src/JevBrowse.Shield/JevBrowse.Shield.csproj" />
     <Project Path="src/JevBrowse.Storage/JevBrowse.Storage.csproj" />
+    <Project Path="src/JevBrowse.TrustOS/JevBrowse.TrustOS.csproj" />
     <Project Path="src/JevBrowse.VirtualTabs/JevBrowse.VirtualTabs.csproj" />
   </Folder>
   <Folder Name="/tests/" />
@@ -17,5 +18,6 @@
     <Project Path="tests/Unit/JevBrowse.Kernel.Tests/JevBrowse.Kernel.Tests.csproj" />
     <Project Path="tests/Unit/JevBrowse.ResourceOS.Tests/JevBrowse.ResourceOS.Tests.csproj" />
     <Project Path="tests/Unit/JevBrowse.Shield.Tests/JevBrowse.Shield.Tests.csproj" />
+    <Project Path="tests/Unit/JevBrowse.TrustOS.Tests/JevBrowse.TrustOS.Tests.csproj" />
   </Folder>
 </Solution>
