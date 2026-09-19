@@ -42,6 +42,7 @@ public sealed partial class MainWindow : Window
     private FilterListStore? _filters;
     private readonly BrainPolicy _brainPolicy = new();
     private BrainRouter? _brain;
+    private JevDecisionProvider? _jev;
     private DecisionLogRepository? _decisions;
     private IReadOnlyList<IAiProvider> _providers = [];
     private BrowserMemory? _memory;
@@ -84,8 +85,10 @@ public sealed partial class MainWindow : Window
         // JevBrain: off by default; providers exist only if their keys are in the environment.
         _decisions = new DecisionLogRepository(_db);
         _providers = OpenAiCompatibleProvider.FromEnvironment();
+        _jev = JevDecisionProvider.FromEnvironment();
         _brain = new BrainRouter(new DefaultTrustPolicy(), _brainPolicy, _providers,
-            d => _decisions.Append(d.At, "?", d.Source.ToString(), d.Rule, d.Model, "?", d.Redacted, d.RedactionCount, d.InputChars, d.Output, d.Version));
+            d => _decisions.Append(d.At, "?", d.Source.ToString(), d.Rule, d.Model, "?", d.Redacted, d.RedactionCount, d.InputChars, d.Output, d.Version),
+            decisions: _jev);
 
         var classifier = new DataClassifier(site => _siteSettings.DataClassOverride(site) is { } c ? (DataClass)c : null);
         _kernel = new TabKernel(_leases, new TabRepository(_db), new CheckpointRepository(_db), Path.Combine(DataDir, "thumbnails"), null, new WorkspaceRepository(_db), new DefaultTrustPolicy(), classifier);
@@ -104,6 +107,48 @@ public sealed partial class MainWindow : Window
         _memory = new BrowserMemory(_db);
         _indexer = new MemoryIndexer(_kernel, _leases, _memory);
         _indexer.Decided += (_, why) => DispatcherQueue.TryEnqueue(() => StatusText.Text = "memory: " + why);
+
+        // Dev/bench: JEVBROWSE_AI=1 starts with AI + Cloud on (the UI switches remain the user's control).
+        if (Environment.GetEnvironmentVariable("JEVBROWSE_AI") == "1") { _brainPolicy.AiEnabled = true; _brainPolicy.CloudEnabled = true; }
+
+        // Shield semantic clutter pass (§9): residual empty boxes → one batched Jev noul each → collapse at ≥ 0.8.
+        _shield.SemanticPass = async (core, id) =>
+        {
+            if (_brain is null || !_brain.HasDecisionProvider || !_brainPolicy.AiEnabled || !_brainPolicy.CloudEnabled) return;
+            var tab = _kernel.Tabs.FirstOrDefault(t => t.Id == id);
+            if (tab is null || _kernel.ClassOf(tab) != DataClass.Public) return;
+            var cands = await _shield.ResidualCandidatesAsync(core);
+            if (cands.Count == 0) return;
+            var state = $"Host: {tab.Url.Host}\nPath: {tab.Url.AbsolutePath}\nTitle: {tab.Title}\nAds blocked on this page: {(_shield.Stats.TryGetValue(id, out var s0) ? s0.Blocked : 0)}\n" +
+                        string.Join("\n", cands.Select((c, i) => $"Element {i + 1}: {c.Describe()}"));
+            var a = await _brain.JudgeAsync("clutter", state, Judgements.ClutterQuestions(cands.Select(c => c.Describe()).ToList()), DataClass.Public, _kernel.ContainerOf(tab), default);
+            if (a is null) return;
+            var keys = cands.Where((c, i) => a.Nouls.TryGetValue($"e{i}", out var p) && p >= 0.8).Select(c => c.K).ToList();
+            var n = await _shield.CollapseCandidatesAsync(core, id, keys);
+            if (_shield.Stats.TryGetValue(id, out var st)) st.LastSemantic = string.Join(" ", cands.Select((c, i) => $"e{i}:{(a.Nouls.TryGetValue($"e{i}", out var p) ? p.ToString("0.00") : "?")}"));
+            if (n > 0) DispatcherQueue.TryEnqueue(() => StatusText.Text = $"Jev collapsed {n} residual ad slot(s) on {tab.Url.Host}");
+        };
+
+        // JevBrain layer 4: after a page loads, ask Jev a typed classification question (structure only, no content)
+        // and let it RAISE the data class. Runs only with AI + Cloud on; every answer is in the decision log.
+        _kernel.Changed += async e =>
+        {
+            if (e.Kind != "restored" || _brain is null || !_brain.HasDecisionProvider || !_brainPolicy.AiEnabled || !_brainPolicy.CloudEnabled) return;
+            var tab = _kernel.Tabs.FirstOrDefault(t => t.Id == e.Id);
+            if (tab is null || !_leases.TryGet(tab.Id, out var lease)) return;
+            var cls = _kernel.ClassOf(tab);
+            if (cls != DataClass.Public) return; // deterministic layer already decided something stricter
+            try
+            {
+                var map = await lease.GetPageMapAsync(default);
+                if (map is null) return;
+                var state = Judgements.PageState(tab.Url, map.Title, map.Headings, _kernel.SignalsOf(tab), map.Links.Count, map.Fields.Count);
+                var a = await _brain.JudgeAsync("classify", state, Judgements.PageQuestions(), cls, _kernel.ContainerOf(tab), default);
+                if (a is not null && a.Choices.TryGetValue(Judgements.DataClassQ, out var ans) && Judgements.RaiseFrom(cls, ans) is { } raised && _kernel.RaiseClass(tab.Id, raised))
+                    DispatcherQueue.TryEnqueue(() => { StatusText.Text = $"Jev raised {tab.Url.Host} to {raised} (confidence {ans.Confidence:0.00})"; UpdateClassBadge(); });
+            }
+            catch (Exception) { /* advisory only */ }
+        };
 
         foreach (var m in Enum.GetValues<MemoryMode>()) ModeBox.Items.Add(m.ToString());
         ModeBox.SelectedIndex = (int)MemoryMode.Balanced;
@@ -586,7 +631,7 @@ public sealed partial class MainWindow : Window
     {
         var ai = new ToggleSwitch { Header = "AI enabled", IsOn = _brainPolicy.AiEnabled };
         var cloud = new ToggleSwitch { Header = "Cloud providers allowed", IsOn = _brainPolicy.CloudEnabled };
-        var providers = new TextBlock { TextWrapping = TextWrapping.Wrap, Text = "Providers: " + string.Join(", ", _providers.Select(p => $"{p.Kind} {(p.IsConfigured ? "✓ " + p.Model : "(not configured)")}")) };
+        var providers = new TextBlock { TextWrapping = TextWrapping.Wrap, Text = "Providers: " + string.Join(", ", _providers.Select(p => $"{p.Kind} {(p.IsConfigured ? "✓ " + p.Model : "(not configured)")}")) + $", Jev decisions {(_jev?.IsConfigured == true ? "✓ " + _jev.Model : "(not configured)")}" };
         var byClass = _decisions!.CloudCallsByClass();
         var metric = new TextBlock { Text = "Cloud calls by data class: " + (byClass.Count == 0 ? "none" : string.Join(", ", byClass.Select(kv => $"{kv.Key}={kv.Value}"))), Opacity = 0.8 };
         var log = new TextBlock { FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), FontSize = 11, TextWrapping = TextWrapping.Wrap,
@@ -607,10 +652,13 @@ public sealed partial class MainWindow : Window
     private void CompileFilters()
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        _engine = FilterEngine.Compile(_filters!.ReadActiveLines());
+        var lines = _filters!.ReadActiveLines().ToList();
+        _engine = FilterEngine.Compile(lines);
+        var cosmetic = CosmeticEngine.Compile(lines);
         _filterCompileMs = sw.ElapsedMilliseconds;
         _shield!.SetEngine(_engine);
-        StatusText.Text = $"Shield: {_engine.RuleCount:N0} rules compiled in {_filterCompileMs} ms ({_engine.SkippedLines:N0} unsupported lines skipped)";
+        _shield.SetCosmetic(cosmetic);
+        StatusText.Text = $"Shield: {_engine.RuleCount:N0} network + {cosmetic.GenericCount + cosmetic.DomainRuleCount:N0} cosmetic rules in {_filterCompileMs} ms ({_engine.SkippedLines:N0} unsupported network lines, {cosmetic.Skipped:N0} procedural cosmetic skipped)";
     }
 
     private async Task UpdateFilterListsAsync()
@@ -632,8 +680,8 @@ public sealed partial class MainWindow : Window
         var lines = new List<string>
         {
             $"{site}: Shield {(enabled ? "ON" : "OFF")}",
-            st is null ? "no requests seen yet" : $"{st.Blocked} blocked of {st.Total} requests on this page",
-            $"{_shield.RuleCount:N0} rules active",
+            st is null ? "no requests seen yet" : $"{st.Blocked} blocked of {st.Total} requests on this page; {st.CosmeticSelectors:N0} element-hiding selectors applied",
+            $"{_shield.RuleCount:N0} network rules, {_shield.CosmeticGeneric + _shield.CosmeticDomain:N0} cosmetic rules active",
             "",
         };
         if (st is not null) lines.AddRange(st.Recent.Reverse().Take(15).Select(x => $"✕ {x.Host}\n    {x.Rule}"));
@@ -659,7 +707,10 @@ public sealed partial class MainWindow : Window
     /// <summary>Phase 4 gate: load ad-heavy pages with the real engine and report blocked/total per page.</summary>
     private async Task RunShieldCheckAsync()
     {
-        string[] urls = ["https://www.theverge.com", "https://www.cnn.com", "https://www.forbes.com", "https://en.wikipedia.org/wiki/Advertising"];
+        var extra = Environment.GetEnvironmentVariable("JEVBROWSE_SHIELD_URLS");
+        string[] urls = extra is { Length: > 0 }
+            ? extra.Split(';', StringSplitOptions.RemoveEmptyEntries)
+            : ["https://www.theverge.com", "https://www.cnn.com", "https://www.forbes.com", "https://en.wikipedia.org/wiki/Advertising"];
         var k = _kernel!;
         foreach (var t in k.Tabs.ToList()) await k.CloseAsync(t.Id);
         var rows = new List<object>();
@@ -667,9 +718,25 @@ public sealed partial class MainWindow : Window
         {
             var t = k.Open(new Uri(u));
             await k.ActivateAsync(t.Id);
-            await Task.Delay(15000);
+            await Task.Delay(_brainPolicy.AiEnabled ? 28000 : 20000); // semantic pass needs the extra round trip
             _shield!.Stats.TryGetValue(t.Id, out var st);
-            rows.Add(new { url = u, total = st?.Total ?? 0, blocked = st?.Blocked ?? 0, sample = st?.Recent.Take(5).Select(x => x.Host + " ← " + x.Rule).ToList() });
+            // Visible ad-slot probe: count common ad containers still present and non-empty in the DOM (cosmetic gap).
+            string adProbe = "0";
+            WithActiveLease(l => { });
+            if (_leases!.TryGet(t.Id, out var lease))
+            {
+                try
+                {
+                    adProbe = await ((WebView2Lease)lease).View.CoreWebView2.ExecuteScriptAsync("""
+                        (() => { const sel = 'ins.adsbygoogle, [id^="google_ads"], [id*="div-gpt-ad"], [class*="ad-slot"], [class*="adsense"], [class*="advertisement"], iframe[src*="doubleclick"], iframe[src*="googlesyndication"], ytd-ad-slot-renderer, .ytp-ad-module, [class*="ad-banner"], [id*="taboola"], [id*="outbrain"]';
+                          const els = [...document.querySelectorAll(sel)];
+                          const visible = els.filter(e => { const r = e.getBoundingClientRect(); return r.width > 50 && r.height > 50; });
+                          return JSON.stringify({ slots: els.length, visible: visible.length, thirdPartyIframes: [...document.querySelectorAll('iframe')].filter(f => { try { return new URL(f.src).host !== location.host; } catch { return false; } }).length }); })()
+                        """);
+                }
+                catch (Exception) { }
+            }
+            rows.Add(new { url = u, total = st?.Total ?? 0, blocked = st?.Blocked ?? 0, thirdParty = st?.ThirdParty ?? 0, cosmeticSelectors = st?.CosmeticSelectors ?? 0, collapsed = st?.Collapsed ?? 0, collapseResult = st?.LastCollapseResult, semanticCollapsed = st?.SemanticCollapsed ?? 0, semantic = st?.LastSemantic, adProbe = JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Deserialize<string>(adProbe) ?? "0"), sample = st?.Recent.Take(6).Select(x => x.Host + " ← " + x.Rule).ToList() });
             await k.VirtualizeAsync(t.Id, Cause.User);
         }
         // Lookup latency against the real compiled lists, over a realistic mix of URLs seen on these pages.

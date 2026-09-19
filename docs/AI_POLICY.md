@@ -29,4 +29,9 @@ Every decision (including refusals) is appended to `decision_log`: time, task, s
 | Explain error | OpenRouter → Jev → local |
 | Rerank search | Jev → local |
 
-Providers are OpenAI-compatible chat clients; Jev's endpoint shape is pending confirmation and is configured via `JEV_API_BASE`.
+## Jev is a decision model, not a chat model
+Jev (TypeSafe AI System One) answers **typed questions** (choice / score / noul) with calibrated probabilities and no prose. JevBrowse uses it only for judgements, through `BrainRouter.JudgeAsync`, under the same gates as any cloud call:
+- **Page classification** after load: may only *raise* a page's data class (PUBLIC → AUTHENTICATED/SENSITIVE) at confidence ≥ 0.7; never lowers. The state sent is structure only (host, path, title, headings, flags), never content.
+- **Search rerank**: scores each candidate title; falls back to local order on refusal.
+- Every answer is logged as numbers (`data_class=authenticated@0.90`), which makes the log auditable in a way prose never is.
+Chat providers (OpenRouter) remain for explicit synthesis tasks only (Ask, Explain error).

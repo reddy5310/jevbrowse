@@ -1,3 +1,4 @@
+using System.Text.Json;
 using JevBrowse.Domain;
 using JevBrowse.TrustOS;
 
@@ -32,16 +33,50 @@ public sealed class BrainRouter : IBrainRouter
     private readonly ITrustPolicy _trust;
     private readonly BrainPolicy _policy;
     private readonly IReadOnlyList<IAiProvider> _providers;
+    private readonly IDecisionProvider? _decisions;
     private readonly Action<Decision>? _log;
     private readonly Func<DateTimeOffset> _clock;
 
-    public BrainRouter(ITrustPolicy trust, BrainPolicy policy, IReadOnlyList<IAiProvider> providers, Action<Decision>? log = null, Func<DateTimeOffset>? clock = null)
+    public BrainRouter(ITrustPolicy trust, BrainPolicy policy, IReadOnlyList<IAiProvider> providers, Action<Decision>? log = null, Func<DateTimeOffset>? clock = null, IDecisionProvider? decisions = null)
     {
         _trust = trust;
         _policy = policy;
         _providers = providers;
+        _decisions = decisions;
         _log = log;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
+    }
+
+    public bool HasDecisionProvider => _decisions?.IsConfigured == true;
+
+    /// <summary>
+    /// Layer 4: a typed judgement from Jev. Same gates as any cloud call (AI on, Cloud on, class ≤ AUTHENTICATED,
+    /// never SECRET/EPHEMERAL), state is redacted, and the numeric answers are logged. Returns null when refused.
+    /// </summary>
+    public async Task<DecisionAnswers?> JudgeAsync(string task, string state, IReadOnlyDictionary<string, Question> questions, DataClass cls, IdentityContainer container, CancellationToken ct)
+    {
+        var now = _clock();
+        Decision Deny(string rule) { var d = new Decision("", Provider.None, rule, _decisions?.Model, false, 0, state.Length, now); _log?.Invoke(d); return d; }
+        if (!_policy.AiEnabled) { Deny("hard:ai_disabled"); return null; }
+        if (!_policy.CloudEnabled) { Deny("policy:cloud_disabled"); return null; }
+        if (cls is DataClass.Secret or DataClass.Ephemeral || container.IsEphemeral()) { Deny($"hard:class_{cls.ToString().ToLower()}_never_leaves_device"); return null; }
+        if (cls > DataClass.Authenticated) { Deny("policy:cloud_not_permitted_for_class"); return null; }
+        if (_decisions is null || !_decisions.IsConfigured) { Deny("policy:no_decision_provider"); return null; }
+        var red = Redactor.Redact(state);
+        try
+        {
+            var a = await _decisions.DecideAsync(red.Text, questions, ct);
+            var summary = string.Join(" ", a.Choices.Select(kv => $"{kv.Key}={kv.Value.Choice}@{kv.Value.Confidence:0.00}")
+                .Concat(a.Scores.Select(kv => $"{kv.Key}={kv.Value.Score:0.00}@{kv.Value.Confidence:0.00}"))
+                .Concat(a.Nouls.Select(kv => $"{kv.Key}={kv.Value:0.00}")));
+            _log?.Invoke(new Decision(summary, Provider.Jev, $"provider:jev:cloud:{task}", a.Model, red.Count > 0, red.Count, state.Length, now));
+            return a;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException or JsonException)
+        {
+            Deny($"provider_failed:jev:{ex.GetType().Name}");
+            return null;
+        }
     }
 
     public async Task<Decision> DecideAsync(DecisionRequest req, CancellationToken ct)

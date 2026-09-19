@@ -55,10 +55,7 @@ public sealed class OpenAiCompatibleProvider : IAiProvider
         var orModel = Environment.GetEnvironmentVariable("OPENROUTER_MODEL") ?? "openai/gpt-4o-mini";
         list.Add(new OpenAiCompatibleProvider(Provider.OpenRouter, new Uri("https://openrouter.ai/api/v1/"), orKey, orModel, referer: "https://github.com/reddy5310/jevbrowse"));
 
-        var jevKey = Environment.GetEnvironmentVariable("JEV_API_KEY");
-        var jevBase = Environment.GetEnvironmentVariable("JEV_API_BASE");
-        var jevModel = Environment.GetEnvironmentVariable("JEV_MODEL") ?? "jev";
-        list.Add(new OpenAiCompatibleProvider(Provider.Jev, Uri.TryCreate(jevBase, UriKind.Absolute, out var jb) ? jb : null, jevKey, jevModel));
+        // Jev is not a chat model; it is wired as an IDecisionProvider (JevDecisionProvider.FromEnvironment).
         return list;
     }
 }

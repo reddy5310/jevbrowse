@@ -110,6 +110,17 @@ public sealed class BrowserMemory
     {
         var local = Search(query, 10, workspace);
         if (local.Count < 3) return local;
+
+        // Preferred path: typed scores from Jev (numbers, auditable). Falls back to the chat-style rerank, then local order.
+        if (brain is BrainRouter router && router.HasDecisionProvider)
+        {
+            var state = $"Query: {query}\n" + string.Join("\n", local.Select((h, i) => $"{i + 1}. {h.Title} — {h.Snippet}"));
+            var answers = await router.JudgeAsync("rerank", state, Judgements.RerankQuestions(local.Select(h => h.Title).ToList()), DataClass.Public, IdentityContainer.Personal, ct);
+            if (answers is not null && answers.Scores.Count > 0)
+                return local.Select((h, i) => (h, s: answers.Scores.TryGetValue($"c{i}", out var sc) ? sc.Score * sc.Confidence + h.Score * 0.1 : h.Score * 0.1))
+                            .OrderByDescending(x => x.s).Select(x => x.h).ToList();
+        }
+
         var prompt = $"Query: {query}\n" + string.Join("\n", local.Select((h, i) => $"{i + 1}. {h.Title} — {h.Snippet}"));
         var d = await brain.DecideAsync(new DecisionRequest(BrainTask.RerankSearch, prompt, DataClass.Public, IdentityContainer.Personal, ExplicitUserAction: true), ct);
         if (d.WasDenied) return local;

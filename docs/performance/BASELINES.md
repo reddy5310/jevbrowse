@@ -47,6 +47,17 @@ Marginal cost per live page ≈ 150–240 MB; fixed browser/GPU/utility overhead
 
 Known optimisation headroom: token enumeration is O(L²) per URL run; a suffix/prefix trie would cut p95 further if needed.
 
+### Visible-clutter test (ADR 0014, 2026-09-20; network + cosmetic + collapse, AI off)
+
+| Page | blocked / requests | third-party | cosmetic selectors | collapsed | visible result |
+|---|---|---|---|---|---|
+| youtube.com/watch | 7–13 / 59–205 | 135 | 13,640 | — | video plays; no ad in captured frame; **video ads not claimed** |
+| cricbuzz.com | 10 / 70 | 11 | 13,629 | 0 | 3 ad slots collapsed by lists; one empty carousel card remains (semantic layer) |
+| goodreturns.in | 53 / 163 | 56 | 13,634 | 6 | clean: blank band + "ADVERTISEMENT" box removed |
+| goodreturns.in/gold-rates | 59 / 140 | 110 | 13,634 | 11 | clean |
+
+Compile: 110,839 network + ~19 k cosmetic rules in ~260 ms (Debug).
+
 ## Gates for future PRs
 
 A PR that moves restore p95 or the 5-live private figure by more than 10% needs an ADR (Architecture §22).

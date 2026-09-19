@@ -124,7 +124,8 @@ public sealed class WebView2Lease : IRendererLease
         })();
         """;
 
-    private static readonly TimeSpan CaptureTimeout = TimeSpan.FromSeconds(3);
+    // Heavy pages (large stylesheets, video) can take >3 s to rasterize; 8 s bounds virtualize without losing thumbnails.
+    private static readonly TimeSpan CaptureTimeout = TimeSpan.FromSeconds(8);
 
     private readonly string _thumbnailDir;
     private ProtectionFlags _detected;

@@ -50,7 +50,24 @@ public sealed class TabKernel
     public IdentityContainer ContainerOf(VirtualTab t) =>
         _workspaceList.FirstOrDefault(w => w.Id == t.WorkspaceId)?.Container ?? IdentityContainer.Personal;
 
-    public DataClass ClassOf(VirtualTab t) => _classifier.Classify(t.Url, ContainerOf(t), _signals.GetValueOrDefault(t.Id));
+    private readonly Dictionary<ResourceId, DataClass> _advisory = [];
+
+    /// <summary>Effective class: deterministic classification, raised (never lowered) by an advisory from JevBrain layer 4.</summary>
+    public DataClass ClassOf(VirtualTab t)
+    {
+        var c = _classifier.Classify(t.Url, ContainerOf(t), _signals.GetValueOrDefault(t.Id));
+        return _advisory.TryGetValue(t.Id, out var adv) && adv > c && c != DataClass.Ephemeral ? adv : c;
+    }
+
+    /// <summary>Advisory raise from a probabilistic source. Ignored if it would lower the class (Constitution rule 9).</summary>
+    public bool RaiseClass(ResourceId id, DataClass advisory)
+    {
+        var t = Find(id);
+        if (advisory <= ClassOf(t)) return false;
+        _advisory[id] = advisory;
+        Changed?.Invoke(new("signals", id, $"advisory:{advisory}"));
+        return true;
+    }
 
     /// <summary>
     /// Sensitivity of the page content itself, ignoring the container. An ephemeral container changes what we
@@ -234,7 +251,7 @@ public sealed class TabKernel
             var sw = Stopwatch.StartNew();
             _restoreTimers[id] = sw;
             lease = await _leases.AcquireAsync(id, checkpoint?.Url ?? tab.Url, RenderIntent.Foreground, ContainerOf(tab), ct);
-            lease.NavigationChanged += n => { tab.UpdateNavigation(n.Url, n.Title); Persist(tab); Changed?.Invoke(new("navigated", tab.Id, n.Title)); };
+            lease.NavigationChanged += n => { if (n.Url != tab.Url) _advisory.Remove(tab.Id); tab.UpdateNavigation(n.Url, n.Title); Persist(tab); Changed?.Invoke(new("navigated", tab.Id, n.Title)); };
             lease.DetectedProtectionChanged += f => { tab.SetDetected(f); Changed?.Invoke(new("protection", tab.Id, f.ToString())); };
             lease.PageSignalsChanged += s => { _signals[tab.Id] = s; Changed?.Invoke(new("signals", tab.Id, ClassOf(tab).ToString())); };
             lease.Loaded += () =>
