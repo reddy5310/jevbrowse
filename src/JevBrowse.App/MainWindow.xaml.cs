@@ -34,6 +34,14 @@ public sealed partial class MainWindow : Window
         Directory.CreateDirectory(udf);
         _env = await CoreWebView2Environment.CreateWithOptionsAsync(null, udf, new CoreWebView2EnvironmentOptions());
         await AttachNewViewAsync("https://example.com");
+
+        // Headless-ish benchmark mode used by scripts/CI: run the lab, write the report, exit.
+        if (Environment.GetCommandLineArgs().Contains("--memory-lab"))
+        {
+            try { await RunMemoryLabAsync(); }
+            catch (Exception ex) { await File.WriteAllTextAsync(Path.Combine(DataDir, "benchmarks", "memory-lab-error.txt"), ex.ToString()); }
+            Application.Current.Exit();
+        }
     }
 
     private async Task<WebView2> AttachNewViewAsync(string url)
@@ -105,6 +113,7 @@ public sealed partial class MainWindow : Window
 
         if (_view is not null) { DisposeView(_view); _view = null; }
         await Task.Delay(2000);
+        Directory.CreateDirectory(Path.Combine(DataDir, "benchmarks"));
         var report = new List<object>();
         void Record(string step) { var m = ProcessGroupProbe.Sample(_env!.GetProcessInfos().Select(p => p.ProcessId)); report.Add(new { step, m.ProcessCount, m.WorkingSetMb, m.PrivateMb }); Status($"{step}: procs={m.ProcessCount} ws={m.WorkingSetMb:F0}MB priv={m.PrivateMb:F0}MB"); }
 
@@ -125,8 +134,13 @@ public sealed partial class MainWindow : Window
         await Task.Delay(3000);
         Record("5 live, settled");
 
-        foreach (var v in views.Skip(1)) { if (v.CoreWebView2 is not null) await v.CoreWebView2.TrySuspendAsync(); }
+        // WebView2 requires the view to be hidden before it can be suspended.
+        foreach (var v in views.Skip(1)) v.Visibility = Visibility.Collapsed;
+        await Task.Delay(500);
+        int suspended = 0;
+        foreach (var v in views.Skip(1)) { if (v.CoreWebView2 is not null && await v.CoreWebView2.TrySuspendAsync()) suspended++; }
         await Task.Delay(3000);
+        report.Add(new { step = "suspend result", suspended });
         Record("4 suspended, 1 live");
 
         foreach (var v in views.Skip(1)) DisposeView(v);
