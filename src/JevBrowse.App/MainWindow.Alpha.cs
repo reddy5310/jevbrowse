@@ -1,0 +1,212 @@
+using System.Text.Json;
+using JevBrowse.AgentGateway;
+using JevBrowse.Diagnostics;
+using JevBrowse.Domain;
+using JevBrowse.ResourceOS;
+using JevBrowse.Shield;
+using JevBrowse.Storage;
+using JevBrowse.TrustOS;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
+
+namespace JevBrowse.App;
+
+/// <summary>Phase 11 surfaces: product modes (Table A.13), command palette (§26), session receipts (§15).</summary>
+public sealed partial class MainWindow
+{
+    // ---- Product modes ----
+
+    public enum ProductMode { Simple, Focus, Power, Developer, Agent, Private }
+
+    private ProductMode _mode = ProductMode.Power;
+
+    private void ApplyProductMode(ProductMode mode)
+    {
+        _mode = mode;
+        bool power = mode is ProductMode.Power or ProductMode.Developer or ProductMode.Agent;
+        bool ai = mode is ProductMode.Focus or ProductMode.Power or ProductMode.Developer or ProductMode.Agent;
+        void Show(UIElement e, bool on) => e.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        Show(AskButton, ai);
+        Show(BrainButton, ai);
+        Show(MemoryButton, mode != ProductMode.Simple && mode != ProductMode.Private);
+        Show(ExplainButton, power);
+        Show(MoveButton, power);
+        Show(TimelineButton, power);
+        Show(ModeBox, power);
+        Show(DevButton, mode == ProductMode.Developer);
+        Show(AgentsButton, mode == ProductMode.Agent);
+        Show(ReceiptButton, mode != ProductMode.Simple);
+        if (mode == ProductMode.Developer) _dev?.SetEnabled(true);
+        if (mode == ProductMode.Private) _ = EnsurePrivateWorkspaceAsync();
+        UpdateEnvChrome();
+    }
+
+    private async Task EnsurePrivateWorkspaceAsync()
+    {
+        if (_kernel is null) return;
+        var ws = _kernel.Workspaces.FirstOrDefault(w => w.Container == IdentityContainer.Private);
+        if (ws is null) { ws = _kernel.CreateWorkspace("Private"); ws.Container = IdentityContainer.Private; }
+        await _kernel.SwitchWorkspaceAsync(ws.Id);
+        RebuildWorkspaces();
+        VirtualPlaceholder.Visibility = _kernel.Active is null ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnProductModeChanged(object s, SelectionChangedEventArgs e)
+    {
+        if (ProductModeBox.SelectedIndex < 0 || _kernel is null) return;
+        ApplyProductMode((ProductMode)ProductModeBox.SelectedIndex);
+        StatusText.Text = $"mode: {_mode}";
+    }
+
+    // ---- Command palette (§26) ----
+
+    private sealed record Command(string Text, Func<Task> Run);
+
+    private void OnPaletteAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { e.Handled = true; OnPalette(s, new RoutedEventArgs()); }
+
+    private async void OnPalette(object s, RoutedEventArgs e)
+    {
+        if (_kernel is null) return;
+        var commands = BuildCommands();
+        var box = new TextBox { PlaceholderText = "Type a command, or text to search browser memory…" };
+        var list = new ListView { SelectionMode = ListViewSelectionMode.Single, MaxHeight = 360 };
+        List<Command> shown = [];
+        void Filter()
+        {
+            var words = box.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            shown = commands.Where(c => words.All(w => c.Text.Contains(w, StringComparison.OrdinalIgnoreCase))).Take(30).ToList();
+            if (box.Text.Trim().Length > 1) shown.Add(new Command($"Search browser memory for \"{box.Text.Trim()}\"", () => ShowMemoryAsync(box.Text.Trim())));
+            list.Items.Clear();
+            foreach (var c in shown) list.Items.Add(c.Text);
+            if (list.Items.Count > 0) list.SelectedIndex = 0;
+        }
+        box.TextChanged += (_, _) => Filter();
+        Filter();
+        var dlg = new ContentDialog { Title = "Command palette", Content = new StackPanel { Spacing = 8, Children = { box, list } }, PrimaryButtonText = "Run", CloseButtonText = "Close", XamlRoot = Content.XamlRoot, DefaultButton = ContentDialogButton.Primary };
+        box.Loaded += (_, _) => box.Focus(FocusState.Programmatic);
+        box.KeyDown += (_, k) => { if (k.Key == Windows.System.VirtualKey.Down && list.SelectedIndex < list.Items.Count - 1) { list.SelectedIndex++; k.Handled = true; } else if (k.Key == Windows.System.VirtualKey.Up && list.SelectedIndex > 0) { list.SelectedIndex--; k.Handled = true; } };
+        if (await dlg.ShowAsync() != ContentDialogResult.Primary || list.SelectedIndex < 0 || list.SelectedIndex >= shown.Count) return;
+        try { await shown[list.SelectedIndex].Run(); }
+        catch (Exception ex) { StatusText.Text = "command failed: " + ex.Message; }
+    }
+
+    private List<Command> BuildCommands()
+    {
+        var k = _kernel!;
+        var cmds = new List<Command>
+        {
+            new("Hibernate everything except current", () => { OnHibernateAll(this, new RoutedEventArgs()); return Task.CompletedTask; }),
+            new("Hibernate this tab", () => { OnHibernateCurrent(this, new RoutedEventArgs()); return Task.CompletedTask; }),
+            new("Show resources using the most memory", ShowMemoryUsageAsync),
+            new("Restore an earlier context (Time Travel)", () => { OnTimeline(this, new RoutedEventArgs()); return Task.CompletedTask; }),
+            new("Explain why this resource was virtualized / scheduled", () => { OnExplain(this, new RoutedEventArgs()); return Task.CompletedTask; }),
+            new("Pin: never hibernate this tab", () => { OnPinCurrent(this, new RoutedEventArgs()); return Task.CompletedTask; }),
+            new("Block notifications on this domain", BlockNotificationsAsync),
+            new("Open this page in a disposable identity", OpenInDisposableAsync),
+            new("Show every third party contacted by this page", ShowThirdPartiesAsync),
+            new("Session receipt for this site", () => { OnReceipt(this, new RoutedEventArgs()); return Task.CompletedTask; }),
+            new("Shield: toggle for this site", () => { OnShield(this, new RoutedEventArgs()); return Task.CompletedTask; }),
+            new("Data class for this site…", () => { OnClassBadgeTapped(this, new TappedRoutedEventArgs()); return Task.CompletedTask; }),
+            new("Grant Claude Code localhost + GitHub for 30 minutes", () => GrantAgentAsync(30)),
+            new("New workspace…", () => { OnNewWorkspace(this, new RoutedEventArgs()); return Task.CompletedTask; }),
+            new("Update Shield filter lists", UpdateFilterListsAsync),
+        };
+        foreach (var w in k.Workspaces)
+        {
+            var id = w.Id;
+            cmds.Add(new($"Switch workspace: {w.Name}", async () => { await k.SwitchWorkspaceAsync(id); RebuildWorkspaces(); }));
+            if (k.Active is { } a && a.WorkspaceId != w.Id) cmds.Add(new($"Move this tab to: {w.Name}", () => { k.MoveToWorkspace(a.Id, id); RebuildWorkspaces(); return Task.CompletedTask; }));
+        }
+        foreach (var m in Enum.GetValues<MemoryMode>()) cmds.Add(new($"Memory mode: {m}", () => { ModeBox.SelectedIndex = (int)m; return Task.CompletedTask; }));
+        foreach (var m in Enum.GetValues<ProductMode>()) cmds.Add(new($"Product mode: {m}", () => { ProductModeBox.SelectedIndex = (int)m; return Task.CompletedTask; }));
+        return cmds;
+    }
+
+    private async Task ShowMemoryUsageAsync()
+    {
+        var k = _kernel!;
+        var sample = ProcessGroupProbe.Sample(_leases!.ProcessIds);
+        var live = k.Tabs.Where(t => t.State.HasLiveRenderer()).ToList();
+        var lines = new List<string> { $"Process group: {sample.ProcessCount} processes, {sample.PrivateMb:F0} MB private (measured)", $"{live.Count} live renderers of {k.Tabs.Count} tabs", "", "Live tabs (per-tab attribution is an estimate: equal share of the measured total):" };
+        var share = live.Count == 0 ? 0 : sample.PrivateMb / live.Count;
+        foreach (var t in live.OrderBy(t => t.State)) lines.Add($"  ~{share:F0} MB  {t.State,-9} {(string.IsNullOrEmpty(t.Title) ? t.Url.Host : t.Title)}");
+        var dlg = new ContentDialog { Title = "Memory", Content = new ScrollViewer { MaxHeight = 420, Content = new TextBlock { Text = string.Join("\n", lines), FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap } }, CloseButtonText = "Close", XamlRoot = Content.XamlRoot };
+        await dlg.ShowAsync();
+    }
+
+    private Task BlockNotificationsAsync()
+    {
+        if (_kernel?.Active is not { } t) return Task.CompletedTask;
+        var site = NetworkRequest.SiteOf(t.Url.Host);
+        new SitePermissionsRepository(_db!).Set(site, (int)PermissionKind.Notifications, false, null, DateTimeOffset.UtcNow);
+        StatusText.Text = $"notifications blocked for {site}";
+        return Task.CompletedTask;
+    }
+
+    private async Task OpenInDisposableAsync()
+    {
+        if (_kernel?.Active is not { } t) return;
+        var ws = _kernel.Workspaces.FirstOrDefault(w => w.Container == IdentityContainer.Disposable);
+        if (ws is null) { ws = _kernel.CreateWorkspace("Disposable"); ws.Container = IdentityContainer.Disposable; new WorkspaceRepository(_db!).Upsert(ws); }
+        await _kernel.SwitchWorkspaceAsync(ws.Id);
+        var nt = _kernel.Open(t.Url);
+        await _kernel.ActivateAsync(nt.Id);
+        RebuildWorkspaces();
+    }
+
+    private async Task ShowThirdPartiesAsync()
+    {
+        if (_kernel?.Active is not { } t || _shield is null) return;
+        _shield.Stats.TryGetValue(t.Id, out var st);
+        var hosts = st?.ThirdPartyHosts.OrderByDescending(kv => kv.Value).Select(kv => $"{kv.Value,4}  {kv.Key}").ToList() ?? [];
+        var text = hosts.Count == 0 ? "No third-party requests seen on this page yet." : $"{hosts.Count} third-party hosts ({st!.ThirdParty} requests, {st.Blocked} blocked):\n\n" + string.Join("\n", hosts);
+        await new ContentDialog { Title = $"Third parties: {t.Url.Host}", Content = new ScrollViewer { MaxHeight = 420, Content = new TextBlock { Text = text, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap } }, CloseButtonText = "Close", XamlRoot = Content.XamlRoot }.ShowAsync();
+    }
+
+    /// <summary>§26 last example. Opens a scoped session from docs/agents/claude-code.json (or the default) and shows the endpoint.</summary>
+    private async Task GrantAgentAsync(int minutes)
+    {
+        if (_agents is null) return;
+        AgentManifest manifest;
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "docs", "agents", "claude-code.json");
+        try { manifest = File.Exists(path) ? JsonSerializer.Deserialize<AgentManifest>(File.ReadAllText(path), new JsonSerializerOptions { PropertyNameCaseInsensitive = true, Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } })! : new AgentManifest(); }
+        catch (Exception) { manifest = new AgentManifest(); }
+        manifest.Agent = "Claude Code";
+        manifest.AllowDomains = ["localhost", "127.0.0.1", "github.com"];
+        manifest.SessionMinutes = minutes;
+        if (_agentHost is null || !_agentHost.IsRunning) { _agentHost = new LocalAgentHost(_agents); _agentHost.Start(); }
+        var s = await _agents.OpenAsync(manifest, default);
+        var text = $"Session {s.Id} for {manifest.Agent}: {string.Join(", ", manifest.AllowDomains)} until {s.ExpiresAt.ToLocalTime():HH:mm}.\n\n" +
+                   $"Base URL: http://127.0.0.1:{_agentHost.Port}/\nToken:    {_agentHost.Token}\n\n" +
+                   $"Example:\ncurl -H \"Authorization: Bearer {_agentHost.Token}\" -X POST http://127.0.0.1:{_agentHost.Port}/sessions/{s.Id}/actions -d '{{\"action\":\"Navigate\",\"url\":\"https://github.com/reddy5310/jevbrowse\"}}'";
+        await new ContentDialog { Title = "Agent grant", Content = new TextBlock { Text = text, IsTextSelectionEnabled = true, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap }, CloseButtonText = "Close", XamlRoot = Content.XamlRoot }.ShowAsync();
+    }
+
+    // ---- Session receipt (§15) ----
+
+    private async void OnReceipt(object s, RoutedEventArgs e)
+    {
+        if (_kernel?.Active is not { } t || _shield is null) return;
+        _shield.Stats.TryGetValue(t.Id, out var st);
+        var sample = ProcessGroupProbe.Sample(_leases!.ProcessIds);
+        var live = _kernel.Tabs.Count(x => x.State.HasLiveRenderer());
+        var duration = st is null ? TimeSpan.Zero : DateTimeOffset.UtcNow - st.StartedAt;
+        var lines = new[]
+        {
+            $"SESSION RECEIPT — {t.Url.Host}",
+            $"Duration                 {duration:h\\:mm\\:ss}                (measured since renderer attached)",
+            $"Requests                 {st?.Total ?? 0,-6}                 (measured)",
+            $"Third-party requests     {st?.ThirdParty ?? 0,-6}                 (measured, {st?.ThirdPartyHosts.Count ?? 0} hosts)",
+            $"Blocked requests         {st?.Blocked ?? 0,-6}                 (measured)",
+            $"Transferred              not measured in V1",
+            $"Attributed memory        ~{(live == 0 ? 0 : sample.PrivateMb / live):F0} MB              (ESTIMATE: equal share of {sample.PrivateMb:F0} MB across {live} live renderers)",
+            $"Data class               {_kernel.ClassOf(t)}",
+            $"Container                {_kernel.ContainerOf(t)}",
+            $"Protection               {t.Protection}",
+            "",
+            "Measured values come from the OS or the request pipeline. Estimates are labelled.",
+        };
+        await new ContentDialog { Title = "Receipt", Content = new TextBlock { Text = string.Join("\n", lines), FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true }, CloseButtonText = "Close", XamlRoot = Content.XamlRoot }.ShowAsync();
+    }
+}

@@ -47,7 +47,7 @@ Each phase maps to a milestone in the architecture doc (Table A.14).
 | 8 Browser Memory | DONE 2026-09-20 | ADR 0010; FTS5 index gated by Trust OS, 200 MB budget, optional rerank |
 | 9 DevSpace | DONE 2026-09-20 | ADR 0011; optional module, explicit environments, error/network intelligence |
 | 10 Agent Gateway | DONE 2026-09-20 | ADR 0012; 12 gateway tests incl. HTTP host; AGENT_SECURITY.md |
-| 11 Alpha | next | |
+| 11 Alpha | DONE 2026-09-20 (license + visibility decisions pending user) | ADR 0013; CI with invariant gates; release.ps1; palette; receipts; product modes |
 
 ### Phase 0 — Foundations (M0 Feasibility)
 - Repo skeleton per §17, `Directory.Build.props`, solution, CI skeleton, docs (Constitution, ADR 0001–0005, cost-card template).

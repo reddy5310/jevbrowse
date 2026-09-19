@@ -4,6 +4,9 @@
         xmlns:local="using:JevBrowse.App"
         Title="JevBrowse">
     <Grid>
+        <Grid.KeyboardAccelerators>
+            <KeyboardAccelerator Key="K" Modifiers="Control" Invoked="OnPaletteAccelerator"/>
+        </Grid.KeyboardAccelerators>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="260"/>
             <ColumnDefinition Width="*"/>
@@ -20,8 +23,10 @@
                 <StackPanel Orientation="Horizontal" Spacing="4">
                     <Button Content="+ New" Click="OnNewTab"/>
                     <Button Content="Hibernate all" Click="OnHibernateAll" ToolTipService.ToolTip="Virtualize everything except current"/>
+                    <Button Content="&#xE71C;" FontFamily="Segoe MDL2 Assets" Click="OnPalette" ToolTipService.ToolTip="Command palette (Ctrl+K)"/>
                     <Button Content="Lab" Click="OnMemoryLab"/>
                 </StackPanel>
+                <ComboBox x:Name="ProductModeBox" HorizontalAlignment="Stretch" SelectionChanged="OnProductModeChanged" ToolTipService.ToolTip="Product mode: which features are shown"/>
                 <ComboBox x:Name="ModeBox" HorizontalAlignment="Stretch" SelectionChanged="OnModeChanged" ToolTipService.ToolTip="Memory budget mode (Resource OS)"/>
                 <Grid ColumnSpacing="4">
                     <Grid.ColumnDefinitions>
@@ -31,7 +36,7 @@
                     </Grid.ColumnDefinitions>
                     <ComboBox x:Name="WorkspaceBox" HorizontalAlignment="Stretch" SelectionChanged="OnWorkspaceChanged" ToolTipService.ToolTip="Workspace (Context OS)"/>
                     <Button Grid.Column="1" Content="+" Click="OnNewWorkspace" ToolTipService.ToolTip="New workspace"/>
-                    <Button Grid.Column="2" Content="&#xE81C;" FontFamily="Segoe MDL2 Assets" Click="OnTimeline" ToolTipService.ToolTip="Time Travel: restore an earlier context"/>
+                    <Button x:Name="TimelineButton" Grid.Column="2" Content="&#xE81C;" FontFamily="Segoe MDL2 Assets" Click="OnTimeline" ToolTipService.ToolTip="Time Travel: restore an earlier context"/>
                 </Grid>
             </StackPanel>
             <ListView x:Name="TabList" Grid.Row="1" SelectionMode="Single" SelectionChanged="OnTabSelected" ItemsSource="{x:Bind Items}">
@@ -83,19 +88,20 @@
                 </Grid>
                 <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4">
                     <Button Content="Hibernate" Click="OnHibernateCurrent" ToolTipService.ToolTip="Dispose this renderer; keep the tab"/>
-                    <Button Content="Pin" Click="OnPinCurrent" ToolTipService.ToolTip="Never auto-hibernate this tab"/>
+                    <Button x:Name="PinButton" Content="Pin" Click="OnPinCurrent" ToolTipService.ToolTip="Never auto-hibernate this tab"/>
                     <Button x:Name="MoveButton" Content="Move to…" ToolTipService.ToolTip="Move this tab to another workspace">
                         <Button.Flyout>
                             <MenuFlyout x:Name="MoveMenu" Opening="OnMoveMenuOpening"/>
                         </Button.Flyout>
                     </Button>
-                    <Button Content="Explain" Click="OnExplain" ToolTipService.ToolTip="Why did the scheduler last touch this tab?"/>
+                    <Button x:Name="ExplainButton" Content="Explain" Click="OnExplain" ToolTipService.ToolTip="Why did the scheduler last touch this tab?"/>
                     <Button x:Name="ShieldButton" Content="Shield" Click="OnShield" ToolTipService.ToolTip="Blocked requests on this page; disable per site"/>
-                    <Button Content="Ask" Click="OnAsk" ToolTipService.ToolTip="Summarize this page (explicit; you confirm before anything is sent)"/>
-                    <Button Content="Brain" Click="OnBrain" ToolTipService.ToolTip="AI switches and the decision log"/>
-                    <Button Content="Memory" Click="OnMemory" ToolTipService.ToolTip="Search everything you've read (local index of public pages)"/>
-                    <Button Content="Dev" Click="OnDev" ToolTipService.ToolTip="DevSpace: environment, localhost, errors, network (optional module)"/>
-                    <Button Content="Agents" Click="OnAgents" ToolTipService.ToolTip="Agent Gateway: scoped sessions, quotas, audit; opt-in local endpoint"/>
+                    <Button x:Name="ReceiptButton" Content="Receipt" Click="OnReceipt" ToolTipService.ToolTip="Session receipt for this site (§15)"/>
+                    <Button x:Name="AskButton" Content="Ask" Click="OnAsk" ToolTipService.ToolTip="Summarize this page (explicit; you confirm before anything is sent)"/>
+                    <Button x:Name="BrainButton" Content="Brain" Click="OnBrain" ToolTipService.ToolTip="AI switches and the decision log"/>
+                    <Button x:Name="MemoryButton" Content="Memory" Click="OnMemory" ToolTipService.ToolTip="Search everything you've read (local index of public pages)"/>
+                    <Button x:Name="DevButton" Content="Dev" Click="OnDev" ToolTipService.ToolTip="DevSpace: environment, localhost, errors, network (optional module)"/>
+                    <Button x:Name="AgentsButton" Content="Agents" Click="OnAgents" ToolTipService.ToolTip="Agent Gateway: scoped sessions, quotas, audit; opt-in local endpoint"/>
                 </StackPanel>
             </Grid>
             <Grid Grid.Row="1">

@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Invariant gates (threat model)
+        shell: pwsh
+        run: |
+          # NATIVE_BRIDGE.md invariant 1: no host objects are ever exposed to pages.
+          $hits = Get-ChildItem src -Recurse -Include *.cs | Select-String -Pattern 'AddHostObjectToScript'
+          if ($hits) { $hits | ForEach-Object { Write-Error "$($_.Path):$($_.LineNumber): $($_.Line.Trim())" }; exit 1 }
+          # AI_POLICY.md: keys never live in the repo.
+          $keys = Get-ChildItem -Recurse -File -Exclude *.md | Where-Object { $_.FullName -notmatch '\\(artifacts|\.git)\\' } | Select-String -Pattern '(sk-or-v1-|OPENROUTER_API_KEY\s*=\s*\S{10,}|JEV_API_KEY\s*=\s*\S{10,})'
+          if ($keys) { $keys | ForEach-Object { Write-Error "possible secret: $($_.Path):$($_.LineNumber)" }; exit 1 }
+          Write-Host "invariant gates passed"
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Unit tests
+        run: dotnet test --no-restore --nologo --logger "trx;LogFileName=results.trx"
+
+      - name: Build shell (x64, unpackaged)
+        run: dotnet build src/JevBrowse.App -c Release -p:Platform=x64 --no-restore --nologo
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: '**/results.trx'
+
+  # Performance CI (Architecture §22). Runs the measured benchmarks and publishes the raw JSON. It is informational
+  # until a stable benchmark machine exists; hosted runners vary too much to gate on absolute numbers.
+  perf:
+    runs-on: windows-latest
+    needs: test
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Publish self-contained shell
+        run: dotnet publish src/JevBrowse.App -c Release -r win-x64 -p:Platform=x64 -p:WindowsAppSDKSelfContained=true -p:SelfContained=true -o out/app --nologo
+      - name: Run benchmarks
+        shell: pwsh
+        env:
+          JEVBROWSE_DATA_DIR: ${{ github.workspace }}\out\data
+          JEVBROWSE_NO_FILTER_UPDATE: '1'
+        run: |
+          $exe = "out/app/JevBrowse.App.exe"
+          foreach ($mode in '--memory-lab', '--restore-bench') {
+            $p = Start-Process $exe -ArgumentList $mode -PassThru
+            if (-not $p.WaitForExit(300000)) { Stop-Process $p -Force; Write-Warning "$mode timed out" }
+          }
+          Get-ChildItem out/data/benchmarks
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmarks
+          path: out/data/benchmarks/*.json

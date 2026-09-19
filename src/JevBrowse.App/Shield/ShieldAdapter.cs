@@ -8,8 +8,11 @@ namespace JevBrowse.App.Shield;
 
 public sealed class TabShieldStats
 {
-    public int Total, Blocked;
+    public int Total, Blocked, ThirdParty;
+    public readonly DateTimeOffset StartedAt = DateTimeOffset.UtcNow;
     public readonly ConcurrentQueue<(string Host, string Rule)> Recent = new();
+    /// <summary>Distinct third-party hosts contacted (for "show every third party contacted by this page", §26).</summary>
+    public readonly ConcurrentDictionary<string, int> ThirdPartyHosts = new();
     public void Record(string host, string rule) { Recent.Enqueue((host, rule)); while (Recent.Count > 50) Recent.TryDequeue(out _); }
 }
 
@@ -51,9 +54,11 @@ public sealed class ShieldAdapter
             if (!Uri.TryCreate(e.Request.Uri, UriKind.Absolute, out var url)) return;
             Uri.TryCreate(core.Source, UriKind.Absolute, out var top);
             stats.Total++;
+            var req = new NetworkRequest(url, top, Map(e.ResourceContext));
+            if (req.IsThirdParty) { stats.ThirdParty++; stats.ThirdPartyHosts.AddOrUpdate(url.Host, 1, (_, n) => n + 1); }
             if (top is not null && !IsEnabledFor(NetworkRequest.SiteOf(top.Host))) return;
 
-            var decision = _engine.Evaluate(new NetworkRequest(url, top, Map(e.ResourceContext)));
+            var decision = _engine.Evaluate(req);
             if (decision.Verdict != Verdict.Block) return;
             stats.Blocked++;
             stats.Record(url.Host, decision.Rule ?? "");

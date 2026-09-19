@@ -107,6 +107,8 @@ public sealed partial class MainWindow : Window
 
         foreach (var m in Enum.GetValues<MemoryMode>()) ModeBox.Items.Add(m.ToString());
         ModeBox.SelectedIndex = (int)MemoryMode.Balanced;
+        foreach (var m in Enum.GetValues<ProductMode>()) ProductModeBox.Items.Add(m.ToString());
+        ProductModeBox.SelectedIndex = (int)(Enum.TryParse<ProductMode>(Environment.GetEnvironmentVariable("JEVBROWSE_MODE"), true, out var pm) ? pm : ProductMode.Power);
 
         // Resource OS tick: sample → evaluate → apply. 10 s is coarse on purpose; user actions never wait for it.
         _tick = DispatcherQueue.CreateTimer();
@@ -459,11 +461,13 @@ public sealed partial class MainWindow : Window
 
     // ---- Browser Memory ----
 
-    private async void OnMemory(object s, RoutedEventArgs e)
+    private async void OnMemory(object s, RoutedEventArgs e) => await ShowMemoryAsync("");
+
+    private async Task ShowMemoryAsync(string initialQuery)
     {
         if (_memory is null || _kernel is null) return;
         var (docs, bytes) = _memory.Stats();
-        var box = new TextBox { PlaceholderText = "e.g. webview2 process model", Text = "" };
+        var box = new TextBox { PlaceholderText = "e.g. webview2 process model", Text = initialQuery };
         var results = new ListView { SelectionMode = ListViewSelectionMode.Single, MaxHeight = 320 };
         var hits = new List<MemoryHit>();
         var info = new TextBlock { Opacity = 0.7, FontSize = 12, Text = $"{docs} pages indexed • {bytes / 1024.0 / 1024.0:F1} MB • local only" };
@@ -482,6 +486,7 @@ public sealed partial class MainWindow : Window
             if (hits.Count == 0 && box.Text.Length > 1) results.Items.Add(new TextBlock { Text = "No matches.", Opacity = 0.6 });
         }
         box.TextChanged += (_, _) => RunSearch();
+        if (initialQuery.Length > 0) RunSearch();
         var dlg = new ContentDialog
         {
             Title = "Browser Memory",
