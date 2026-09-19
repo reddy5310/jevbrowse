@@ -39,17 +39,19 @@ public sealed partial class MainWindow : Window
         var udf = Path.Combine(DataDir, "profiles", "personal");
         Directory.CreateDirectory(udf);
         _env = await CoreWebView2Environment.CreateWithOptionsAsync(null, udf, new CoreWebView2EnvironmentOptions());
-        _leases = new WebView2LeaseManager(WebHost, _env) { MaxLive = 5 };
+        _leases = new WebView2LeaseManager(WebHost, _env, Path.Combine(DataDir, "thumbnails")) { MaxLive = 5 };
         _db = new BrowserDb(Path.Combine(DataDir, "db", "browser.db"));
-        _kernel = new TabKernel(_leases, new TabRepository(_db));
+        _kernel = new TabKernel(_leases, new TabRepository(_db), new CheckpointRepository(_db), Path.Combine(DataDir, "thumbnails"));
         _kernel.Changed += OnKernelChanged;
         _kernel.Load();
         RebuildList();
 
-        if (Environment.GetCommandLineArgs().Contains("--memory-lab"))
+        var args = Environment.GetCommandLineArgs();
+        if (args.Contains("--memory-lab") || args.Contains("--restore-bench"))
         {
-            try { await RunMemoryLabAsync(); }
-            catch (Exception ex) { await File.WriteAllTextAsync(Path.Combine(DataDir, "benchmarks", "memory-lab-error.txt"), ex.ToString()); }
+            Directory.CreateDirectory(Path.Combine(DataDir, "benchmarks"));
+            try { if (args.Contains("--memory-lab")) await RunMemoryLabAsync(); else await RunRestoreBenchAsync(); }
+            catch (Exception ex) { await File.WriteAllTextAsync(Path.Combine(DataDir, "benchmarks", "bench-error.txt"), ex.ToString()); }
             Application.Current.Exit();
             return;
         }
@@ -156,6 +158,83 @@ public sealed partial class MainWindow : Window
         catch (Exception ex) { StatusText.Text = "lab failed: " + ex.Message; }
     }
 
+    /// <summary>Phase 2 gate: virtual → live restore latency (p50/p95), scroll fidelity, thumbnail presence.</summary>
+    private async Task RunRestoreBenchAsync()
+    {
+        string[] urls =
+        [
+            "https://en.wikipedia.org/wiki/Web_browser", "https://en.wikipedia.org/wiki/Operating_system",
+            "https://en.wikipedia.org/wiki/Memory_management", "https://en.wikipedia.org/wiki/Scheduling_(computing)",
+            "https://learn.microsoft.com/en-us/microsoft-edge/webview2/", "https://news.ycombinator.com",
+            "https://example.com", "https://www.gnu.org/philosophy/free-sw.html",
+        ];
+        var k = _kernel!;
+        var trace = Path.Combine(DataDir, "benchmarks", "restore-bench.trace.log");
+        void T(string s) => File.AppendAllText(trace, $"{DateTime.Now:HH:mm:ss.fff} {s}\n");
+        k.Changed += e => T($"  ev {e.Kind} {e.Id} {e.Reason}");
+        T("start");
+        foreach (var t in k.Tabs.ToList()) await k.CloseAsync(t.Id);
+        T("closed existing");
+        _leases!.MaxLive = 8;
+
+        // 1. load all, scroll each to a known offset
+        var opened = new List<VirtualTab>();
+        foreach (var u in urls)
+        {
+            var t = k.Open(new Uri(u));
+            var loaded = new TaskCompletionSource();
+            void OnEv(KernelEvent e) { if (e.Kind == "restored" && e.Id == t.Id) loaded.TrySetResult(); }
+            k.Changed += OnEv;
+            await k.ActivateAsync(t.Id);
+            await Task.WhenAny(loaded.Task, Task.Delay(20000));
+            k.Changed -= OnEv;
+            WithActiveLease(l => _ = l.View.CoreWebView2.ExecuteScriptAsync("window.scrollTo(0, 600)"));
+            await Task.Delay(500);
+            opened.Add(t);
+        }
+        k.RestoreTimingsMs.Clear();
+        T("all loaded");
+
+        // 2. virtualize everything
+        foreach (var t in opened) { await k.VirtualizeAsync(t.Id, Cause.User); T($"virtualized {t.Id}"); }
+        await Task.Delay(3000);
+        var cps = opened.Select(t => k.GetCheckpoint(t.Id)).ToList();
+        T("checkpoints read");
+
+        // 3. restore each and measure
+        var scrollOk = 0;
+        foreach (var t in opened)
+        {
+            var loaded = new TaskCompletionSource();
+            void OnEv(KernelEvent e) { if (e.Kind == "restored" && e.Id == t.Id) loaded.TrySetResult(); }
+            k.Changed += OnEv;
+            await k.ActivateAsync(t.Id);
+            await Task.WhenAny(loaded.Task, Task.Delay(20000));
+            k.Changed -= OnEv;
+            await Task.Delay(700); // let scrollTo apply
+            string y = "0";
+            if (_leases.TryGet(t.Id, out var l)) y = await ((WebView2Lease)l).View.CoreWebView2.ExecuteScriptAsync("window.scrollY");
+            if (double.TryParse(y, out var yy) && yy > 400) scrollOk++;
+        }
+
+        var times = k.RestoreTimingsMs.OrderBy(x => x).ToList();
+        double P(double p) => times.Count == 0 ? 0 : times[(int)Math.Min(times.Count - 1, Math.Ceiling(p * times.Count) - 1)];
+        var result = new
+        {
+            pages = urls.Length,
+            checkpoints = cps.Count(c => c is not null),
+            thumbnails = cps.Count(c => c?.ThumbnailPath is not null && File.Exists(c.ThumbnailPath)),
+            scrollCaptured = cps.Count(c => c?.ScrollY > 400),
+            scrollRestored = scrollOk,
+            restoreMs = times.Select(x => Math.Round(x)).ToList(),
+            p50 = Math.Round(P(0.5)), p95 = Math.Round(P(0.95)),
+        };
+        T("restores done");
+        var file = Path.Combine(DataDir, "benchmarks", $"restore-bench-{DateTime.Now:yyyyMMdd-HHmmss}.json");
+        await File.WriteAllTextAsync(file, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
+        T("written");
+    }
+
     private async Task RunMemoryLabAsync()
     {
         string[] urls =
@@ -164,7 +243,6 @@ public sealed partial class MainWindow : Window
             "https://github.com", "https://news.ycombinator.com",
         ];
         var k = _kernel!;
-        Directory.CreateDirectory(Path.Combine(DataDir, "benchmarks"));
         var report = new List<object>();
         void Record(string step)
         {

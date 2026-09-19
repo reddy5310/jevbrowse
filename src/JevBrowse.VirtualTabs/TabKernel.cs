@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using JevBrowse.Domain;
 using JevBrowse.Renderer.Abstractions;
 using JevBrowse.Storage;
@@ -7,7 +8,7 @@ namespace JevBrowse.VirtualTabs;
 public sealed record KernelEvent(string Kind, ResourceId Id, string Reason);
 
 /// <summary>
-/// Virtual Tab Kernel (Architecture §5): owns durable tab identity, ordering, lifecycle and renderer leases.
+/// Virtual Tab Kernel (Architecture §5): owns durable tab identity, ordering, lifecycle, checkpoints and renderer leases.
 /// It does not own presentation or scheduling policy; Phase 3's Resource OS will feed it plans.
 /// Phase 1 policy is deliberately simple: keep at most MaxLive renderers, evict least-recently-active unprotected tab.
 /// </summary>
@@ -15,20 +16,27 @@ public sealed class TabKernel
 {
     private readonly List<VirtualTab> _tabs = [];
     private readonly Dictionary<ResourceId, DateTimeOffset> _lastActive = [];
+    private readonly Dictionary<ResourceId, Stopwatch> _restoreTimers = [];
     private readonly IRendererLeaseManager _leases;
     private readonly TabRepository _repo;
+    private readonly CheckpointRepository _checkpoints;
+    private readonly string _thumbnailDir;
     private readonly Func<DateTimeOffset> _clock;
 
-    public TabKernel(IRendererLeaseManager leases, TabRepository repo, Func<DateTimeOffset>? clock = null)
+    public TabKernel(IRendererLeaseManager leases, TabRepository repo, CheckpointRepository checkpoints, string thumbnailDir, Func<DateTimeOffset>? clock = null)
     {
         _leases = leases;
         _repo = repo;
+        _checkpoints = checkpoints;
+        _thumbnailDir = thumbnailDir;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
     }
 
     public IReadOnlyList<VirtualTab> Tabs => _tabs;
     public VirtualTab? Active { get; private set; }
     public int LiveCount => _leases.LiveResources.Count;
+    /// <summary>Milliseconds from activation of a VIRTUAL tab to its page load completing. Feeds the restore p50/p95 metric.</summary>
+    public List<double> RestoreTimingsMs { get; } = [];
     public event Action<KernelEvent>? Changed;
 
     /// <summary>Load durable tabs from storage. Every row comes back VIRTUAL (no renderer survives a restart).</summary>
@@ -45,7 +53,7 @@ public sealed class TabKernel
         Changed?.Invoke(new("loaded", default, $"{_tabs.Count} tabs"));
     }
 
-    public VirtualTab Open(Uri url, bool activate = true)
+    public VirtualTab Open(Uri url)
     {
         var t = new VirtualTab(ResourceId.New(), url);
         _tabs.Add(t);
@@ -53,6 +61,8 @@ public sealed class TabKernel
         Changed?.Invoke(new("opened", t.Id, url.Host));
         return t;
     }
+
+    public Checkpoint? GetCheckpoint(ResourceId id) => _checkpoints.Get(id);
 
     public async Task ActivateAsync(ResourceId id, CancellationToken ct = default)
     {
@@ -69,8 +79,21 @@ public sealed class TabKernel
         if (!_leases.TryGet(id, out var lease))
         {
             await MakeRoomAsync(id, ct);
-            lease = await _leases.AcquireAsync(id, tab.Url, RenderIntent.Foreground, ct);
+            var checkpoint = _checkpoints.Get(id);
+            var sw = Stopwatch.StartNew();
+            _restoreTimers[id] = sw;
+            lease = await _leases.AcquireAsync(id, checkpoint?.Url ?? tab.Url, RenderIntent.Foreground, ct);
             lease.NavigationChanged += n => { tab.UpdateNavigation(n.Url, n.Title); Persist(tab); Changed?.Invoke(new("navigated", tab.Id, n.Title)); };
+            lease.DetectedProtectionChanged += f => { tab.SetDetected(f); Changed?.Invoke(new("protection", tab.Id, f.ToString())); };
+            lease.Loaded += () =>
+            {
+                if (_restoreTimers.Remove(id, out var timer))
+                {
+                    RestoreTimingsMs.Add(timer.Elapsed.TotalMilliseconds);
+                    Changed?.Invoke(new("restored", id, $"{timer.ElapsedMilliseconds} ms"));
+                }
+            };
+            if (checkpoint is not null) lease.ApplyCheckpoint(checkpoint);
         }
         if (lease.IsSuspended) lease.Resume();
         lease.SetVisible(true);
@@ -82,31 +105,50 @@ public sealed class TabKernel
         Changed?.Invoke(new("activated", id, $"live={LiveCount}"));
     }
 
-    /// <summary>Virtualize: dispose renderer, keep durable state. Vetoed by protection unless the user asks.</summary>
+    /// <summary>
+    /// Virtualize = checkpoint → commit → dispose renderer (§11.1). If capture or commit fails the renderer is untouched,
+    /// so a crash mid-way can only lose a checkpoint, never a tab.
+    /// </summary>
     public async Task<TransitionResult> VirtualizeAsync(ResourceId id, Cause cause, CancellationToken ct = default)
     {
         var tab = Find(id);
         if (!tab.State.HasLiveRenderer()) return new(true, tab.State, "already virtual");
-        var now = _clock();
+        if (cause != Cause.User && tab.IsDemotionVetoed)
+            return new(false, tab.State, $"vetoed by protection: {tab.Protection}");
 
-        // Walk the legal path Hot→Warm→Cold→Virtual; a veto anywhere aborts before the renderer is touched.
+        var now = _clock();
         var path = tab.State switch
         {
             ResourceState.Hot => new[] { ResourceState.Warm, ResourceState.Cold, ResourceState.Virtual },
             ResourceState.Warm => [ResourceState.Cold, ResourceState.Virtual],
             _ => [ResourceState.Virtual],
         };
-        if (cause != Cause.User && tab.IsDemotionVetoed)
-            return new(false, tab.State, $"vetoed by protection: {tab.Protection}");
+
+        // 1. checkpoint (renderer still live)
+        Checkpoint? cp = null;
+        if (_leases.TryGet(id, out var lease))
+        {
+            try { cp = await lease.CaptureCheckpointAsync(_thumbnailDir, ct); }
+            catch (Exception ex) { Changed?.Invoke(new("checkpoint-failed", id, ex.Message)); }
+        }
+
         foreach (var s in path)
         {
             var r = tab.TryTransition(s, cause, now);
             if (!r.Allowed) return r;
         }
 
+        // 2. commit atomically
+        using (var tx = _repo.BeginTransaction())
+        {
+            if (cp is not null) _checkpoints.Upsert(cp);
+            Persist(tab);
+            tx.Commit();
+        }
+
+        // 3. dispose
         await _leases.ReleaseAsync(id, ReleaseDisposition.Dispose, ct);
         if (Active?.Id == id) Active = null;
-        Persist(tab);
         Changed?.Invoke(new("virtualized", id, cause.ToString()));
         return new(true, tab.State, "virtualized");
     }
@@ -118,7 +160,9 @@ public sealed class TabKernel
         _tabs.Remove(tab);
         _lastActive.Remove(id);
         if (Active?.Id == id) Active = null;
-        _repo.Delete(id);
+        var thumb = _checkpoints.Get(id)?.ThumbnailPath;
+        _repo.Delete(id); // cascades to checkpoints
+        if (thumb is not null) { try { File.Delete(thumb); } catch (IOException) { } }
         Reorder();
         Changed?.Invoke(new("closed", id, ""));
     }

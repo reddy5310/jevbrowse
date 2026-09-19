@@ -45,11 +45,16 @@ public sealed class VirtualTab
     public Uri Url { get; private set; }
     public string Title { get; private set; }
     public ResourceState State { get; private set; } = ResourceState.Virtual;
-    public ProtectionFlags Protection { get; private set; }
+    /// <summary>Durable, user-chosen flags (pinned, never-hibernate).</summary>
+    public ProtectionFlags UserProtection { get; private set; }
+    /// <summary>Transient flags detected from the live page (audible, download, dirty form). Cleared when the renderer goes away.</summary>
+    public ProtectionFlags DetectedProtection { get; private set; }
+    public ProtectionFlags Protection => UserProtection | DetectedProtection;
     public DateTimeOffset LastStateChange { get; private set; } = DateTimeOffset.UtcNow;
 
     public void UpdateNavigation(Uri url, string title) { Url = url; Title = title; }
-    public void SetProtection(ProtectionFlags flags) => Protection = flags;
+    public void SetProtection(ProtectionFlags flags) => UserProtection = flags;
+    public void SetDetected(ProtectionFlags flags) => DetectedProtection = flags;
 
     /// <summary>Whether an automatic (non-user) demotion is currently vetoed.</summary>
     public bool IsDemotionVetoed => Protection != ProtectionFlags.None;
@@ -78,6 +83,7 @@ public sealed class VirtualTab
 
         State = target;
         LastStateChange = now;
+        if (!State.HasLiveRenderer()) DetectedProtection = ProtectionFlags.None; // nothing left to detect from
         return new(true, State, isDemotion ? "demoted" : "promoted");
     }
 

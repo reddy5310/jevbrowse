@@ -23,7 +23,7 @@ public sealed class TabRepository
         cmd.Parameters.AddWithValue("$title", tab.Title);
         // Persisted state is never "live": a renderer does not survive a process, so anything live is stored as Virtual.
         cmd.Parameters.AddWithValue("$state", (int)(tab.State.HasLiveRenderer() ? ResourceState.Virtual : tab.State));
-        cmd.Parameters.AddWithValue("$prot", (int)tab.Protection);
+        cmd.Parameters.AddWithValue("$prot", (int)tab.UserProtection); // detected flags are transient
         cmd.Parameters.AddWithValue("$ord", ordinal);
         cmd.Parameters.AddWithValue("$ts", tab.LastStateChange.ToUnixTimeMilliseconds());
         cmd.ExecuteNonQuery();

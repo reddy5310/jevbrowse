@@ -13,7 +13,7 @@ public class TabKernelTests : IDisposable
 
     public TabKernelTests()
     {
-        _k = new TabKernel(_leases, new TabRepository(_db), () => _now);
+        _k = new TabKernel(_leases, new TabRepository(_db), new CheckpointRepository(_db), Path.GetTempPath(), () => _now);
         _k.Load();
     }
 
@@ -117,7 +117,7 @@ public class TabKernelTests : IDisposable
         for (int i = 0; i < 8; i++) await OpenAndActivate($"s{i}.test");
         _k.SetProtection(_k.Tabs[2].Id, ProtectionFlags.UserPinned);
 
-        var k2 = new TabKernel(new FakeLeaseManager(), new TabRepository(_db));
+        var k2 = new TabKernel(new FakeLeaseManager(), new TabRepository(_db), new CheckpointRepository(_db), Path.GetTempPath());
         k2.Load();
         Assert.Equal(8, k2.Tabs.Count);
         Assert.All(k2.Tabs, t => Assert.Equal(ResourceState.Virtual, t.State));
