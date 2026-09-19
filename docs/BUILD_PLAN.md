@@ -39,7 +39,8 @@ Each phase maps to a milestone in the architecture doc (Table A.14).
 | 0 Foundations | DONE 2026-09-20 | ADR 0003; `--memory-lab` report: dispose −44%, suspend −6% |
 | 1 Virtual Tab Kernel | DONE 2026-09-20 | 9 kernel tests (50 visible / 5 live, restart survival); real-pool lab: 5 live 765 MB → 1 live 319 MB |
 | 2 Hibernation | DONE 2026-09-20 | ADR 0004; 7 hibernation tests; `--restore-bench`: p50 350 ms, p95 1.24 s, 8/8 checkpoints+thumbnails |
-| 3 Resource OS | next | |
+| 3 Resource OS | DONE 2026-09-20 | ADR 0005; 10 scheduler tests incl. 2 h thrash simulation; baselines in docs/performance |
+| 4 Shield | next | |
 
 ### Phase 0 — Foundations (M0 Feasibility)
 - Repo skeleton per §17, `Directory.Build.props`, solution, CI skeleton, docs (Constitution, ADR 0001–0005, cost-card template).

@@ -3,6 +3,7 @@ using System.Text.Json;
 using JevBrowse.App.Renderer;
 using JevBrowse.Diagnostics;
 using JevBrowse.Domain;
+using JevBrowse.ResourceOS;
 using JevBrowse.Storage;
 using JevBrowse.VirtualTabs;
 using Microsoft.UI.Xaml;
@@ -25,6 +26,9 @@ public sealed partial class MainWindow : Window
     private WebView2LeaseManager? _leases;
     private BrowserDb? _db;
     private TabKernel? _kernel;
+    private readonly DefaultScheduler _scheduler = new();
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _tick;
+    private ResourcePlan? _lastPlan;
     private bool _syncingSelection;
 
     public MainWindow()
@@ -45,6 +49,15 @@ public sealed partial class MainWindow : Window
         _kernel.Changed += OnKernelChanged;
         _kernel.Load();
         RebuildList();
+
+        foreach (var m in Enum.GetValues<MemoryMode>()) ModeBox.Items.Add(m.ToString());
+        ModeBox.SelectedIndex = (int)MemoryMode.Balanced;
+
+        // Resource OS tick: sample → evaluate → apply. 10 s is coarse on purpose; user actions never wait for it.
+        _tick = DispatcherQueue.CreateTimer();
+        _tick.Interval = TimeSpan.FromSeconds(10);
+        _tick.Tick += async (_, _) => await SchedulerTickAsync();
+        _tick.Start();
 
         var args = Environment.GetCommandLineArgs();
         if (args.Contains("--memory-lab") || args.Contains("--restore-bench"))
@@ -88,7 +101,61 @@ public sealed partial class MainWindow : Window
     private void UpdatePoolText()
     {
         var s = ProcessGroupProbe.Sample(_leases!.ProcessIds);
-        PoolText.Text = $"{_kernel!.Tabs.Count} tabs • {_kernel.LiveCount}/{_leases.MaxLive} live\n{s.ProcessCount} procs • {s.PrivateMb:F0} MB private (measured)";
+        var band = _lastPlan is null ? "" : $" • {_lastPlan.Band} band, budget {_lastPlan.TargetLiveRenderers}";
+        PoolText.Text = $"{_kernel!.Tabs.Count} tabs • {_kernel.LiveCount}/{_leases.MaxLive} live{band}\n{s.ProcessCount} procs • {s.PrivateMb:F0} MB private (measured)";
+    }
+
+    // ---- Resource OS ----
+
+    private async Task SchedulerTickAsync()
+    {
+        if (_kernel is null || _leases is null) return;
+        try
+        {
+            var os = SystemPressureSampler.Sample();
+            var group = ProcessGroupProbe.Sample(_leases.ProcessIds);
+            var pressure = new SystemPressure(os.AvailableBytes, os.TotalBytes, group.PrivateBytes, os.OnBattery, false, os.At);
+            _lastPlan = _scheduler.Evaluate(pressure, _kernel.Snapshot(), DateTimeOffset.UtcNow);
+            var n = await _kernel.ApplyPlanAsync(_lastPlan);
+            if (n > 0) StatusText.Text = $"Resource OS: virtualized {n} ({_lastPlan.Band}, {os.AvailableBytes >> 20} MB free)";
+            UpdatePoolText();
+        }
+        catch (Exception ex) { StatusText.Text = "scheduler tick failed: " + ex.Message; }
+    }
+
+    private void OnModeChanged(object s, SelectionChangedEventArgs e)
+    {
+        if (ModeBox.SelectedIndex < 0) return;
+        _scheduler.Policy = SchedulerPolicy.For((MemoryMode)ModeBox.SelectedIndex);
+        if (_leases is not null) _leases.MaxLive = _scheduler.Policy.MaxLive;
+    }
+
+    private void OnPinCurrent(object s, RoutedEventArgs e)
+    {
+        if (_kernel?.Active is not { } t) return;
+        var next = t.UserProtection ^ ProtectionFlags.UserPinned;
+        _kernel.SetProtection(t.Id, next);
+        StatusText.Text = next.HasFlag(ProtectionFlags.UserPinned) ? "pinned: never auto-hibernated" : "unpinned";
+        foreach (var i in Items) i.Refresh();
+    }
+
+    private async void OnExplain(object s, RoutedEventArgs e)
+    {
+        if (_kernel?.Active is not { } t) return;
+        var d = _kernel.LastDecision(t.Id);
+        var text = d is null
+            ? "The scheduler has not made a decision about this tab yet.\n\n" +
+              (_lastPlan is null ? "" : $"Current band: {_lastPlan.Band}, live budget {_lastPlan.TargetLiveRenderers}, live now {_lastPlan.LiveNow}.")
+            : d.Explain();
+        var dlg = new ContentDialog
+        {
+            Title = "Why?",
+            Content = new TextBlock { Text = text, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap },
+            CloseButtonText = "Close",
+            PrimaryButtonText = t.UserProtection.HasFlag(ProtectionFlags.UserPinned) ? "Unpin" : "Never hibernate this tab",
+            XamlRoot = Content.XamlRoot,
+        };
+        if (await dlg.ShowAsync() == ContentDialogResult.Primary) OnPinCurrent(s, e);
     }
 
     // ---- UI → kernel ----

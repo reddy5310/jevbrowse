@@ -14,5 +14,6 @@
   <Folder Name="/tests/Unit/">
     <Project Path="tests/Unit/JevBrowse.Domain.Tests/JevBrowse.Domain.Tests.csproj" />
     <Project Path="tests/Unit/JevBrowse.Kernel.Tests/JevBrowse.Kernel.Tests.csproj" />
+    <Project Path="tests/Unit/JevBrowse.ResourceOS.Tests/JevBrowse.ResourceOS.Tests.csproj" />
   </Folder>
 </Solution>

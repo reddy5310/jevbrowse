@@ -16,10 +16,13 @@
                 <RowDefinition Height="*"/>
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
-            <StackPanel Orientation="Horizontal" Padding="8" Spacing="4">
-                <Button Content="+ New" Click="OnNewTab"/>
-                <Button Content="Hibernate all" Click="OnHibernateAll" ToolTipService.ToolTip="Virtualize everything except current"/>
-                <Button Content="Lab" Click="OnMemoryLab"/>
+            <StackPanel Padding="8" Spacing="6">
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                    <Button Content="+ New" Click="OnNewTab"/>
+                    <Button Content="Hibernate all" Click="OnHibernateAll" ToolTipService.ToolTip="Virtualize everything except current"/>
+                    <Button Content="Lab" Click="OnMemoryLab"/>
+                </StackPanel>
+                <ComboBox x:Name="ModeBox" HorizontalAlignment="Stretch" SelectionChanged="OnModeChanged" ToolTipService.ToolTip="Memory budget mode (Resource OS)"/>
             </StackPanel>
             <ListView x:Name="TabList" Grid.Row="1" SelectionMode="Single" SelectionChanged="OnTabSelected" ItemsSource="{x:Bind Items}">
                 <ListView.ItemTemplate>
@@ -59,7 +62,11 @@
                 <Button Content="&#xE72B;" FontFamily="Segoe MDL2 Assets" Click="OnBack"/>
                 <Button Content="&#xE72A;" FontFamily="Segoe MDL2 Assets" Grid.Column="1" Click="OnForward"/>
                 <TextBox x:Name="AddressBox" Grid.Column="2" PlaceholderText="Search or enter address" KeyDown="OnAddressKeyDown"/>
-                <Button Grid.Column="3" Content="Hibernate" Click="OnHibernateCurrent" ToolTipService.ToolTip="Dispose this renderer; keep the tab"/>
+                <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4">
+                    <Button Content="Hibernate" Click="OnHibernateCurrent" ToolTipService.ToolTip="Dispose this renderer; keep the tab"/>
+                    <Button Content="Pin" Click="OnPinCurrent" ToolTipService.ToolTip="Never auto-hibernate this tab"/>
+                    <Button Content="Explain" Click="OnExplain" ToolTipService.ToolTip="Why did the scheduler last touch this tab?"/>
+                </StackPanel>
             </Grid>
             <Grid x:Name="WebHost" Grid.Row="1">
                 <TextBlock x:Name="VirtualPlaceholder" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.5" Text="No live renderer. Select a tab."/>

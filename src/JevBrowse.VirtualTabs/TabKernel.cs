@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using JevBrowse.Domain;
 using JevBrowse.Renderer.Abstractions;
+using JevBrowse.ResourceOS;
 using JevBrowse.Storage;
 
 namespace JevBrowse.VirtualTabs;
@@ -17,6 +18,8 @@ public sealed class TabKernel
     private readonly List<VirtualTab> _tabs = [];
     private readonly Dictionary<ResourceId, DateTimeOffset> _lastActive = [];
     private readonly Dictionary<ResourceId, Stopwatch> _restoreTimers = [];
+    private readonly Dictionary<ResourceId, int> _visits = [];
+    private readonly Dictionary<ResourceId, ScheduledAction> _lastDecision = [];
     private readonly IRendererLeaseManager _leases;
     private readonly TabRepository _repo;
     private readonly CheckpointRepository _checkpoints;
@@ -64,6 +67,36 @@ public sealed class TabKernel
 
     public Checkpoint? GetCheckpoint(ResourceId id) => _checkpoints.Get(id);
 
+    /// <summary>The last automated decision that touched a tab, for "explain why" (§11.1).</summary>
+    public ScheduledAction? LastDecision(ResourceId id) => _lastDecision.GetValueOrDefault(id);
+
+    /// <summary>Renderer-free snapshot for the Resource OS.</summary>
+    public IReadOnlyList<ResourceRuntime> Snapshot() =>
+        _tabs.Select(t => new ResourceRuntime(
+            t.Id, t.State, t.Protection, Active?.Id == t.Id,
+            _lastActive.GetValueOrDefault(t.Id, t.LastStateChange), t.LastStateChange,
+            _visits.GetValueOrDefault(t.Id))).ToList();
+
+    /// <summary>
+    /// Execute a scheduler plan. Protection is re-checked inside VirtualizeAsync at execution time, so a plan can
+    /// never override a veto that appeared after it was computed. Returns the number of tabs virtualized.
+    /// </summary>
+    public async Task<int> ApplyPlanAsync(ResourcePlan plan, CancellationToken ct = default)
+    {
+        _leases.MaxLive = Math.Max(1, plan.TargetLiveRenderers);
+        int applied = 0;
+        foreach (var a in plan.Virtualize)
+        {
+            if (_tabs.All(t => t.Id != a.Id)) continue;
+            var r = await VirtualizeAsync(a.Id, Cause.Scheduler, ct);
+            _lastDecision[a.Id] = r.Allowed ? a : a with { Reasons = new Dictionary<string, string>(a.Reasons) { ["executed"] = "no: " + r.Reason } };
+            if (r.Allowed) applied++;
+            Changed?.Invoke(new("decision", a.Id, r.Allowed ? "virtualized" : "vetoed at execution: " + r.Reason));
+        }
+        foreach (var s in plan.Skipped) _lastDecision[s.Id] = s;
+        return applied;
+    }
+
     public async Task ActivateAsync(ResourceId id, CancellationToken ct = default)
     {
         var tab = Find(id);
@@ -100,6 +133,7 @@ public sealed class TabKernel
 
         tab.TryTransition(ResourceState.Hot, Cause.User, now);
         _lastActive[id] = now;
+        _visits[id] = _visits.GetValueOrDefault(id) + 1;
         Active = tab;
         Persist(tab);
         Changed?.Invoke(new("activated", id, $"live={LiveCount}"));
