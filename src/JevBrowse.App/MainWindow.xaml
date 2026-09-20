@@ -131,8 +131,9 @@
             </Grid>
             <Grid Grid.Row="1" Padding="0,0,0,8">
                 <StackPanel Orientation="Horizontal" Spacing="4">
-                    <Button Content="Hibernate" Click="OnHibernateCurrent" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Dispose this renderer; keep the tab"/>
-                    <Button x:Name="PinButton" Content="Pin" Click="OnPinCurrent" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Never auto-hibernate this tab"/>
+                    <Button Content="Put to sleep" Click="OnHibernateCurrent" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Close the live page now and keep the tab. It reopens where you left it."/>
+                    <Button x:Name="PinButton" Content="Pin" Click="OnPinCurrent" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Keep this tab at the top of the list. It can still sleep."/>
+                    <Button x:Name="KeepActiveButton" Content="Keep active" Click="OnKeepActiveCurrent" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Stop this tab going to sleep on its own. It stays where it is in the list."/>
                     <Button x:Name="MoveButton" Content="Move…" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Move this tab to another workspace">
                         <Button.Flyout>
                             <MenuFlyout x:Name="MoveMenu" Opening="OnMoveMenuOpening"/>

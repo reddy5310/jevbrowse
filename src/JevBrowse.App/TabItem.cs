@@ -22,13 +22,49 @@ public sealed class TabItem(VirtualTab tab) : INotifyPropertyChanged
     public VirtualTab Tab { get; } = tab;
     public ResourceId Id => Tab.Id;
     public string Title => Tab.Url.Scheme == "jev" ? "Welcome to JevBrowse" : string.IsNullOrWhiteSpace(Tab.Title) ? Tab.Url.Host : Tab.Title;
-    public string Subtitle => $"{Tab.State}{(Tab.Protection != ProtectionFlags.None ? " • " + Tab.Protection : "")} • {(Tab.Url.Scheme == "jev" ? "local page" : Tab.Url.Host)}";
+    public string Subtitle => string.Join(" • ", new[] { StateWord, ProtectionWords, Tab.Url.Scheme == "jev" ? "local page" : Tab.Url.Host }.Where(s => s.Length > 0));
+
+    /// <summary>What the tab is doing, in the words a person would use. Internal state names are for diagnostics.</summary>
+    private string StateWord => Tab.State switch
+    {
+        ResourceState.Hot => "open",
+        ResourceState.Warm => "open, in the background",
+        ResourceState.Cold => "idle",
+        ResourceState.Suspended => "dozing",
+        ResourceState.Virtual => "sleeping",
+        ResourceState.Archived => "archived",
+        _ => Tab.State.ToString().ToLowerInvariant(),
+    };
+
+    /// <summary>Only what a person would want to know: why this tab is not going to sleep on its own.</summary>
+    private string ProtectionWords
+    {
+        get
+        {
+            var p = Tab.Protection;
+            var reasons = new List<string>();
+            if (Tab.IsPinned) reasons.Add("pinned");
+            if (p.HasFlag(ProtectionFlags.KeepActive)) reasons.Add("kept active");
+            if (p.HasFlag(ProtectionFlags.NeverHibernateSite)) reasons.Add("site kept active");
+            if (p.HasFlag(ProtectionFlags.Audible)) reasons.Add("playing sound");
+            if (p.HasFlag(ProtectionFlags.WebRtcActive)) reasons.Add("in a call");
+            if (p.HasFlag(ProtectionFlags.DownloadActive)) reasons.Add("downloading");
+            if (p.HasFlag(ProtectionFlags.DirtyForm)) reasons.Add("unsaved typing");
+            return string.Join(", ", reasons);
+        }
+    }
     public SolidColorBrush StateBrush => Brushes[Tab.State];
+
+    /// <summary>
+    /// What a screen reader announces. The colour dot carries the state visually and would otherwise be silent, so
+    /// the same words go here — the state must not be available only to people who can see the colour.
+    /// </summary>
+    public string AccessibleName => $"{Title}. {Subtitle}.";
 
     public event PropertyChangedEventHandler? PropertyChanged;
     public void Refresh()
     {
-        foreach (var p in new[] { nameof(Title), nameof(Subtitle), nameof(StateBrush) }) Raise(p);
+        foreach (var p in new[] { nameof(Title), nameof(Subtitle), nameof(StateBrush), nameof(AccessibleName) }) Raise(p);
     }
     private void Raise([CallerMemberName] string? p = null) => PropertyChanged?.Invoke(this, new(p));
 }

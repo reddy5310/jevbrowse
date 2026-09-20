@@ -305,7 +305,7 @@ public sealed partial class MainWindow : Window
     {
         if (e.Kind is "workspace-created" or "context-restored") RebuildWorkspaces();
         if (e.Kind is "workspace-switched") { SyncWorkspaceBox(); RebuildList(); }
-        else if (e.Kind is "opened" or "closed" or "loaded" or "moved" or "context-restored") RebuildList();
+        else if (e.Kind is "opened" or "closed" or "loaded" or "moved" or "context-restored" or "pinned") RebuildList();
         else foreach (var i in Items) i.Refresh();
 
         if (e.Kind == "activated")
@@ -316,11 +316,25 @@ public sealed partial class MainWindow : Window
             AddressBox.Text = _kernel!.Active?.Url.ToString() ?? "";
         }
         if (e.Kind is "activated" or "navigated" or "signals") { UpdateClassBadge(); UpdateEnvChrome(); }
+        if (e.Kind is "activated" or "pinned" or "protection" or "loaded") UpdateTabControls();
         if (e.Kind == "restoring") ShowRestoring(e.Id, e.Reason.StartsWith("with"));
         if (e.Kind is "restored" or "loaded") FinishRestore(e.Id);
         UpdateIdlePanel();
         UpdatePoolText();
         StatusText.Text = $"{e.Kind} {e.Reason}";
+    }
+
+    /// <summary>
+    /// The two tab controls say what they will do next, not what state the tab is in. "Pin" / "Unpin" is placement;
+    /// "Keep active" / "Let it sleep" is sleeping. Neither caption implies the other.
+    /// </summary>
+    private void UpdateTabControls()
+    {
+        var t = _kernel?.Active;
+        PinButton.IsEnabled = KeepActiveButton.IsEnabled = t is not null;
+        if (t is null) return;
+        PinButton.Content = t.IsPinned ? "Unpin" : "Pin";
+        KeepActiveButton.Content = t.UserProtection.HasFlag(ProtectionFlags.KeepActive) ? "Let it sleep" : "Keep active";
     }
 
     /// <summary>The sidebar shows the active workspace only; other workspaces' tabs stay durable and (eventually) virtual.</summary>
@@ -580,8 +594,11 @@ public sealed partial class MainWindow : Window
     private static string ClassExplanation(DataClass c) => c switch
     {
         DataClass.Public => "Saved for search, and can be summarized if you ask.",
-        DataClass.Unknown => "We have no evidence either way, so this page is treated carefully: kept on this device, not added to search, never sent to AI.",
-        DataClass.Authenticated => "Looks like you are signed in: kept on this device, not added to search, never sent automatically.",
+        // The boundary here is about JevBrowse's own features, and the wording says only that. An agent you have
+        // authorized is a separate grant with a separate explanation, and it CAN read this page -- claiming the
+        // content "never leaves the device" would be broader than what is actually enforced.
+        DataClass.Unknown => "This page isn't added to saved-page search or sent to JevBrowse's cloud AI. An agent you authorize may still access it.",
+        DataClass.Authenticated => "Looks like you are signed in: kept on this device, not added to search, never sent to AI unless you ask.",
         DataClass.Sensitive => "Only the address and scroll position are kept. No screenshot, no search, no AI.",
         DataClass.Secret => "This page asks for a password or card number. Nothing about it is stored or sent.",
         _ => "This session is private: nothing is written to disk.",
@@ -660,7 +677,23 @@ public sealed partial class MainWindow : Window
         {
             var text = $"{effective.Agent} asks for a session.\n\nGranted:\n  domains: {string.Join(", ", effective.AllowDomains)}\n  actions: {string.Join(", ", effective.Actions)}\n  {effective.MaxLivePages} live pages, {effective.SessionMinutes} min, destructive: {effective.DestructiveActions}\n  identity: throwaway ({effective.Container}), not your logins" +
                        (adjustments.Count > 0 ? "\n\nReduced from the request:\n  • " + string.Join("\n  • ", adjustments) : "");
-            var dlg = new ContentDialog { Title = "Agent session request", Content = new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas") }, PrimaryButtonText = "Allow session", CloseButtonText = "Deny", DefaultButton = ContentDialogButton.Close, XamlRoot = Content.XamlRoot };
+            // The domain list answers WHERE. It does not answer what becomes of what the agent reads, and that is
+            // the part we cannot enforce: once the page map crosses the local endpoint it is the agent's, not ours.
+            var reads = new TextBlock
+            {
+                TextWrapping = TextWrapping.Wrap,
+                Text = "What it can read on those domains: the page title, headings, link text and addresses, form "
+                     + "field names and types (never their values), and up to 4,000 characters of the main text"
+                     + (effective.Actions.Contains(AgentAction.Screenshot) ? ", plus screenshots" : "")
+                     + ".\n\nWhat happens to it afterwards is up to " + effective.Agent + ". JevBrowse hands it over "
+                     + "and cannot follow it — the agent may send it to its own servers or AI model. Your own AI and "
+                     + "search settings do not restrict that. Every request is recorded in this session's audit, and "
+                     + "Stop in the Agents panel ends it immediately.",
+            };
+            var body = new StackPanel { Spacing = 12, Children = {
+                new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas") },
+                reads } };
+            var dlg = new ContentDialog { Title = "Agent session request", Content = new ScrollViewer { MaxHeight = 460, Content = body }, PrimaryButtonText = "Allow session", CloseButtonText = "Deny", DefaultButton = ContentDialogButton.Close, XamlRoot = Content.XamlRoot };
             tcs.TrySetResult(await dlg.ShowAsync() == ContentDialogResult.Primary);
         });
         return tcs.Task;
@@ -1285,12 +1318,52 @@ public sealed partial class MainWindow : Window
         if (_leases is not null) _leases.MaxLive = _scheduler.Policy.MaxLive;
     }
 
+    /// <summary>
+    /// Where the tab sits. One wish, one control: this does not stop the tab sleeping, and the status line says so
+    /// rather than leaving the user to discover it when the tab sleeps anyway.
+    /// </summary>
     private void OnPinCurrent(object s, RoutedEventArgs e)
     {
         if (_kernel?.Active is not { } t) return;
-        var next = t.UserProtection ^ ProtectionFlags.UserPinned;
-        _kernel.SetProtection(t.Id, next);
-        StatusText.Text = next.HasFlag(ProtectionFlags.UserPinned) ? "pinned: never auto-hibernated" : "unpinned";
+        var pinned = !t.IsPinned;
+        _kernel.SetPinned(t.Id, pinned);
+        StatusText.Text = pinned
+            ? "Pinned to the top of this workspace. It can still sleep — use Keep active for that."
+            : "Unpinned.";
+        _syncingSelection = true;
+        TabList.SelectedItem = Items.FirstOrDefault(i => i.Id == t.Id);
+        _syncingSelection = false;
+    }
+
+    /// <summary>
+    /// Whether the tab sleeps on its own. Turning it off is the direction that costs the user something, so that is
+    /// the direction that explains itself.
+    /// </summary>
+    private async void OnKeepActiveCurrent(object s, RoutedEventArgs e)
+    {
+        if (_kernel?.Active is not { } t) return;
+        var on = !t.UserProtection.HasFlag(ProtectionFlags.KeepActive);
+        if (!on)
+        {
+            var dlg = new ContentDialog
+            {
+                Title = "Let this tab sleep?",
+                Content = new TextBlock
+                {
+                    TextWrapping = TextWrapping.Wrap,
+                    Text = $"“{(string.IsNullOrWhiteSpace(t.Title) ? t.Url.Host : t.Title)}” will go to sleep on its own "
+                         + "when JevBrowse needs the memory. It reopens at the address and scroll position we saved.\n\n"
+                         + "Anything the site is holding that we do not save — a half-typed form, an upload, a call, "
+                         + "playback position — is lost when it sleeps.\n\n"
+                         + "It stays where it is in your list either way.",
+                },
+                PrimaryButtonText = "Let it sleep", CloseButtonText = "Keep it active",
+                DefaultButton = ContentDialogButton.Close, XamlRoot = Content.XamlRoot,
+            };
+            if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
+        }
+        _kernel.SetProtection(t.Id, on ? t.UserProtection | ProtectionFlags.KeepActive : t.UserProtection & ~ProtectionFlags.KeepActive);
+        StatusText.Text = on ? "Keeping this tab active: it will not sleep on its own." : "This tab can sleep when memory is needed.";
         foreach (var i in Items) i.Refresh();
     }
 
@@ -1307,10 +1380,12 @@ public sealed partial class MainWindow : Window
             Title = "Why?",
             Content = new TextBlock { Text = text, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap },
             CloseButtonText = "Close",
-            PrimaryButtonText = t.UserProtection.HasFlag(ProtectionFlags.UserPinned) ? "Unpin" : "Never hibernate this tab",
+            // The action offered here is about sleeping, because that is what "Why?" just explained. Placement is a
+            // different question and belongs to the Pin button.
+            PrimaryButtonText = t.UserProtection.HasFlag(ProtectionFlags.KeepActive) ? "Let it sleep" : "Keep this tab active",
             XamlRoot = Content.XamlRoot,
         };
-        if (await dlg.ShowAsync() == ContentDialogResult.Primary) OnPinCurrent(s, e);
+        if (await dlg.ShowAsync() == ContentDialogResult.Primary) OnKeepActiveCurrent(s, e);
     }
 
     // ---- UI → kernel ----

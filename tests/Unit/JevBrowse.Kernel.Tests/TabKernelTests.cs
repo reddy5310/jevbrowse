@@ -115,14 +115,14 @@ public class TabKernelTests : IDisposable
     public async Task Tabs_survive_restart_as_virtual()
     {
         for (int i = 0; i < 8; i++) await OpenAndActivate($"s{i}.test");
-        _k.SetProtection(_k.Tabs[2].Id, ProtectionFlags.UserPinned);
+        _k.SetProtection(_k.Tabs[2].Id, ProtectionFlags.KeepActive);
 
         var k2 = new TabKernel(new FakeLeaseManager(), new TabRepository(_db), new CheckpointRepository(_db), Path.GetTempPath());
         k2.Load();
         Assert.Equal(8, k2.Tabs.Count);
         Assert.All(k2.Tabs, t => Assert.Equal(ResourceState.Virtual, t.State));
         Assert.Equal(0, k2.LiveCount);
-        Assert.Equal(ProtectionFlags.UserPinned, k2.Tabs[2].Protection);
+        Assert.Equal(ProtectionFlags.KeepActive, k2.Tabs[2].Protection);
         Assert.Equal(_k.Tabs.Select(t => t.Id), k2.Tabs.Select(t => t.Id)); // order preserved
     }
 

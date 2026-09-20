@@ -9,7 +9,7 @@ namespace JevBrowse.Storage;
 /// </summary>
 public sealed class BrowserDb : IDisposable
 {
-    public const int LatestVersion = 8;
+    public const int LatestVersion = 9;
 
     private static readonly (int Version, string Sql)[] Steps =
     [
@@ -128,6 +128,13 @@ public sealed class BrowserDb : IDisposable
             UPDATE site_settings SET data_class = 4 WHERE data_class = 3;
             UPDATE site_settings SET data_class = 3 WHERE data_class = 2;
             UPDATE site_settings SET data_class = 2 WHERE data_class = 1;
+            """),
+        // Pin and Keep active were one control. Splitting them needs no data migration on the protection column:
+        // the old UserPinned bit (1 << 4) kept its value and is now named KeepActive, which is what it always did,
+        // so an existing "pinned" tab keeps its no-sleep preference. Placement starts empty because it never existed.
+        (9, """
+            ALTER TABLE tabs ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+            CREATE INDEX tabs_pinned ON tabs(workspace_id, pinned DESC, ordinal);
             """),
     ];
 

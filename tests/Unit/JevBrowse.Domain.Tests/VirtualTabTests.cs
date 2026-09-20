@@ -59,7 +59,7 @@ public class VirtualTabTests
     [InlineData(ProtectionFlags.WebRtcActive)]
     [InlineData(ProtectionFlags.DownloadActive)]
     [InlineData(ProtectionFlags.DirtyForm)]
-    [InlineData(ProtectionFlags.UserPinned)]
+    [InlineData(ProtectionFlags.KeepActive)]
     [InlineData(ProtectionFlags.NeverHibernateSite)]
     public void Protection_vetoes_automatic_demotion(ProtectionFlags flag)
     {
@@ -75,7 +75,7 @@ public class VirtualTabTests
     public void User_action_overrides_protection()
     {
         var t = Tab(ResourceState.Cold);
-        t.SetProtection(ProtectionFlags.UserPinned);
+        t.SetProtection(ProtectionFlags.KeepActive);
         Assert.True(t.TryTransition(ResourceState.Virtual, Cause.User, T).Allowed);
     }
 

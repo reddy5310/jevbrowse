@@ -48,8 +48,15 @@ public sealed class VirtualTab
     public Uri Url { get; private set; }
     public string Title { get; private set; }
     public ResourceState State { get; private set; } = ResourceState.Virtual;
-    /// <summary>Durable, user-chosen flags (pinned, never-hibernate).</summary>
+    /// <summary>Durable, user-chosen flags (keep active, never-hibernate for this site).</summary>
     public ProtectionFlags UserProtection { get; private set; }
+    /// <summary>
+    /// Placement only: pinned tabs sort to the top of the list and keep their position. It has no effect on
+    /// sleeping — a pinned tab sleeps like any other unless <see cref="ProtectionFlags.KeepActive"/> is also set.
+    /// Two wishes, two controls.
+    /// </summary>
+    public bool IsPinned { get; private set; }
+    public void SetPinned(bool pinned) => IsPinned = pinned;
     /// <summary>Transient flags detected from the live page (audible, download, dirty form). Cleared when the renderer goes away.</summary>
     public ProtectionFlags DetectedProtection { get; private set; }
     public ProtectionFlags Protection => UserProtection | DetectedProtection;

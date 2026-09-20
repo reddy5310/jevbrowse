@@ -155,10 +155,56 @@ public class HibernationTests : IDisposable
     public async Task Detected_flags_are_not_persisted_but_user_flags_are()
     {
         var a = await OpenAndActivate("a.test");
-        _k.SetProtection(a.Id, ProtectionFlags.UserPinned);
+        _k.SetProtection(a.Id, ProtectionFlags.KeepActive);
         _leases[a.Id].RaiseDetected(ProtectionFlags.DirtyForm);
         var row = new TabRepository(_db).LoadAll().Single();
-        Assert.Equal(ProtectionFlags.UserPinned, row.Protection);
+        Assert.Equal(ProtectionFlags.KeepActive, row.Protection);
+    }
+
+    [Fact]
+    public async Task Pinning_a_tab_does_not_stop_it_sleeping()
+    {
+        // These were one control, and the control that read as "keep this handy" also exempted the tab from the
+        // scheduler. Pinning is placement now, and placement alone.
+        var a = await OpenAndActivate("a.test");
+        _k.SetPinned(a.Id, true);
+
+        Assert.True(a.IsPinned);
+        Assert.Equal(ProtectionFlags.None, a.Protection);
+        Assert.True((await _k.VirtualizeAsync(a.Id, Cause.Scheduler)).Allowed);
+        Assert.True(a.IsPinned);                                   // and it is still pinned once asleep
+    }
+
+    [Fact]
+    public async Task Keeping_a_tab_active_does_not_move_it()
+    {
+        var a = await OpenAndActivate("a.test");
+        var b = await OpenAndActivate("b.test");
+        _k.SetProtection(b.Id, ProtectionFlags.KeepActive);
+
+        Assert.False((await _k.VirtualizeAsync(b.Id, Cause.Scheduler)).Allowed);   // it does not sleep
+        Assert.False(b.IsPinned);                                                  // and it did not jump the queue
+        Assert.Equal([a.Id, b.Id], _k.Tabs.Select(t => t.Id));
+    }
+
+    [Fact]
+    public async Task Both_choices_survive_a_restart_independently()
+    {
+        var pinnedOnly = await OpenAndActivate("pin.test");
+        var awakeOnly = await OpenAndActivate("awake.test");
+        _k.SetPinned(pinnedOnly.Id, true);
+        _k.SetProtection(awakeOnly.Id, ProtectionFlags.KeepActive);
+
+        var k2 = new TabKernel(new FakeLeaseManager(), new TabRepository(_db), new CheckpointRepository(_db), Path.GetTempPath());
+        k2.Load();
+
+        var pin = k2.Tabs.Single(t => t.Url.Host == "pin.test");
+        var awake = k2.Tabs.Single(t => t.Url.Host == "awake.test");
+        Assert.True(pin.IsPinned);
+        Assert.False(pin.UserProtection.HasFlag(ProtectionFlags.KeepActive));
+        Assert.True(awake.UserProtection.HasFlag(ProtectionFlags.KeepActive));
+        Assert.False(awake.IsPinned);
+        Assert.Equal(pin.Id, k2.Tabs[0].Id);                       // the pinned one comes back at the top
     }
 
     [Fact]

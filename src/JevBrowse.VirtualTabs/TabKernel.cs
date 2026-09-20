@@ -175,6 +175,7 @@ public sealed class TabKernel
         }
         var nt = new VirtualTab(ResourceId.New(), t.Url, t.Title, dest);
         nt.SetProtection(t.UserProtection);
+        nt.SetPinned(t.IsPinned);
         _tabs.Add(nt);
         Persist(nt);
         Changed?.Invoke(new("opened", nt.Id, nt.Url.Host));
@@ -272,6 +273,7 @@ public sealed class TabKernel
         {
             var t = new VirtualTab(row.Id, row.Url, row.Title, row.WorkspaceId);
             t.SetProtection(row.Protection);
+            t.SetPinned(row.Pinned);
             if (row.State == ResourceState.Archived) t.TryTransition(ResourceState.Archived, Cause.Recovery, row.LastStateChange);
             _tabs.Add(t);
         }
@@ -538,6 +540,25 @@ public sealed class TabKernel
         var t = Find(id);
         t.SetProtection(flags);
         Persist(t);
+        Changed?.Invoke(new("protection", id, t.UserProtection.ToString()));
+    }
+
+    /// <summary>
+    /// Placement, and nothing else. A pinned tab still sleeps when the scheduler needs the memory; keeping it awake
+    /// is <see cref="ProtectionFlags.KeepActive"/>, a separate choice the user makes separately.
+    /// </summary>
+    public void SetPinned(ResourceId id, bool pinned)
+    {
+        var t = Find(id);
+        if (t.IsPinned == pinned) return;
+        t.SetPinned(pinned);
+        // Pinned tabs rise to the top of their own workspace, and only within the slots that workspace already
+        // occupies — reordering one workspace must not shuffle the others.
+        var slots = _tabs.Select((x, i) => (x, i)).Where(p => p.x.WorkspaceId == t.WorkspaceId).Select(p => p.i).ToList();
+        var sorted = slots.Select(i => _tabs[i]).OrderByDescending(x => x.IsPinned).ToList();   // OrderBy is stable
+        for (int k = 0; k < slots.Count; k++) _tabs[slots[k]] = sorted[k];
+        foreach (var x in sorted) Persist(x);
+        Changed?.Invoke(new("pinned", id, pinned ? "pinned" : "unpinned"));
     }
 
     /// <summary>

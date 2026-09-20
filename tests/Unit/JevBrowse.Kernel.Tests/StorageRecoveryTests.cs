@@ -1,3 +1,4 @@
+using JevBrowse.Domain;
 using JevBrowse.Storage;
 using Microsoft.Data.Sqlite;
 
@@ -31,6 +32,28 @@ public class StorageRecoveryTests : IDisposable
         using var cmd = c.CreateCommand();
         cmd.CommandText = sql;
         return Convert.ToInt32(cmd.ExecuteScalar()) > 0;
+    }
+
+    [Fact]
+    public void Splitting_pin_from_keep_active_does_not_lose_an_existing_no_sleep_preference()
+    {
+        // An install from before the split: a tab the user "pinned", which at the time meant "never hibernate".
+        using (new BrowserDb(DbPath, targetVersion: 8)) { }
+        SqliteConnection.ClearAllPools();
+        Raw(DbPath, """
+            INSERT INTO tabs (id, url, title, state, protection, ordinal, last_state_change, workspace_id)
+            VALUES ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'https://a.test/', 'A', 4, 16, 0, 0,
+                    '00000000000000000000000000000000');
+            """);
+
+        using var db = new BrowserDb(DbPath);
+        Assert.Equal(BrowserDb.LatestVersion, db.UserVersion);
+
+        var row = new TabRepository(db).LoadAll().Single();
+        // The wish they expressed was "do not sleep", and that is what they still have.
+        Assert.True(row.Protection.HasFlag(ProtectionFlags.KeepActive));
+        // Placement is a new idea, so nobody is silently opted into it.
+        Assert.False(row.Pinned);
     }
 
     [Fact]

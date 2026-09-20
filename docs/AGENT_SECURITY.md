@@ -44,6 +44,18 @@ endpoint off revokes every session it granted.
 ## What the agent sees
 A **Page Map**, not the DOM: title, headings, links (text + href), form fields as name/type/label with **no values**, and up to 4 000 chars of main text. No script evaluation exists on the agent surface.
 
+### And what becomes of it
+The domain grant answers *where* an agent may act. It does not answer what happens to what it reads, and that part
+JevBrowse cannot enforce: once the page map crosses the local endpoint it belongs to the agent's own program, which
+may send it to its own servers or model. Your AI and search settings govern **JevBrowse's** cloud calls only — they
+do not reach into an agent's. The session approval dialog says this in those words, the class badge on a
+**Not assessed** page says an authorized agent may still access it, and every request is in the session audit.
+
+A page's data class is therefore not the control here; the grant is. `denyDataClasses` can still exclude classes
+(the default manifest excludes Authenticated, Sensitive and Secret), and SECRET is refused whatever the manifest
+says, but **Unknown is allowed by default** — a page we could not assess is not withheld from an agent you
+deliberately authorized for that domain.
+
 ## Audit
 Every request, allowed or denied, is appended to the session and to `data/agents/audit/<session>.jsonl` with time, action, target, verdict and reason.
 
