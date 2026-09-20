@@ -46,7 +46,8 @@ public sealed class AgentCeiling
         m.MaxLivePages = Math.Max(1, Math.Min(requested.MaxLivePages, Limits.MaxLivePages));
         m.SessionMinutes = Math.Max(1, Math.Min(requested.SessionMinutes, Limits.SessionMinutes));
         m.MaxActions = Math.Max(1, Math.Min(requested.MaxActions, Limits.MaxActions));
-        if (m.MaxLivePages != requested.MaxLivePages || m.SessionMinutes != requested.SessionMinutes || m.MaxActions != requested.MaxActions) adj.Add("budgets reduced to the approved ceiling");
+        m.MaxScreenshots = Math.Max(0, Math.Min(requested.MaxScreenshots, Limits.MaxScreenshots));
+        if (m.MaxLivePages != requested.MaxLivePages || m.SessionMinutes != requested.SessionMinutes || m.MaxActions != requested.MaxActions || m.MaxScreenshots != requested.MaxScreenshots) adj.Add("budgets reduced to the approved ceiling");
 
         // Identity: only throwaway containers, and always a fresh workspace (the gateway ignores the requested name for lookup).
         m.Container = GrantableContainers.Contains(requested.Container) && GrantableContainers.Contains(Limits.Container) ? requested.Container : IdentityContainer.Disposable;

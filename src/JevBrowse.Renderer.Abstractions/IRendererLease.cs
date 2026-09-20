@@ -10,6 +10,12 @@ public enum ReleaseDisposition { Suspend, Dispose }
 public sealed record NavigationInfo(Uri Url, string Title);
 
 /// <summary>A temporary live renderer bound to one logical resource. Renderer-engine agnostic.</summary>
+/// <summary>PNG bytes when the capture worked; otherwise null and a plain reason. Held in memory by the caller and never persisted.</summary>
+public sealed record ScreenshotResult(byte[]? Png, string Detail)
+{
+    public bool Ok => Png is { Length: > 0 };
+}
+
 public interface IRendererLease
 {
     ResourceId ResourceId { get; }
@@ -35,6 +41,14 @@ public interface IRendererLease
     void ApplyCheckpoint(Checkpoint checkpoint);
     /// <summary>Readable main text with boilerplate reduced (§8). Caller must clear Trust OS IndexContent first.</summary>
     Task<string?> ExtractReadableTextAsync(CancellationToken ct);
+
+    /// <summary>
+    /// A picture of the page as the engine renders it, returned in memory and nowhere else. This is NOT the thumbnail path: it never
+    /// looks at <see cref="AllowThumbnails"/>, never writes a file, and must work for a page that is not shown, without changing
+    /// visibility or taking focus. Whether a picture may be taken at all is decided by the caller (Trust OS and the agent grant); this
+    /// only takes it. Must not throw except for cancellation.
+    /// </summary>
+    Task<ScreenshotResult> CaptureScreenshotAsync(CancellationToken ct);
 
     // ---- Agent Gateway surface (§12). Structured and narrow: no script evaluation, no raw DOM. ----
     Task<PageMap?> GetPageMapAsync(CancellationToken ct);

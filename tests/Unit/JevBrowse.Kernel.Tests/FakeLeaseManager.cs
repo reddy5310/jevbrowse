@@ -84,8 +84,10 @@ public sealed class FakeLease(ResourceId id, Uri url, FakeLeaseManager owner) : 
     public bool AllowThumbnails { get; set; }
     /// <summary>Directory the fake writes to when it "captures" a deactivation thumbnail (mirrors WebView2Lease.SetVisible).</summary>
     public string? ThumbnailDir { get; set; }
+    public int ShowCalls { get; private set; }
     public void SetVisible(bool v)
     {
+        if (v) ShowCalls++;
         // Real adapter: leaving the foreground captures a screenshot, but only if the kernel allowed it.
         if (!v && IsVisible && AllowThumbnails && ThumbnailDir is not null && ThumbnailToWrite is not null)
         {
@@ -95,6 +97,27 @@ public sealed class FakeLease(ResourceId id, Uri url, FakeLeaseManager owner) : 
         IsVisible = v;
     }
     public void Navigate(Uri u) => Url = u;
+
+    // ---- screenshot (memory only; never the thumbnail path) ----
+    public int Screenshots { get; private set; }
+    public bool? VisibleAtLastCapture { get; private set; }
+    /// <summary>Awaited inside the capture: complete it later to make the capture slow, and to finish it after the session is gone.</summary>
+    public Func<Task>? ScreenshotGate { get; set; }
+    public byte[]? ScreenshotBytes { get; set; } = TinyPng(64, 32);
+    public static byte[] TinyPng(int width, int height, int pad = 0)
+    {
+        var b = new List<byte> { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52 };
+        b.AddRange([(byte)(width >> 24), (byte)(width >> 16), (byte)(width >> 8), (byte)width, (byte)(height >> 24), (byte)(height >> 16), (byte)(height >> 8), (byte)height]);
+        b.AddRange(new byte[5 + 4 + pad]);
+        return [.. b];
+    }
+    public async Task<ScreenshotResult> CaptureScreenshotAsync(CancellationToken ct)
+    {
+        Screenshots++;
+        VisibleAtLastCapture = IsVisible;
+        if (ScreenshotGate is not null) await ScreenshotGate();
+        return new(ScreenshotBytes, ScreenshotBytes is null ? "no image" : "captured");
+    }
     public Task<bool> TrySuspendAsync() { IsSuspended = true; return Task.FromResult(true); }
     public void Resume() => IsSuspended = false;
 

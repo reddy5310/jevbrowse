@@ -33,10 +33,7 @@ An agent's pages run live in the agent's own workspace, **never shown unless the
 
 ## Found, not fixed
 
-- **The Screenshot action returns no image in a Disposable session** ("no image (Captured: address, position and preview)"), with the page
-  shown (old gateway) or hidden (new). The action goes through the checkpoint thumbnail, and thumbnails are refused for ephemeral
-  containers, so a grantable action never works in the default container. Probably right for privacy but wrong as a feature; the fix is
-  to capture directly into an agent-owned folder that is deleted with the session. Left open, and the window check no longer depends on it.
+- ~~The Screenshot action returns no image in a Disposable session~~ **Resolved in ADR 0029** (its own in-memory operation; ordinary thumbnails were not enabled).
 - A hidden agent page is invisible to the person except through the Agent activity panel. That is the intent, but it means the panel is
   now the only place to see that an agent is at work; there is no badge on the toolbar yet.
 - Hidden WebView2 views may be throttled by the engine. Navigation and Read were fine on a plain page; heavier pages (timers, media,

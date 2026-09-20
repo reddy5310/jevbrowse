@@ -188,6 +188,7 @@ public sealed partial class MainWindow : Window
         // Agent Gateway: in-process always; the loopback HTTP host is opt-in from the Agents panel.
         var auditDir = Path.Combine(DataDir, "agents", "audit");
         Directory.CreateDirectory(auditDir);
+        AgentGateway.AgentGateway.RemoveLegacyScreenshotFiles(Path.Combine(DataDir, "agents", "screenshots"));   // pictures are memory-only now
         _agents = new AgentGateway.AgentGateway(_kernel, _leases, Path.Combine(DataDir, "agents", "screenshots"), ConfirmAgentActionAsync,
             (s, e) => File.AppendAllText(Path.Combine(auditDir, s.Id + ".jsonl"), JsonSerializer.Serialize(new { e.At, s.Manifest.Agent, e.Action, e.Target, e.Allowed, e.Reason }) + "\n"));
 
@@ -353,7 +354,7 @@ public sealed partial class MainWindow : Window
             });
         }
 
-        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--private-session-check") || args.Contains("--agent-check") || args.Contains("--agent-window-check") || args.Contains("--media-check") || args.Contains("--site-sweep") || args.Any(a => a.StartsWith("--join=", StringComparison.Ordinal)))
+        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--private-session-check") || args.Contains("--agent-check") || args.Contains("--agent-window-check") || args.Contains("--agent-screenshot-stage-check") || args.Contains("--media-check") || args.Contains("--site-sweep") || args.Any(a => a.StartsWith("--join=", StringComparison.Ordinal)))
         {
             Directory.CreateDirectory(Path.Combine(DataDir, "benchmarks"));
             try
@@ -364,6 +365,7 @@ public sealed partial class MainWindow : Window
                 else if (args.Contains("--media-check")) await RunMediaCheckAsync();
                 else if (args.Contains("--agent-check")) await RunAgentCheckAsync();
                 else if (args.Contains("--agent-window-check")) await RunAgentWindowCheckAsync();
+                else if (args.Contains("--agent-screenshot-stage-check")) await RunAgentScreenshotStageCheckAsync();
                 else if (args.Contains("--privacy-check")) await RunPrivacyCheckAsync();
                 else if (args.Contains("--memory-lab")) await RunMemoryLabAsync();
                 else if (args.Contains("--restore-bench")) await RunRestoreBenchAsync();
@@ -1368,12 +1370,26 @@ public sealed partial class MainWindow : Window
         var trackingAfter = _restoringId;
         await Task.Delay(1200);
         var read = await _agents.ExecuteAsync(session, new AgentRequest(AgentAction.Read), default);
-        var shot = await _agents.ExecuteAsync(session, new AgentRequest(AgentAction.Screenshot), default);
-
         string Vis(ResourceId id) => _leases!.TryGet(id, out var l) ? ((WebView2Lease)l).View.Visibility.ToString() : "no renderer";
+        // Hidden capture: the page must stay hidden, the person's page shown, focus and the foreground window unmoved.
+        var staged = new List<StagedCaptureFacts>();
+        WebView2Lease.StagedObserver = f => staged.Add(f);
+        var focusBefore = Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(Content.XamlRoot);
+        var foregroundBefore = NativeForeground.Get();
+        var agentTabBefore = k.Tabs.FirstOrDefault(t => session.Pages.Contains(t.Id));
+        var shownBefore = agentTabBefore is null ? "no page" : Vis(agentTabBefore.Id);
+        var shot = await _agents.ExecuteAsync(session, new AgentRequest(AgentAction.Screenshot), default);
+        var focusAfter = Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(Content.XamlRoot);
+        var foregroundAfter = NativeForeground.Get();
+        WebView2Lease.StagedObserver = null;
+
         var agentTab = k.Tabs.FirstOrDefault(t => session.Pages.Contains(t.Id));
         var agentTabForRestore = agentTab;
-        var shotBytes = shot.ScreenshotPath is not null && File.Exists(shot.ScreenshotPath) ? new FileInfo(shot.ScreenshotPath).Length : 0;
+        var shotBytes = (long)(shot.Screenshot?.Length ?? 0);
+        // Not blank: a real capture of a page has more than one distinct byte value in its pixel data. (A blank surface compresses to nearly nothing.)
+        var distinct = shot.Screenshot is null ? 0 : shot.Screenshot.Distinct().Count();
+        var pngOk = shot.Screenshot is { Length: > 24 } sb && sb[0] == 0x89 && sb[1] == 0x50 && sb[2] == 0x4E && sb[3] == 0x47;
+        var shotFolderExists = Directory.Exists(Path.Combine(DataDir, "agents", "screenshots"));
         var result = new
         {
             personsTabStillActive = k.Active?.Id == mine.Id,
@@ -1397,14 +1413,73 @@ public sealed partial class MainWindow : Window
                    && agentTabForRestore is not null && tracked.All(t => t is null || t == mine.Id) && tracked.Count(t => t == mine.Id) > 0 && mineRestored.Task.IsCompleted
                    && panelAfter == "Collapsed" && trackingAfter is null
                    && agentTab is not null && Vis(agentTab.Id) == "Collapsed" && agentTab.State.HasLiveRenderer()
-                   && nav.Ok && read.Ok && (read.Page?.TextExcerpt?.Length ?? 0) > 20,
+                   && nav.Ok && read.Ok && (read.Page?.TextExcerpt?.Length ?? 0) > 20
+                   && shot.Ok && pngOk && shotBytes > 2000 && distinct > 8 && !shotFolderExists
+                   && shownBefore == "Collapsed" && (agentTab is null || Vis(agentTab.Id) == "Collapsed") && ReferenceEquals(focusBefore, focusAfter) && foregroundBefore == foregroundAfter
+                   && staged.Count > 0 && staged.All(f => !f.OverlapsWindow && !f.HitTestVisible && !f.TabStop),
             // Not part of the verdict: Screenshot returns no image in a Disposable session (thumbnails are refused there), with the page shown or hidden. A separate, older gap.
-            screenshotNote = "measured, not judged here: see docs/adr/0027",
+            screenshotIsPng = pngOk,
+            screenshotDistinctByteValues = distinct,
+            screenshotMessage = shot.Message,
+            screenshotWroteAFile = shotFolderExists,
+            screenshotAgentPageShownBefore = shownBefore,
+            screenshotAgentPageShownAfter = agentTab is null ? "no page" : Vis(agentTab.Id),
+            screenshotFocusUnchanged = ReferenceEquals(focusBefore, focusAfter),
+            screenshotStagedGeometry = staged.Select(f => new { f.X, f.Y, f.Width, f.Height, f.WindowWidth, f.WindowHeight, f.OverlapsWindow, f.HitTestVisible, f.TabStop }).ToList(),
+            screenshotNeverOverlappedTheWindow = staged.Count > 0 && staged.All(f => !f.OverlapsWindow && !f.HitTestVisible && !f.TabStop),
+            screenshotForegroundWindowUnchanged = foregroundBefore == foregroundAfter,
             audit = session.Audit.Select(a => $"{(a.Allowed ? "ok" : "no")} {a.Action} {a.Target} - {a.Reason}").ToList(),
         };
+        if (shot.Screenshot is not null) await File.WriteAllBytesAsync(Path.Combine(DataDir, "benchmarks", "agent-screenshot-evidence.png"), shot.Screenshot);   // for a person to look at; the gateway itself wrote nothing
         await host.StopAsync(session);
         var file = Path.Combine(DataDir, "benchmarks", $"agent-window-check-{DateTime.Now:yyyyMMdd-HHmmss}.json");
         await File.WriteAllTextAsync(file, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    /// <summary>
+    /// Takes several hidden screenshots while scripts/agent-screenshot-stage-check.ps1 watches the person's window from OUTSIDE the
+    /// app. The person's page is static (the welcome page). The script compares frames of the window taken during each capture with
+    /// frames taken before, so "the page was never shown, even for a moment" is observed rather than assumed. The begin and end of
+    /// each capture are written down in wall-clock milliseconds so the frames can be lined up with them.
+    /// </summary>
+    private async Task RunAgentScreenshotStageCheckAsync()
+    {
+        var k = _kernel!;
+        var dir = Path.Combine(DataDir, "benchmarks"); Directory.CreateDirectory(dir);
+        await Task.Delay(4000);
+        var ceiling = new AgentCeiling { Limits = new AgentManifest { Agent = "ceiling", AllowDomains = ["example.org"], Actions = [AgentAction.Navigate, AgentAction.Read, AgentAction.Screenshot], SessionMinutes = 10, MaxLivePages = 2, MaxActions = 60, MaxScreenshots = 20 } };
+        using var host = new LocalAgentHost(_agents!, ceiling);
+        var (session, _) = await host.GrantAsync(new AgentManifest { Agent = "stage-probe", AllowDomains = ["example.org"], Actions = [AgentAction.Navigate, AgentAction.Read, AgentAction.Screenshot], SessionMinutes = 10, MaxLivePages = 2, MaxScreenshots = 20 });
+        var nav = await _agents!.ExecuteAsync(session, new AgentRequest(AgentAction.Navigate, "https://example.org/"), default);
+        await Task.Delay(3000);
+        await File.WriteAllTextAsync(Path.Combine(dir, "stage-ready.txt"), "ready");
+        await Task.Delay(3500);                                   // the script takes its baseline frames now
+        static long Now() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var spans = new List<object>();
+        var stagedFacts = new List<StagedCaptureFacts>();
+        WebView2Lease.StagedObserver = f => stagedFacts.Add(f);
+        for (var i = 0; i < 6; i++)
+        {
+            var t0 = Now();
+            var shot = await _agents.ExecuteAsync(session, new AgentRequest(AgentAction.Screenshot), default);
+            var t1 = Now();
+            spans.Add(new { beginMs = t0, endMs = t1, ok = shot.Ok, bytes = shot.Screenshot?.Length ?? 0, message = shot.Message });
+            await Task.Delay(700);
+        }
+        await Task.Delay(1500);
+        var agentTab = k.Tabs.FirstOrDefault(t => session.Pages.Contains(t.Id));
+        var result = new
+        {
+            navigateOk = nav.Ok,
+            personsTabActive = k.Active is not null && k.Active.Url.Scheme == "jev",
+            agentPageShownAtEnd = agentTab is null ? "no page" : (_leases!.TryGet(agentTab.Id, out var l) ? ((WebView2Lease)l).View.Visibility.ToString() : "no renderer"),
+            stagedGeometry = stagedFacts.Select(f => new { f.X, f.Y, f.Width, f.Height, f.WindowWidth, f.WindowHeight, f.OverlapsWindow, f.HitTestVisible, f.TabStop }).ToList(),
+            stagedNeverOverlappedTheWindow = stagedFacts.Count > 0 && stagedFacts.All(f => !f.OverlapsWindow && !f.HitTestVisible && !f.TabStop),
+            spans,
+        };
+        WebView2Lease.StagedObserver = null;
+        await host.StopAsync(session);
+        await File.WriteAllTextAsync(Path.Combine(dir, "stage-result.json"), JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
     }
 
     /// <summary>
@@ -2553,4 +2628,11 @@ public sealed partial class MainWindow : Window
         await File.WriteAllTextAsync(file, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
         StatusText.Text = $"report written: {file}";
     }
+}
+
+/// <summary>The window that has the keyboard, so a check can prove a capture did not move it.</summary>
+internal static class NativeForeground
+{
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+    public static long Get() => GetForegroundWindow().ToInt64();
 }

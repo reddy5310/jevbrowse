@@ -19,13 +19,16 @@ public sealed class AgentManifest
     public int MaxLivePages { get; set; } = 3;
     public int SessionMinutes { get; set; } = 60;
     public int MaxActions { get; set; } = 200;
+    /// <summary>How many pictures of pages this session may take. A picture shows everything on screen, so it is budgeted on its own.</summary>
+    public int MaxScreenshots { get; set; } = 10;
     /// <summary>Container for a workspace the gateway creates. Disposable by default: the agent never sees user cookies.</summary>
     [JsonConverter(typeof(JsonStringEnumConverter))] public IdentityContainer Container { get; set; } = IdentityContainer.Disposable;
 }
 
 public sealed record AuditEntry(DateTimeOffset At, string Action, string Target, bool Allowed, string Reason);
 public sealed record AgentRequest(AgentAction Action, string? Url = null, string? Selector = null, string? Text = null);
-public sealed record AgentResponse(bool Ok, string Message, PageMap? Page = null, string? ScreenshotPath = null);
+/// <param name="Screenshot">PNG bytes, in memory only. There is no file: nothing to clean up after Stop, expiry or a crash.</param>
+public sealed record AgentResponse(bool Ok, string Message, PageMap? Page = null, string? ScreenshotPath = null, byte[]? Screenshot = null);
 
 public sealed class AgentSession : IDisposable
 {
@@ -35,6 +38,7 @@ public sealed class AgentSession : IDisposable
     public required DateTimeOffset ExpiresAt { get; init; }
     public required ContextId WorkspaceId { get; init; }
     public int ActionsUsed { get; internal set; }
+    public int ScreenshotsTaken { get; internal set; }
     public bool Closed { get; internal set; }
     /// <summary>Cleanup has actually run. Distinct from <see cref="Closed"/>: a session can be refused (closed) before its pages are released.</summary>
     public bool CleanedUp { get; internal set; }
@@ -238,11 +242,33 @@ public sealed partial class AgentGateway : IAgentGateway
             }
             case AgentAction.Screenshot:
             {
-                var dir = Path.Combine(_screenshotDir, s.Id);
-                var shot = await lease.CaptureCheckpointAsync(dir, ct);
-                var path = shot.Checkpoint?.ThumbnailPath;
-                Record(s, "screenshot", current.Url.ToString(), path is not null, path ?? $"no image ({shot.Outcome}: {shot.Detail})");
-                return new(path is not null, path ?? $"no image: {shot.Detail}", null, path);
+                // A picture shows everything on screen, including what Read is careful not to hand over, so it has checks of its own on
+                // top of the session, domain and data-class checks above: nothing with a password or payment field on it, a budget, a size
+                // cap, and a second look after the capture in case the session ended or the page changed while the engine was drawing.
+                if (SecretOnScreen(current)) return Deny("hard:secret_on_screen");
+                if (s.ScreenshotsTaken >= s.Manifest.MaxScreenshots) return Deny("screenshot_quota_exhausted");
+                var pending = lease.CaptureScreenshotAsync(ct);
+                // The engine cannot be told to stop, but nothing it produces later is used: if the session ends first we stop waiting, and
+                // whatever it eventually returns is dropped unread. Its failure, if any, is observed so it cannot surface later.
+                _ = pending.ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
+                ScreenshotResult shot;
+                try { shot = await pending.WaitAsync(ct); }
+                catch (OperationCanceledException)
+                {
+                    Record(s, "screenshot", current.Url.ToString(), false, "cancelled: the session ended before the picture was finished; nothing was kept");
+                    throw;
+                }
+                if (s.Closed || ct.IsCancellationRequested) { Record(s, "screenshot", current.Url.ToString(), false, "discarded: the session ended while the picture was being taken"); return new(false, "session_closed"); }
+                var after = _kernel.Tabs.FirstOrDefault(t => t.Id == cur);
+                if (after is null || !DomainAllowed(s.Manifest, after.Url.Host) || SecretOnScreen(after) || s.Manifest.DenyDataClasses.Contains(_kernel.ContentClassOf(after)))
+                    return Deny("screenshot_discarded:page_changed");
+                if (!shot.Ok) { Record(s, "screenshot", current.Url.ToString(), false, $"no image ({shot.Detail})"); return new(false, $"no image: {shot.Detail}"); }
+                var png = shot.Png!;
+                if (!IsPng(png, out var w, out var h)) return Deny("screenshot_not_an_image");
+                if (png.Length > MaxScreenshotBytes) return Deny("screenshot_too_large");
+                s.ScreenshotsTaken++;
+                Record(s, "screenshot", current.Url.ToString(), true, $"{w}x{h}, {png.Length / 1024} KB, held in memory only");
+                return new(true, "screenshot", null, null, png);
             }
             default: return Deny("unknown_action");
         }
@@ -308,6 +334,40 @@ public sealed partial class AgentGateway : IAgentGateway
             Record(s, "quota", victim.Id.ToString(), true, "virtualized LRU agent page");
         }
         return true;
+    }
+
+    /// <summary>The largest picture handed to an agent. A page that renders bigger than this is refused rather than shrunk or truncated.</summary>
+    public const int MaxScreenshotBytes = 4 * 1024 * 1024;
+
+    private bool SecretOnScreen(VirtualTab t)
+    {
+        var sig = _kernel.SignalsOf(t);
+        return sig.HasFlag(PageSignals.PasswordField) || sig.HasFlag(PageSignals.PaymentField);
+    }
+
+    private static bool IsPng(byte[] b, out int width, out int height)
+    {
+        width = height = 0;
+        if (b.Length < 24 || b[0] != 0x89 || b[1] != 0x50 || b[2] != 0x4E || b[3] != 0x47) return false;
+        width = (b[16] << 24) | (b[17] << 16) | (b[18] << 8) | b[19];
+        height = (b[20] << 24) | (b[21] << 16) | (b[22] << 8) | b[23];
+        return width > 0 && height > 0;
+    }
+
+    /// <summary>
+    /// Screenshots are no longer written to disk. Earlier builds put them in an <c>agents/screenshots</c> folder under the profile, so
+    /// on start-up anything left there is removed. Only a folder literally named "screenshots" is touched.
+    /// </summary>
+    public static int RemoveLegacyScreenshotFiles(string screenshotDir)
+    {
+        try
+        {
+            if (!string.Equals(Path.GetFileName(screenshotDir.TrimEnd('\\', '/')), "screenshots", StringComparison.Ordinal) || !Directory.Exists(screenshotDir)) return 0;
+            var n = Directory.EnumerateFiles(screenshotDir, "*", SearchOption.AllDirectories).Count();
+            Directory.Delete(screenshotDir, recursive: true);
+            return n;
+        }
+        catch (Exception) { return 0; }   // best effort: a leftover file is not worth failing start-up over
     }
 
     private async Task<bool> ActivateAndWaitAsync(ResourceId id, CancellationToken ct)

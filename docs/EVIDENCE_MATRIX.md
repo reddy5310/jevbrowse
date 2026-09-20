@@ -7,7 +7,7 @@ Every claim JevBrowse makes, and the strongest evidence behind it today. Levels,
 - **Real engine**: a benchmark/check drives actual WebView2 renderers and inspects real disk/DB state (`--privacy-check`, `--restore-bench`, …).
 - **Release-validated**: verified on the packaged, signed build on more than one machine. **Nothing is at this level yet** (builds are unsigned and tested on one machine).
 
-Last updated 2026-09-20 after P3, the text-size pass and agent window isolation (ADR 0024-0027). 357 unit tests.
+Last updated 2026-09-20 after P3, text size, agent window isolation, background admission and agent screenshots (ADR 0024-0029). 383 unit tests.
 
 | Claim | Level | Evidence | Known gap |
 |---|---|---|---|
@@ -48,6 +48,8 @@ Last updated 2026-09-20 after P3, the text-size pass and agent window isolation 
 | **Nothing depends on Windows transparency effects** | Real window, real setting, pixels | `scripts/transparency-check.ps1` (only EnableTransparency; restored and read back): app confirms the setting; on vs off differ in 0.01% of pixels; title contrast 16.7:1 / 16.5:1 in both; gate PASS in both | Title-bar text only was measured for contrast; **real high-contrast theme not run** (needs a desktop-wide change; not authorised) |
 | **The UI holds up at larger Windows Text size (125/150/225%)** | Real window, real keys, real setting | `scripts/text-size-check.ps1` changes only Text size (original recorded, restored and read back): gate at 1422 and 700 px, sidebar shown/hidden, plus permission and New-workspace dialogs, plus captures looked at. First run failed everywhere (toolbar buttons pushed off-window, tab list squeezed out at 225%); fixed with measured layout and a wrapping panel; final run 0 failures | **Display scaling (DPI) is untested.** At 225% the sidebar cuts workspace and tab names with an ellipsis. High contrast and reduced transparency not run |
 | **An agent never moves the person's window** | Unit (with negative control) + real engine + real endpoint | `AgentDoesNotMoveTheWindowTests` (7; 3 fail against the old gateway); `--agent-window-check`: person's tab/workspace/page unchanged, agent page live and hidden, navigate and Read work; `--agent-check` scope and revocation still pass | **Screenshot returns no image in a Disposable session** (old and new behaviour alike). Heavy pages in a hidden view unmeasured. No toolbar indicator that an agent is working |
+| **Background agent work never costs the person a page or their restore panel** | Unit (mutation-checked) + real engine | `BackgroundAdmissionTests` (10), gateway refusal tests, `--agent-window-check` with the person's restore concurrent with an agent navigate | The kernel does one thing at a time: a slow background acquire can delay a foreground click by that time |
+| **Agent Screenshot is a separate, checked, memory-only operation that works on a hidden page** | Unit + real engine + geometry with positive control | `AgentScreenshotTests` (14): grant, budget, password refusal, size cap, cancel/expiry/late completion, HTTP base64, no files; real 20 KB PNG of a hidden page; staged control measured outside the window (on-canvas mutant fails) | **Pixel-level observation from outside was blind (black frames) and is unproven**; the earlier PASS is void. Ordinary thumbnails were not enabled |
 | CI enforces performance regressions | **Designed** | perf job is informational | No stable benchmark machine; no PR gate |
 | Signed, updatable release | **Designed** | portable zip only | No code signing, no MSIX, no security-update path |
 

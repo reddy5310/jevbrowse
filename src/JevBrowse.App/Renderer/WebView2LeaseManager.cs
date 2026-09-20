@@ -178,6 +178,9 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
     }
 }
 
+/// <summary>Where the control was while a screenshot had it staged. <c>OverlapsWindow</c> is what must be false for nothing of it to be visible.</summary>
+public sealed record StagedCaptureFacts(double X, double Y, double Width, double Height, double WindowWidth, double WindowHeight, bool OverlapsWindow, bool HitTestVisible, bool TabStop);
+
 public sealed class WebView2Lease : IRendererLease
 {
     // Narrow, origin-agnostic bridge (Table A.11): the page can only tell us fixed strings. No host objects exposed.
@@ -390,7 +393,9 @@ public sealed class WebView2Lease : IRendererLease
     public WebView2 View { get; }
     public ResourceId ResourceId { get; }
     public bool IsSuspended => View.CoreWebView2?.IsSuspended ?? false;
-    public bool IsVisible => View.Visibility == Visibility.Visible;
+    private bool _kernelVisible;
+    /// <summary>What the kernel asked for. Not the control's literal state: a screenshot may stage the control briefly, and that must never read as "shown".</summary>
+    public bool IsVisible => _kernelVisible;
     public void Navigate(Uri url) => View.CoreWebView2.Navigate(url.ToString());
 
     /// <summary>
@@ -404,6 +409,8 @@ public sealed class WebView2Lease : IRendererLease
         // Pixels are only ever captured with the kernel's permission for the CURRENT class and container.
         if (!visible && IsVisible && AllowThumbnails && View.CoreWebView2 is not null)
             _pendingThumbnail = CaptureThumbnailAsync();
+        _kernelVisible = visible;
+        if (_captureStaged) return;   // the capture puts the control back to what the kernel wants when it finishes
         View.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
     }
 
@@ -438,6 +445,81 @@ public sealed class WebView2Lease : IRendererLease
     }
 
     public void Resume() => View.CoreWebView2?.Resume();
+
+    /// <summary>
+    /// Asks the engine to render the page's own surface into memory (DevTools Page.captureScreenshot). That works for a page that is
+    /// not shown and needs no focus, unlike a preview of the control on screen; it does not touch visibility, focus or the thumbnail
+    /// path (which Trust OS refuses for private and disposable containers, and which this deliberately does not enable).
+    /// </summary>
+    private bool _captureStaged;
+
+    /// <summary>
+    /// Told, while a capture has the control staged, where it actually is: its rectangle relative to the window's content, the window's
+    /// size, and whether it can take clicks or focus. Lets a check measure "nothing of it can be seen or reached" as geometry instead of
+    /// assuming it. Null in normal use.
+    /// </summary>
+    public static Action<StagedCaptureFacts>? StagedObserver { get; set; }
+
+    /// <summary>
+    /// A control that is not shown produces no frames, and a capture waits for a frame: on the real engine every way of asking a
+    /// collapsed WebView2 for a picture (as is, lifecycle "active", focus emulation, an emulated viewport) timed out. So a page that
+    /// is not shown is drawn for a moment OFF-CANVAS: given a real size and placed far outside the window's client area, where it
+    /// is clipped and nothing of it can be seen, cannot be clicked and cannot take focus, then put back exactly as it was. A page the
+    /// kernel is already showing is simply captured. Never the thumbnail path, never a file.
+    /// </summary>
+    public async Task<ScreenshotResult> CaptureScreenshotAsync(CancellationToken ct)
+    {
+        var core = View.CoreWebView2;
+        if (core is null) return new(null, "the renderer is gone");
+        if (_kernelVisible) return await CaptureFromEngineAsync(core, 6, ct);
+        if (_captureStaged) return new(null, "a picture is already being taken of this page");
+        var view = View;
+        var saved = (view.Visibility, view.Width, view.Height, view.Margin, view.HorizontalAlignment, view.VerticalAlignment, view.IsHitTestVisible, view.IsTabStop);
+        _captureStaged = true;
+        try
+        {
+            view.IsHitTestVisible = false;
+            view.IsTabStop = false;
+            view.HorizontalAlignment = HorizontalAlignment.Left;
+            view.VerticalAlignment = VerticalAlignment.Top;
+            view.Width = 1280;
+            view.Height = 800;
+            view.Margin = new Thickness(-30000, -30000, 0, 0);
+            view.Visibility = Visibility.Visible;
+            await Task.Delay(200, ct);                        // long enough for the engine to produce a first frame
+            if (StagedObserver is { } observe && view.XamlRoot?.Content is UIElement root)
+            {
+                var bounds = view.TransformToVisual(root).TransformBounds(new Windows.Foundation.Rect(0, 0, view.Width, view.Height));
+                var window = new Windows.Foundation.Rect(0, 0, root.ActualSize.X, root.ActualSize.Y);
+                var overlaps = bounds.X < window.Width && bounds.X + bounds.Width > 0 && bounds.Y < window.Height && bounds.Y + bounds.Height > 0;
+                observe(new StagedCaptureFacts(bounds.X, bounds.Y, bounds.Width, bounds.Height, window.Width, window.Height, overlaps, view.IsHitTestVisible, view.IsTabStop));
+            }
+            return await CaptureFromEngineAsync(core, 8, ct);
+        }
+        finally
+        {
+            view.Visibility = Visibility.Collapsed;           // first, so nothing flashes while the rest is put back
+            view.Margin = saved.Margin; view.Width = saved.Width; view.Height = saved.Height;
+            view.HorizontalAlignment = saved.HorizontalAlignment; view.VerticalAlignment = saved.VerticalAlignment;
+            view.IsHitTestVisible = saved.IsHitTestVisible; view.IsTabStop = saved.IsTabStop;
+            _captureStaged = false;
+            view.Visibility = _kernelVisible ? Visibility.Visible : Visibility.Collapsed;   // what the kernel wants now, which may have changed meanwhile
+        }
+    }
+
+    private static async Task<ScreenshotResult> CaptureFromEngineAsync(CoreWebView2 core, int seconds, CancellationToken ct)
+    {
+        try
+        {
+            var json = await core.CallDevToolsProtocolMethodAsync("Page.captureScreenshot", "{\"format\":\"png\",\"fromSurface\":true}").AsTask().WaitAsync(TimeSpan.FromSeconds(seconds), ct);
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("data", out var data) && data.GetString() is { Length: > 0 } b64) return new(Convert.FromBase64String(b64), "captured");
+            return new(null, "the engine returned no image");
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (TimeoutException) { return new(null, "the page did not produce a picture in time"); }
+        catch (Exception ex) { return new(null, "capture failed: " + ex.Message); }
+    }
 
     public async Task<CaptureResult> CaptureCheckpointAsync(string thumbnailDir, CancellationToken ct)
     {
