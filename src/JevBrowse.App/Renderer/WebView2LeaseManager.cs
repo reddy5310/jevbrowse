@@ -277,23 +277,31 @@ public sealed class WebView2Lease : IRendererLease
                 case "jev:payment-field": lease.SetSignals(lease._signals | PageSignals.PaymentField); break;
                 case "jev:authenticated": lease.SetSignals((lease._signals | PageSignals.Authenticated) & ~PageSignals.ContentRendered); break;
                 case "jev:content-rendered": if (!lease._signals.HasFlag(PageSignals.Authenticated)) lease.SetSignals(lease._signals | PageSignals.ContentRendered); break;
-                default: lease.OnMediaMessage(msg); break;
+                default: lease.OnMediaMessage(msg, null); break;
             }
         };
         // A call can live in an iframe (embedded Meet, a widget). CoreWebView2.WebMessageReceived only carries the
         // TOP-LEVEL document's messages, so without this an embedded, microphone-only call reports nothing at all
-        // and gets hibernated. Each frame reports under its own document id and is dropped when it is destroyed.
-        core.FrameCreated += (_, fe) =>
+        // and gets hibernated. Each frame reports under its own document id, and destroying a frame is the evidence
+        // that its media is gone — one frame stopping never touches a sibling's protection.
+        //
+        // Frames nest. CoreWebView2Frame raises its own FrameCreated for children, so this subscribes recursively:
+        // a call two iframes deep is still a call.
+        void Watch(CoreWebView2Frame frame)
         {
-            var frame = fe.Frame;
             frame.WebMessageReceived += (_, me) =>
             {
-                try { lease.OnMediaMessage(me.TryGetWebMessageAsString()); } catch (Exception) { }
+                try { lease.OnMediaMessage(me.TryGetWebMessageAsString(), frame); } catch (Exception) { }
             };
-            // No need to map frames to document ids: a destroyed frame stops its heartbeat and expires. Sweeping
-            // here just makes it prompt.
-            frame.Destroyed += (_, _) => lease.SweepMedia();
-        };
+            frame.Destroyed += (_, _) => lease.DropFrameMedia(frame);
+            frame.FrameCreated += (_, child) => Watch(child.Frame);
+        }
+        core.FrameCreated += (_, fe) => Watch(fe.Frame);
+
+        // Confirmed replacement of the top-level document. ContentLoading fires only once new content is actually
+        // committed, so a CANCELLED navigation does not reach here and leaves a running call alone.
+        core.ContentLoading += (_, _) => lease.DropTopLevelMedia();
+        core.ProcessFailed += (_, _) => lease.DropAllMedia();
         await core.AddScriptToExecuteOnDocumentCreatedAsync(PageScript);
         return lease;
     }
@@ -544,25 +552,48 @@ public sealed class WebView2Lease : IRendererLease
     // ---- live capture and calls, per document ----
     //
     // Keyed by the reporting document, never by the tab: a tab can hold a top-level page and several frames, each
-    // with its own media, and one of them stopping must not clear another's protection. Entries are refreshed by a
-    // heartbeat and expire, so a page that navigates away, crashes or is discarded cannot leave "in a call" stuck on.
+    // with its own media, and one of them stopping must not clear another's protection.
+    //
+    // A MISSING HEARTBEAT DOES NOT MEAN THE MEDIA STOPPED. A live document can stop running JavaScript for a while
+    // — one long main-thread task is enough — while the microphone stays open. Treating silence as "finished" would
+    // hand the scheduler a live capture to dispose. So expiry only downgrades an entry to UNCERTAIN, which still
+    // blocks automatic demotion. Protection is released on evidence, never on absence of it:
+    //   • the page says it stopped (jev:media-end), or
+    //   • the document is confirmed gone — its frame was destroyed, the top-level document was replaced, or the
+    //     renderer process failed.
+    // A user's own "Put to sleep" is unaffected: Cause.User overrides every protection.
+    //
+    // Elapsed time is monotonic (Stopwatch), not wall-clock: a clock adjustment must not expire a live call.
 
-    private readonly Dictionary<string, (ProtectionFlags Kinds, DateTimeOffset Seen)> _media = [];
-    private static readonly TimeSpan MediaHeartbeatGrace = TimeSpan.FromSeconds(6);   // 3 missed 2 s beats
+    private sealed class MediaEntry
+    {
+        public ProtectionFlags Kinds;
+        public long SeenMs;
+        public bool Uncertain;
+        public CoreWebView2Frame? Frame;   // null = the top-level document
+    }
+
+    private static readonly System.Diagnostics.Stopwatch MediaClock = System.Diagnostics.Stopwatch.StartNew();
+    private const long MediaHeartbeatGraceMs = 6000;   // 3 missed 2 s beats
+    private readonly Dictionary<string, MediaEntry> _media = [];
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _mediaSweeper;
 
-    internal void OnMediaMessage(string? msg)
+    /// <summary>True when something we cannot currently confirm might still be capturing.</summary>
+    internal bool MediaStatusUncertain => _media.Values.Any(e => e.Uncertain);
+
+    internal void OnMediaMessage(string? msg, CoreWebView2Frame? frame = null)
     {
         if (msg is null) return;
         if (msg.StartsWith("jev:media-end:", StringComparison.Ordinal))
         {
-            if (_media.Remove(msg["jev:media-end:".Length..])) ApplyMedia();
+            if (_media.Remove(msg["jev:media-end:".Length..])) ApplyMedia();   // the page said so: evidence
             return;
         }
         if (!msg.StartsWith("jev:media:", StringComparison.Ordinal)) return;
         var rest = msg["jev:media:".Length..];
         var split = rest.IndexOf(':');
         if (split <= 0) return;
+        var docId = rest[..split];
         var kinds = ProtectionFlags.None;
         foreach (var k in rest[(split + 1)..].Split(',', StringSplitOptions.RemoveEmptyEntries)) kinds |= k switch
         {
@@ -572,10 +603,33 @@ public sealed class WebView2Lease : IRendererLease
             "peer" => ProtectionFlags.WebRtcActive,
             _ => ProtectionFlags.None,
         };
-        if (kinds == ProtectionFlags.None) { if (_media.Remove(rest[..split])) ApplyMedia(); return; }
-        _media[rest[..split]] = (kinds, DateTimeOffset.UtcNow);
+        if (kinds == ProtectionFlags.None) { if (_media.Remove(docId)) ApplyMedia(); return; }
+        _media[docId] = new MediaEntry { Kinds = kinds, SeenMs = MediaClock.ElapsedMilliseconds, Frame = frame };
         ApplyMedia();
         StartSweeper();
+    }
+
+    /// <summary>The top-level document has been replaced, so anything the previous one was doing is gone with it.</summary>
+    private void DropTopLevelMedia()
+    {
+        var gone = _media.Where(kv => kv.Value.Frame is null).Select(kv => kv.Key).ToList();
+        foreach (var k in gone) _media.Remove(k);
+        if (gone.Count > 0) ApplyMedia();
+    }
+
+    /// <summary>The renderer process died: nothing it was doing survived, so nothing it claimed should either.</summary>
+    internal void DropAllMedia()
+    {
+        if (_media.Count == 0) return;
+        _media.Clear();
+        ApplyMedia();
+    }
+
+    internal void DropFrameMedia(CoreWebView2Frame frame)
+    {
+        var gone = _media.Where(kv => ReferenceEquals(kv.Value.Frame, frame)).Select(kv => kv.Key).ToList();
+        foreach (var k in gone) _media.Remove(k);
+        if (gone.Count > 0) ApplyMedia();
     }
 
     private void StartSweeper()
@@ -589,10 +643,8 @@ public sealed class WebView2Lease : IRendererLease
 
     internal void SweepMedia()
     {
-        var cutoff = DateTimeOffset.UtcNow - MediaHeartbeatGrace;
-        var stale = _media.Where(kv => kv.Value.Seen < cutoff).Select(kv => kv.Key).ToList();
-        foreach (var k in stale) _media.Remove(k);
-        if (stale.Count > 0) ApplyMedia();
+        var cutoff = MediaClock.ElapsedMilliseconds - MediaHeartbeatGraceMs;
+        foreach (var e in _media.Values) e.Uncertain = e.SeenMs < cutoff;   // downgraded, never dropped
         if (_media.Count == 0) { _mediaSweeper?.Stop(); _mediaSweeper = null; }
     }
 

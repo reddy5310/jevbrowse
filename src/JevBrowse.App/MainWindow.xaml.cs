@@ -1162,8 +1162,16 @@ public sealed partial class MainWindow : Window
         var tab = k.Open(new Uri("https://example.com/"));
         await k.ActivateAsync(tab.Id);
         await Task.Delay(4000);
-        if (!_leases!.TryGet(tab.Id, out var lease)) return;
-        var core = ((WebView2Lease)lease).View.CoreWebView2;
+        if (!_leases!.TryGet(tab.Id, out _)) return;
+
+        // Re-resolved on every call, never captured: one of the stages below deliberately lets the tab sleep, which
+        // disposes the renderer. Holding the first CoreWebView2 would make every later stage fail with a COM error
+        // that looks like a media bug and is not one.
+        CoreWebView2 Core()
+        {
+            if (!_leases.TryGet(tab.Id, out var l)) throw new InvalidOperationException("the tab has no renderer");
+            return ((WebView2Lease)l).View.CoreWebView2;
+        }
 
         // ExecuteScriptAsync does not await promises — it returns "{}" for one — and everything here is async.
         // So the script posts its result back over the message bridge and we wait for the tagged reply.
@@ -1177,6 +1185,7 @@ public sealed partial class MainWindow : Window
                 string m; try { m = e.TryGetWebMessageAsString(); } catch (ArgumentException) { return; }
                 if (m.StartsWith(tag, StringComparison.Ordinal)) tcs.TrySetResult(m[tag.Length..]);
             }
+            var core = Core();
             core.WebMessageReceived += OnMessage;
             try
             {
@@ -1205,7 +1214,10 @@ public sealed partial class MainWindow : Window
               insertableStreams: typeof RTCRtpSender !== 'undefined' && 'createEncodedStreams' in RTCRtpSender.prototype,
               webAudio: typeof AudioContext === 'function',
               wasm: typeof WebAssembly === 'object',
+              // Shared memory depends on the DOCUMENT's isolation, not on the browser. This probe page sends no
+              // COOP/COEP headers, so absence here says nothing about a conferencing site that sends its own.
               sharedArrayBuffer: typeof SharedArrayBuffer === 'function',
+              crossOriginIsolated: !!self.crossOriginIsolated,
               codecs: (typeof RTCRtpSender !== 'undefined' && RTCRtpSender.getCapabilities)
                 ? (RTCRtpSender.getCapabilities('video').codecs || []).map(c => c.mimeType).filter((v,i,a) => a.indexOf(v) === i)
                 : [],
@@ -1314,6 +1326,53 @@ public sealed partial class MainWindow : Window
         catch (Exception ex) { callProtection = "probe failed: " + ex.GetType().Name + ": " + ex.Message; }
         finally { _autoAllowPermissions = false; }
 
+        // 5. A live page whose JavaScript stalls. One long main-thread task stops the heartbeat while the microphone
+        // stays open — if silence were read as "finished", the scheduler would be handed a live capture to dispose.
+        object stalled = "not run";
+        bool stallHeld = false;
+        string stallProtection = "?", stallVerdict = "?", stallNote = "";
+        try
+        {
+            _autoAllowPermissions = true;
+            if (!tab.State.HasLiveRenderer()) await k.ActivateAsync(tab.Id);   // stage 4 let it sleep, by design
+            await Task.Delay(3000);
+            var started = await EvalAsync("window.__stall = await navigator.mediaDevices.getUserMedia({audio:true}); return { ok: true };", 30000);
+            await Task.Delay(1500);
+            // Fire and forget, and swallow: the page is about to stop answering, so this call will not come back.
+            _ = Core().ExecuteScriptAsync("(() => { const end = Date.now() + 12000; while (Date.now() < end) {} })()")
+                    .AsTask().ContinueWith(t => { _ = t.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
+            await Task.Delay(9000);                                   // past the 6 s heartbeat grace
+
+            // Recorded BEFORE anything else can throw, so a later failure cannot hide what we came to measure.
+            stallProtection = tab.Protection.ToString();
+            var demote = await k.VirtualizeAsync(tab.Id, Cause.Scheduler);
+            stallVerdict = demote.Allowed ? "PUT IT TO SLEEP" : demote.Reason;
+            stallHeld = !demote.Allowed && tab.Protection.HasLiveMedia();
+            stallNote = started.TryGetProperty("ok", out _) ? "" : "capture did not start: " + started;
+
+            await Task.Delay(4500);                                   // let the stall finish
+            if (tab.State.HasLiveRenderer())
+            {
+                await EvalAsync("if (window.__stall) window.__stall.getTracks().forEach(t => t.stop()); return { ok: true };", 10000);
+                await Task.Delay(1500);
+            }
+        }
+        catch (Exception ex) { stallNote = "after measuring: " + ex.GetType().Name + ": " + ex.Message; }
+        finally { _autoAllowPermissions = false; }
+        stalled = new { uncertainDoesNotMeanIdle = stallHeld, protectionWhileStalled = stallProtection, verdict = stallVerdict, note = stallNote };
+
+        // 6. Sibling and nested frames, over http://127.0.0.1 (a secure context, so getUserMedia is allowed).
+        object frames = "not run";
+        bool frameCases = false;
+        try
+        {
+            _autoAllowPermissions = true;
+            frames = await RunFrameMediaProbeAsync(k, tab, EvalAsync);
+            frameCases = frames is IDictionary<string, object> d && d.TryGetValue("pass", out var fp) && fp is true;
+        }
+        catch (Exception ex) { frames = "probe failed: " + ex.GetType().Name + ": " + ex.Message; }
+        finally { _autoAllowPermissions = false; }
+
         bool B(JsonElement e, string p) => e.TryGetProperty(p, out var v) && v.ValueKind == JsonValueKind.True;
         var stackWorks = B(apis, "getUserMedia") && B(apis, "RTCPeerConnection") && B(loopback, "connected") && B(loopback, "remoteTrackReceived");
         var framesFlowed = loopback.TryGetProperty("framesDecoded", out var fd) && fd.GetInt32() > 0;
@@ -1323,17 +1382,25 @@ public sealed partial class MainWindow : Window
         var callSurvivesScheduler = micFlagged && vetoedByMedia && mediaSurvived;
         var result = new
         {
-            pass = stackWorks && framesFlowed && callSurvivesScheduler && clearedAfterStop && sleepsAfterStop,
+            pass = stackWorks && framesFlowed && callSurvivesScheduler && clearedAfterStop && sleepsAfterStop && stallHeld && frameCases,
             summary = !stackWorks ? "The WebRTC stack did not complete a loopback call."
+                : !stallHeld ? "A stalled page's capture lost its protection — silence was read as 'finished'."
+                : !frameCases ? "Capture inside frames was not protected correctly."
                 : !framesFlowed ? "WebRTC negotiated but no frames decoded."
                 : !micFlagged ? "Capture ran but the tab did not report microphone and camera."
                 : !vetoedByMedia ? "The scheduler was willing to hibernate a live capture."
                 : !mediaSurvived ? "The scheduler was refused, but the renderer or the tracks did not survive it."
                 : !clearedAfterStop || !sleepsAfterStop ? "Protection did not clear after the capture stopped."
                 : "Top-level capture blocks automatic hibernation and releases it afterwards; loopback video and real device capture passed.",
-            scope = "Top-level document only. Capture inside iframes, real Meet/Zoom sessions, screen-share picker "
-                  + "and disconnect/reconnect are not exercised by this check.",
+            scope = "Exercised: top-level capture, capture in a sibling frame and in a frame nested two deep, a "
+                  + "stalled page whose heartbeat stops while the microphone stays open, and release after stop. "
+                  + "NOT exercised: a real Meet or Zoom session end to end, the screen-share picker, and "
+                  + "disconnect/reconnect under memory pressure. SharedArrayBuffer was unavailable on the probe "
+                  + "page, which sends no COOP/COEP headers; availability in a cross-origin-isolated document has "
+                  + "not been tested, so this is not evidence that JevBrowse disables it.",
             callProtection,
+            stalledPage = stalled,
+            frameCapture = frames,
             apiSurface = apis,
             loopbackCall = loopback,
             realDevices = devices,
@@ -1342,6 +1409,89 @@ public sealed partial class MainWindow : Window
         };
         var file = Path.Combine(DataDir, "benchmarks", $"media-check-{DateTime.Now:yyyyMMdd-HHmmss}.json");
         await File.WriteAllTextAsync(file, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    /// <summary>
+    /// Sibling and nested frames, each capturing. Served from http://127.0.0.1, which is a secure context, so
+    /// getUserMedia is permitted — NavigateToString would give an opaque origin and could not capture at all.
+    /// Asserts the three cases the design claims: two siblings capturing, one stopping leaves the other protected,
+    /// and destroying a reporting frame does not disturb a surviving one.
+    /// </summary>
+    private async Task<object> RunFrameMediaProbeAsync(TabKernel k, VirtualTab tab, Func<string, int, Task<JsonElement>> eval)
+    {
+        const string Child = """
+            <!doctype html><meta charset="utf-8"><script>
+              const id = new URLSearchParams(location.search).get('id');
+              let s = null;
+              navigator.mediaDevices.getUserMedia({ audio: true }).then(x => { s = x; }).catch(() => {});
+              addEventListener('message', e => {
+                if (e.data && e.data.id === id && e.data.act === 'stop' && s) s.getTracks().forEach(t => t.stop());
+              });
+            </script>
+            """;
+        const string Nest = """<!doctype html><meta charset="utf-8"><iframe src="/child?id=b" allow="camera;microphone"></iframe>""";
+        const string Parent = """
+            <!doctype html><meta charset="utf-8">
+            <iframe id="a" src="/child?id=a" allow="camera;microphone"></iframe>
+            <iframe id="n" src="/nest" allow="camera;microphone"></iframe>
+            <script>
+              window.__cmd = m => { const walk = w => { try { w.postMessage(m, '*'); } catch {} ; for (let i = 0; i < w.frames.length; i++) walk(w.frames[i]); };
+                                    for (let i = 0; i < window.frames.length; i++) walk(window.frames[i]); };
+              window.__dropA = () => { const f = document.getElementById('a'); f.parentNode.removeChild(f); };
+            </script>
+            """;
+
+        var port = 8100 + Random.Shared.Next(400);
+        using var listener = new System.Net.HttpListener();
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        listener.Start();
+        using var stop = new CancellationTokenSource();
+        _ = Task.Run(async () =>
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                System.Net.HttpListenerContext ctx;
+                try { ctx = await listener.GetContextAsync(); } catch (Exception) { return; }
+                var path = ctx.Request.Url?.AbsolutePath ?? "/";
+                var body = System.Text.Encoding.UTF8.GetBytes(path switch { "/child" => Child, "/nest" => Nest, _ => Parent });
+                ctx.Response.ContentType = "text/html; charset=utf-8";
+                ctx.Response.ContentLength64 = body.Length;
+                try { await ctx.Response.OutputStream.WriteAsync(body); ctx.Response.Close(); } catch (Exception) { }
+            }
+        }, stop.Token);
+
+        try
+        {
+            // Earlier stages may have left the tab asleep; this probe needs a renderer of its own.
+            if (!tab.State.HasLiveRenderer()) await k.ActivateAsync(tab.Id);
+            if (!_leases!.TryGet(tab.Id, out var live)) return new Dictionary<string, object> { ["pass"] = false, ["error"] = "no renderer" };
+            live.Navigate(new Uri($"http://127.0.0.1:{port}/parent"));
+            await Task.Delay(6000);
+            var bothCapturing = tab.Protection.HasFlag(ProtectionFlags.MicrophoneActive);
+
+            // Stop the sibling at depth 1. The nested one at depth 2 is still capturing.
+            await eval("window.__cmd({ id: 'a', act: 'stop' }); return { ok: true };", 10000);
+            await Task.Delay(3000);
+            var nestedSurvives = tab.Protection.HasFlag(ProtectionFlags.MicrophoneActive);
+
+            // Destroy a frame that had already stopped, then stop the nested one: protection must end only now.
+            await eval("window.__dropA(); return { ok: true };", 10000);
+            await Task.Delay(2000);
+            var stillNested = tab.Protection.HasFlag(ProtectionFlags.MicrophoneActive);
+            await eval("window.__cmd({ id: 'b', act: 'stop' }); return { ok: true };", 10000);
+            await Task.Delay(3000);
+            var clearedAtEnd = !tab.Protection.HasLiveMedia();
+
+            return new Dictionary<string, object>
+            {
+                ["pass"] = bothCapturing && nestedSurvives && stillNested && clearedAtEnd,
+                ["siblingAndNestedCapturing"] = bothCapturing,
+                ["stoppingSiblingLeavesNestedProtected"] = nestedSurvives,
+                ["destroyingOneFrameLeavesSurvivorProtected"] = stillNested,
+                ["clearedWhenLastFrameStopped"] = clearedAtEnd,
+            };
+        }
+        finally { stop.Cancel(); listener.Stop(); }
     }
 
     /// <summary>
@@ -1643,12 +1793,17 @@ public sealed partial class MainWindow : Window
         {
             // Live media is not "a protection flag" to a person: it is their microphone, their camera, their screen
             // being shared right now. Lead with that, in those words, before anything about renderers.
-            var media = tab.Protection.HasLiveMedia();
+            var p = tab.Protection;
+            var media = p.HasLiveMedia();
             var doing = new List<string>();
-            if (tab.Protection.HasFlag(ProtectionFlags.ScreenShareActive)) doing.Add("sharing your screen");
-            if (tab.Protection.HasFlag(ProtectionFlags.CameraActive)) doing.Add("using your camera");
-            if (tab.Protection.HasFlag(ProtectionFlags.MicrophoneActive)) doing.Add("using your microphone");
-            if (tab.Protection.HasFlag(ProtectionFlags.WebRtcActive) && doing.Count == 0) doing.Add("in a call");
+            if (p.HasFlag(ProtectionFlags.ScreenShareActive)) doing.Add("sharing your screen");
+            if (p.HasFlag(ProtectionFlags.CameraActive)) doing.Add("using your camera");
+            if (p.HasFlag(ProtectionFlags.MicrophoneActive)) doing.Add("using your microphone");
+            if (p.HasFlag(ProtectionFlags.WebRtcActive) && doing.Count == 0) doing.Add("in a call");
+            // Capture is not always a call. A local recording has no other participants, so promising that "the
+            // other people will see you go" would be a confident description of something that is not happening.
+            var inCall = p.HasFlag(ProtectionFlags.WebRtcActive);
+            var name = string.IsNullOrWhiteSpace(tab.Title) ? tab.Url.Host : tab.Title;
             var dlg = new ContentDialog
             {
                 Title = media ? $"This page is {string.Join(" and ", doing)}" : "This tab is busy",
@@ -1656,15 +1811,15 @@ public sealed partial class MainWindow : Window
                 {
                     TextWrapping = TextWrapping.Wrap,
                     Text = media
-                        ? $"Putting “{(string.IsNullOrWhiteSpace(tab.Title) ? tab.Url.Host : tab.Title)}” to sleep ends it. "
-                          + "You will leave the call or stop sharing, and the other people will see you go.\n\n"
-                          + "Only the address and scroll position are kept."
-                        : $"{ReadableProtection(tab.Protection)}\n\nPutting this tab to sleep closes the live page. "
+                        ? $"Putting “{name}” to sleep stops its camera, microphone or screen capture."
+                          + (inCall ? " You will leave the call, and the other people will see you go." : "")
+                          + "\n\nOnly the address and scroll position are kept."
+                        : $"{ReadableProtection(p)}\n\nPutting this tab to sleep closes the live page. "
                           + "Anything the site has not saved — typing in a form, an upload, a download in progress — "
                           + "is lost. Only the address and scroll position are kept.",
                 },
-                PrimaryButtonText = media ? "Leave and sleep" : "Put it to sleep",
-                CloseButtonText = media ? "Stay in the call" : "Keep it open",
+                PrimaryButtonText = media ? (inCall ? "Leave and sleep" : "Stop and sleep") : "Put it to sleep",
+                CloseButtonText = media ? (inCall ? "Stay in the call" : "Keep it running") : "Keep it open",
                 DefaultButton = ContentDialogButton.Close, XamlRoot = Content.XamlRoot,
             };
             if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
