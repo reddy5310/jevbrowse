@@ -19,13 +19,14 @@
             <KeyboardAccelerator Key="Add" Modifiers="Control" Invoked="OnZoomInAccelerator"/>
             <KeyboardAccelerator Key="Subtract" Modifiers="Control" Invoked="OnZoomOutAccelerator"/>
             <KeyboardAccelerator Key="Number0" Modifiers="Control" Invoked="OnZoomResetAccelerator"/>
+            <KeyboardAccelerator Key="B" Modifiers="Control" Invoked="OnToggleSidebarAccelerator"/>
         </Grid.KeyboardAccelerators>
         <Grid.RowDefinitions>
             <RowDefinition Height="36"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="276"/>
+            <ColumnDefinition x:Name="SidebarColumn" Width="276"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
@@ -40,7 +41,7 @@
         </Grid>
 
         <!-- Sidebar: a floating panel with depth. Every logical resource is visible; the dot says whether it is live. -->
-        <Border Grid.Row="1" Grid.Column="0" Margin="10,8,4,10" CornerRadius="16" Background="{StaticResource JevPanelBrush}" BorderBrush="{StaticResource JevLineBrush}" BorderThickness="1" Shadow="{StaticResource JevShadow}" Translation="0,0,24">
+        <Border x:Name="Sidebar" Grid.Row="1" Grid.Column="0" Margin="10,8,4,10" CornerRadius="16" Background="{StaticResource JevPanelBrush}" BorderBrush="{StaticResource JevLineBrush}" BorderThickness="1" Shadow="{StaticResource JevShadow}" Translation="0,0,24">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
@@ -51,27 +52,27 @@
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <Button Content="+ New" Click="OnNewTab" Style="{StaticResource JevToolButton}"/>
                         <Button Content="Sleep others" Click="OnHibernateAll" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Put every tab except this one to sleep to free memory. They wake when you open them."/>
-                        <Button Content="&#xE71C;" FontFamily="Segoe MDL2 Assets" Click="OnPalette" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Command palette (Ctrl+K)"/>
-                        <Button Content="&#xE897;" FontFamily="Segoe MDL2 Assets" Click="OnHelp" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Welcome / help (F1)"/>
+                        <Button Content="&#xE71C;" FontFamily="Segoe MDL2 Assets" Click="OnPalette" AutomationProperties.Name="Command palette" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Command palette (Ctrl+K)"/>
+                        <Button Content="&#xE897;" FontFamily="Segoe MDL2 Assets" Click="OnHelp" AutomationProperties.Name="Help and welcome" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Welcome / help (F1)"/>
                     </StackPanel>
-                    <ComboBox x:Name="ProductModeBox" HorizontalAlignment="Stretch" Style="{StaticResource JevCombo}" SelectionChanged="OnProductModeChanged" ToolTipService.ToolTip="Product mode: which features are shown"/>
+                    <ComboBox x:Name="ProductModeBox" AutomationProperties.Name="Product mode" HorizontalAlignment="Stretch" Style="{StaticResource JevCombo}" SelectionChanged="OnProductModeChanged" ToolTipService.ToolTip="Product mode: which features are shown"/>
                     <TextBlock x:Name="PrivateSessionText" TextWrapping="Wrap" Visibility="Collapsed" FontSize="12"/>
                     <Button x:Name="ReturnPrivateButton" Content="Return" Click="OnReturnFromPrivate" Visibility="Collapsed" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Leave the private session but keep it open"/>
                     <Button x:Name="EndPrivateButton" Content="End private session" Click="OnEndPrivateSession" Visibility="Collapsed" Style="{StaticResource JevToolButton}"/>
-                    <ComboBox x:Name="ModeBox" HorizontalAlignment="Stretch" Style="{StaticResource JevCombo}" SelectionChanged="OnModeChanged" ToolTipService.ToolTip="Memory budget mode (Resource OS)"/>
+                    <ComboBox x:Name="ModeBox" AutomationProperties.Name="Memory budget" HorizontalAlignment="Stretch" Style="{StaticResource JevCombo}" SelectionChanged="OnModeChanged" ToolTipService.ToolTip="Memory budget mode (Resource OS)"/>
                     <Grid ColumnSpacing="6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <ComboBox x:Name="WorkspaceBox" HorizontalAlignment="Stretch" Style="{StaticResource JevCombo}" SelectionChanged="OnWorkspaceChanged" ToolTipService.ToolTip="Workspace (Context OS)"/>
-                        <Button Grid.Column="1" Content="+" Click="OnNewWorkspace" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="New workspace"/>
-                        <Button x:Name="TimelineButton" Grid.Column="2" Content="&#xE81C;" FontFamily="Segoe MDL2 Assets" Click="OnTimeline" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Time Travel: restore an earlier context"/>
+                        <ComboBox x:Name="WorkspaceBox" AutomationProperties.Name="Workspace" HorizontalAlignment="Stretch" Style="{StaticResource JevCombo}" SelectionChanged="OnWorkspaceChanged" ToolTipService.ToolTip="Workspace (Context OS)"/>
+                        <Button Grid.Column="1" Content="+" Click="OnNewWorkspace" AutomationProperties.Name="New workspace" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="New workspace"/>
+                        <Button x:Name="TimelineButton" AutomationProperties.Name="Time Travel: restore an earlier context" Grid.Column="2" Content="&#xE81C;" FontFamily="Segoe MDL2 Assets" Click="OnTimeline" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Time Travel: restore an earlier context"/>
                     </Grid>
                     <Button x:Name="LabButton" Content="Lab" Click="OnMemoryLab" Style="{StaticResource JevToolButton}" Visibility="Collapsed"/>
                 </StackPanel>
-                <ListView x:Name="TabList" Grid.Row="1" SelectionMode="Single" SelectionChanged="OnTabSelected" ItemsSource="{x:Bind Items}" Padding="6,0">
+                <ListView x:Name="TabList" AutomationProperties.Name="Open tabs" Grid.Row="1" SelectionMode="Single" SelectionChanged="OnTabSelected" ItemsSource="{x:Bind Items}" Padding="6,0">
                     <ListView.ItemContainerStyle>
                         <Style TargetType="ListViewItem">
                             <Setter Property="Margin" Value="0,2"/>
@@ -107,7 +108,7 @@
             </Grid>
         </Border>
 
-        <Grid Grid.Row="1" Grid.Column="1" Margin="4,8,10,10">
+        <Grid x:Name="MainArea" Grid.Row="1" Grid.Column="1" Margin="4,8,10,10">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
@@ -115,63 +116,78 @@
             </Grid.RowDefinitions>
             <!-- One toolbar. Everyday navigation leads and gets the width; the trust and diagnostics controls sit to its
                  right; everything about the current tab is under "This tab", and mode-gated extras under "Tools". -->
-            <Grid Grid.Row="0" Padding="0,0,0,8" ColumnSpacing="6">
+            <Grid x:Name="Toolbar" Grid.Row="0" Padding="0,0,0,8" ColumnSpacing="6" RowSpacing="6" SizeChanged="OnToolbarSizeChanged">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*" MinWidth="180"/>
                     <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <Button Content="&#xE72B;" FontFamily="Segoe MDL2 Assets" Click="OnBack" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Back" AutomationProperties.Name="Back"/>
-                <Button Content="&#xE72A;" FontFamily="Segoe MDL2 Assets" Grid.Column="1" Click="OnForward" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Forward" AutomationProperties.Name="Forward"/>
-                <Button x:Name="ReloadButton" Content="&#xE72C;" FontFamily="Segoe MDL2 Assets" Grid.Column="2" Click="OnReloadClick" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Reload this page (Ctrl+R)" AutomationProperties.Name="Reload"/>
-                <Border Grid.Column="3" CornerRadius="14" Background="{StaticResource JevPanelBrush}" BorderBrush="{StaticResource JevLineBrush}" BorderThickness="1" Padding="6,0" Shadow="{StaticResource JevShadow}" Translation="0,0,12">
+                <Button x:Name="SidebarToggle" Grid.Column="0" Content="&#xE700;" FontFamily="Segoe MDL2 Assets" Click="OnToggleSidebar" Style="{StaticResource JevToolButton}"
+                        ToolTipService.ToolTip="Hide sidebar (Ctrl+B)" AutomationProperties.Name="Hide sidebar"/>
+                <Button Content="&#xE72B;" FontFamily="Segoe MDL2 Assets" Grid.Column="1" Click="OnBack" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Back" AutomationProperties.Name="Back"/>
+                <Button Content="&#xE72A;" FontFamily="Segoe MDL2 Assets" Grid.Column="2" Click="OnForward" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Forward" AutomationProperties.Name="Forward"/>
+                <Button x:Name="ReloadButton" Content="&#xE72C;" FontFamily="Segoe MDL2 Assets" Grid.Column="3" Click="OnReloadClick" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Reload this page (Ctrl+R)" AutomationProperties.Name="Reload"/>
+                <Border Grid.Column="4" CornerRadius="14" Background="{StaticResource JevPanelBrush}" BorderBrush="{StaticResource JevLineBrush}" BorderThickness="1" Padding="6,0" Shadow="{StaticResource JevShadow}" Translation="0,0,12">
                     <Grid ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <Border x:Name="ClassBadge" CornerRadius="8" Padding="8,2" VerticalAlignment="Center" Background="#1F5F5A" ToolTipService.ToolTip="Identity container • data class (Trust OS). Click to override.">
-                            <TextBlock x:Name="ClassBadgeText" FontSize="10.5" FontWeight="SemiBold" Text="PERSONAL" Tapped="OnClassBadgeTapped"/>
-                        </Border>
+                        <!-- A Button, not a tappable TextBlock: this is where a person changes how a site is treated, and a TextBlock with a
+                             Tapped handler cannot be reached by keyboard or screen reader at all. -->
+                        <Button x:Name="ClassBadge" Padding="8,2" MinHeight="0" MinWidth="0" CornerRadius="8" VerticalAlignment="Center" BorderThickness="0"
+                                Background="#1F5F5A" Click="OnClassBadgeTapped"
+                                ToolTipService.ToolTip="How JevBrowse treats this page. Click to change it for this site."
+                                AutomationProperties.Name="How this page is treated">
+                            <TextBlock x:Name="ClassBadgeText" FontSize="10.5" FontWeight="SemiBold" Text="PERSONAL"/>
+                        </Button>
                         <TextBox x:Name="AddressBox" Grid.Column="1" PlaceholderText="Search or enter address" KeyDown="OnAddressKeyDown" BorderThickness="0" Background="Transparent" FontSize="13.5"/>
                     </Grid>
                 </Border>
-                <Button x:Name="ShieldButton" Grid.Column="4" Content="Shield" Click="OnShield" Style="{StaticResource JevToolButton}"
-                        ToolTipService.ToolTip="What was blocked on this page, and a fix if the site is not working" AutomationProperties.Name="Shield: blocked requests and site repair"/>
-                <Button x:Name="ExplainButton" Grid.Column="5" Content="Explain" Click="OnExplain" Style="{StaticResource JevToolButton}"
-                        ToolTipService.ToolTip="Why this tab is awake or asleep" AutomationProperties.Name="Explain why this tab is awake or asleep"/>
-                <Button x:Name="ReceiptButton" Grid.Column="6" Content="Receipt" Click="OnReceipt" Style="{StaticResource JevToolButton}"
-                        ToolTipService.ToolTip="What this site did during your visit: requests, blocked items, memory used" AutomationProperties.Name="Receipt: what this site did"/>
-                <Button x:Name="TabMenuButton" Grid.Column="7" Content="This tab &#x25BE;" Style="{StaticResource JevToolButton}"
-                        ToolTipService.ToolTip="Sleep, pin, keep active, or move this tab" AutomationProperties.Name="This tab menu">
-                    <Button.Flyout>
-                        <MenuFlyout x:Name="TabMenu" Opening="OnMoveMenuOpening">
-                            <MenuFlyoutItem x:Name="SleepItem" Text="Put to sleep" Click="OnHibernateCurrent"/>
-                            <MenuFlyoutItem x:Name="PinButton" Text="Pin to top" Click="OnPinCurrent"/>
-                            <MenuFlyoutItem x:Name="KeepActiveButton" Text="Keep active" Click="OnKeepActiveCurrent"/>
-                            <MenuFlyoutSeparator/>
-                            <MenuFlyoutSubItem x:Name="MoveMenu" Text="Move to workspace"/>
-                        </MenuFlyout>
-                    </Button.Flyout>
-                </Button>
-                <Button x:Name="ToolsButton" Grid.Column="8" Content="Tools &#x25BE;" Style="{StaticResource JevToolButton}"
-                        ToolTipService.ToolTip="Ask AI about this page, search what you have read, and more" AutomationProperties.Name="Tools menu">
-                    <Button.Flyout>
-                        <MenuFlyout>
-                            <MenuFlyoutItem x:Name="AskButton" Text="Summarize this page" Click="OnAsk"/>
-                            <MenuFlyoutItem x:Name="MemoryButton" Text="Search pages you have read" Click="OnMemory"/>
-                            <MenuFlyoutItem x:Name="BrainButton" Text="AI settings and log" Click="OnBrain"/>
-                            <MenuFlyoutItem x:Name="DevButton" Text="Developer tools" Click="OnDev"/>
-                            <MenuFlyoutItem x:Name="AgentsButton" Text="Agents" Click="OnAgents"/>
-                        </MenuFlyout>
-                    </Button.Flyout>
-                </Button>
+                <!-- The trust and tab controls travel as ONE group. Wide: right of the address bar. Narrow: a second row, so
+                     Explain and Receipt stay directly reachable instead of disappearing into an overflow menu. -->
+                <ScrollViewer x:Name="TrustScroll" Grid.Column="5" HorizontalScrollBarVisibility="Auto" HorizontalScrollMode="Auto"
+                              VerticalScrollBarVisibility="Disabled" VerticalScrollMode="Disabled">
+                <StackPanel x:Name="TrustBar" Orientation="Horizontal" Spacing="6">
+                    <Button x:Name="ShieldButton" Content="Shield" Click="OnShield" Style="{StaticResource JevToolButton}"
+                            ToolTipService.ToolTip="What was blocked on this page, and a fix if the site is not working" AutomationProperties.Name="Shield: blocked requests and site repair"/>
+                    <Button x:Name="ExplainButton" Content="Explain" Click="OnExplain" Style="{StaticResource JevToolButton}"
+                            ToolTipService.ToolTip="Why this tab is awake or asleep" AutomationProperties.Name="Explain why this tab is awake or asleep"/>
+                    <Button x:Name="ReceiptButton" Content="Receipt" Click="OnReceipt" Style="{StaticResource JevToolButton}"
+                            ToolTipService.ToolTip="What this site did during your visit: requests, blocked items, memory used" AutomationProperties.Name="Receipt: what this site did"/>
+                    <Button x:Name="TabMenuButton" Content="This tab &#x25BE;" Style="{StaticResource JevToolButton}"
+                            ToolTipService.ToolTip="Sleep, pin, keep active, or move this tab" AutomationProperties.Name="This tab menu">
+                        <Button.Flyout>
+                            <MenuFlyout x:Name="TabMenu" Placement="BottomEdgeAlignedRight" Opening="OnMoveMenuOpening">
+                                <MenuFlyoutItem x:Name="SleepItem" Text="Put to sleep" Click="OnHibernateCurrent"/>
+                                <MenuFlyoutItem x:Name="PinButton" Text="Pin to top" Click="OnPinCurrent"/>
+                                <MenuFlyoutItem x:Name="KeepActiveButton" Text="Keep active" Click="OnKeepActiveCurrent"/>
+                                <MenuFlyoutSeparator/>
+                                <MenuFlyoutSubItem x:Name="MoveMenu" Text="Move to workspace"/>
+                            </MenuFlyout>
+                        </Button.Flyout>
+                    </Button>
+                    <Button x:Name="ToolsButton" Content="Tools &#x25BE;" Style="{StaticResource JevToolButton}"
+                            ToolTipService.ToolTip="Ask AI about this page, search what you have read, and more" AutomationProperties.Name="Tools menu">
+                        <Button.Flyout>
+                            <MenuFlyout Placement="BottomEdgeAlignedRight">
+                                <MenuFlyoutItem x:Name="AskButton" Text="Summarize this page" Click="OnAsk"/>
+                                <MenuFlyoutItem x:Name="MemoryButton" Text="Search pages you have read" Click="OnMemory"/>
+                                <MenuFlyoutItem x:Name="BrainButton" Text="AI settings and log" Click="OnBrain"/>
+                                <MenuFlyoutItem x:Name="DevButton" Text="Developer tools" Click="OnDev"/>
+                                <MenuFlyoutItem x:Name="AgentsButton" Text="Agents" Click="OnAgents"/>
+                            </MenuFlyout>
+                        </Button.Flyout>
+                    </Button>
+                </StackPanel>
+                </ScrollViewer>
             </Grid>
             <Border Grid.Row="1" CornerRadius="16" BorderBrush="{StaticResource JevLineBrush}" BorderThickness="1" Background="#000000" Shadow="{StaticResource JevShadow}" Translation="0,0,16">
                 <Grid>

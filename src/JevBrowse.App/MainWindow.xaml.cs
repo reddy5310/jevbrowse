@@ -254,6 +254,7 @@ public sealed partial class MainWindow : Window
         // Simple by default: a first-time user gets tabs, Shield and privacy, and grows into Power.
         ProductModeBox.SelectedIndex = (int)(Enum.TryParse<ProductMode>(Environment.GetEnvironmentVariable("JEVBROWSE_MODE"), true, out var pm) ? pm : ProductMode.Simple);
         await _modeChangeTask;
+        ApplySidebar(LoadSidebarCollapsed(), remember: false);
 
         // Resource OS tick: sample → evaluate → apply. 10 s is coarse on purpose; user actions never wait for it.
         _tick = DispatcherQueue.CreateTimer();
@@ -267,6 +268,11 @@ public sealed partial class MainWindow : Window
         if (args.Contains("--ui-shot"))
         {
             // Render the window itself (not the screen) after the welcome page and tips settle, for docs and review.
+            // --ui-width=N resizes first, so narrow layouts can be looked at rather than reasoned about.
+            if (args.FirstOrDefault(a => a.StartsWith("--ui-width=", StringComparison.Ordinal)) is { } uw
+                && int.TryParse(uw["--ui-width=".Length..], out var uiWidth))
+                DispatcherQueue.TryEnqueue(() => AppWindow.Resize(new Windows.Graphics.SizeInt32(uiWidth, 780)));
+            if (args.Contains("--ui-sidebar=hidden")) DispatcherQueue.TryEnqueue(() => ApplySidebar(true, remember: false));
             _ = Task.Run(async () =>
             {
                 await Task.Delay(9000);
@@ -384,7 +390,11 @@ public sealed partial class MainWindow : Window
     {
         _syncingWorkspace = true;
         WorkspaceBox.Items.Clear();
-        foreach (var w in _kernel!.Workspaces) WorkspaceBox.Items.Add($"{w.Name} · {w.Container} ({_kernel.TabsIn(w.Id).Count()})");
+        // The identity is on the address badge; repeating the default one here only truncated the name.
+        foreach (var w in _kernel!.Workspaces)
+            WorkspaceBox.Items.Add(w.Container == IdentityContainer.Personal
+                ? $"{w.Name} ({_kernel.TabsIn(w.Id).Count()})"
+                : $"{w.Name} · {w.Container} ({_kernel.TabsIn(w.Id).Count()})");
         _syncingWorkspace = false;
         SyncWorkspaceBox();
     }
@@ -604,6 +614,9 @@ public sealed partial class MainWindow : Window
         // The badge states the identity and what we know about the page. "Not assessed" is an honest answer and is
         // never dressed up as a safety verdict.
         ClassBadgeText.Text = $"{_kernel.ContainerOf(t).ToString().ToUpperInvariant()} • {ClassLabel(cls).ToUpperInvariant()}";
+        // What a screen reader says: the state, then what pressing does. The visible text is capitals and a bullet.
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(ClassBadge,
+            $"{_kernel.ContainerOf(t)} profile, {ClassLabel(cls)}. Press to change how this site is treated.");
         ClassBadge.Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(cls switch
         {
             DataClass.Public => Microsoft.UI.Colors.DarkSeaGreen,
@@ -639,7 +652,7 @@ public sealed partial class MainWindow : Window
         _ => "Private tabs are not saved in history, previews or Browser Memory. Temporary website data is deleted when you end the session; locked files are retried on the next start.",
     };
 
-    private async void OnClassBadgeTapped(object s, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
+    private async void OnClassBadgeTapped(object s, RoutedEventArgs e)
     {
         if (_kernel?.Active is not { } t) return;
         var site = DataClassifier.Site(t.Url.Host);
@@ -1159,7 +1172,7 @@ public sealed partial class MainWindow : Window
         {
             Title = "Shield",
             Content = new StackPanel { Spacing = 12, Children = { repair, new TextBlock { Text = summary, TextWrapping = TextWrapping.Wrap }, showHidden, undoNote, details } },
-            PrimaryButtonText = enabled ? $"Turn off for {site} and reload" : $"Turn on for {site}",
+            PrimaryButtonText = enabled ? "Turn off and reload" : "Turn on",
             SecondaryButtonText = "Update block lists",
             CloseButtonText = "Close",
             XamlRoot = Content.XamlRoot,
@@ -2110,19 +2123,24 @@ public sealed partial class MainWindow : Window
     private async void OnExplain(object s, RoutedEventArgs e)
     {
         if (_kernel?.Active is not { } t) return;
-        var d = _kernel.LastDecision(t.Id);
-        var text = d is null
-            ? "The scheduler has not made a decision about this tab yet.\n\n" +
-              (_lastPlan is null ? "" : $"Current band: {_lastPlan.Band}, live budget {_lastPlan.TargetLiveRenderers}, live now {_lastPlan.LiveNow}.")
-            : d.Explain();
+        var view = ExplainText.Build(new ExplainFacts(
+            t.State, _kernel.Active?.Id == t.Id, _kernel.LastDecision(t.Id),
+            _lastPlan?.Band, _lastPlan?.TargetLiveRenderers ?? 0, _lastPlan?.LiveNow ?? _kernel.LiveCount,
+            ProtectionPhrases.StayAwake(t.Protection)));
+
+        // Sentences, in the interface font. The scheduler's raw record is not what anyone opened this to read.
+        var body = new StackPanel { Spacing = 10, MinWidth = 420 };
+        body.Children.Add(new TextBlock { Text = view.Headline, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
+        foreach (var line in view.Lines) body.Children.Add(new TextBlock { Text = line, TextWrapping = TextWrapping.Wrap, Opacity = 0.9 });
+
         var dlg = new ContentDialog
         {
-            Title = "Why?",
-            Content = new TextBlock { Text = text, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap },
+            Title = ExplainText.Title,
+            Content = body,
             CloseButtonText = "Close",
-            // The action offered here is about sleeping, because that is what "Why?" just explained. Placement is a
-            // different question and belongs to the Pin button.
+            // The action offered is about sleeping, because that is what this just explained. Placement is the Pin control's job.
             PrimaryButtonText = t.UserProtection.HasFlag(ProtectionFlags.KeepActive) ? "Let it sleep" : "Keep this tab active",
+            DefaultButton = ContentDialogButton.Close,   // Enter must not change what the tab does; that takes a deliberate click
             XamlRoot = Content.XamlRoot,
         };
         if (await dlg.ShowSerializedAsync() == ContentDialogResult.Primary) OnKeepActiveCurrent(s, e);

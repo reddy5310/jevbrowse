@@ -224,6 +224,67 @@ public sealed partial class MainWindow
 
     private void OnFocusAddress(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); AddressBox.Focus(FocusState.Keyboard); AddressBox.SelectAll(); }
     private void OnNewTabAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); OnNewTab(s, new RoutedEventArgs()); }
+    // Below this the address bar would be squeezed under its useful width beside all five controls.
+    private const double ToolbarWrapWidth = 760;
+    private bool _toolbarWrapped;
+
+    /// <summary>
+    /// Narrow windows put the trust and tab controls on their own row under the address bar. Nothing is hidden or
+    /// moved into a menu: Explain, Receipt and Shield are exactly as reachable as when the window is wide.
+    /// The toolbar's own width comes from its container, not its content, so wrapping cannot make it oscillate.
+    /// </summary>
+    private void OnToolbarSizeChanged(object s, SizeChangedEventArgs e)
+    {
+        var wrap = e.NewSize.Width < ToolbarWrapWidth;
+        if (wrap == _toolbarWrapped) return;
+        _toolbarWrapped = wrap;
+        Grid.SetRow(TrustScroll, wrap ? 1 : 0);
+        Grid.SetColumn(TrustScroll, wrap ? 0 : 5);
+        Grid.SetColumnSpan(TrustScroll, wrap ? 6 : 1);
+    }
+
+    // ---- Sidebar ----
+
+    private bool _sidebarCollapsed;
+    private static string UiPrefsPath => Path.Combine(DataDir, "ui-prefs.json");
+
+    /// <summary>
+    /// The sidebar is 276 px of a window that may be 700 wide; hiding it gives that back to the page. Remembered, so a
+    /// person who works with it hidden is not made to hide it again every launch. Ctrl+B and the toolbar button both
+    /// reach it, and the button's name says what the next press does.
+    /// </summary>
+    private void ApplySidebar(bool collapsed, bool remember)
+    {
+        _sidebarCollapsed = collapsed;
+        SidebarColumn.Width = new GridLength(collapsed ? 0 : 276);
+        Sidebar.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
+        MainArea.Margin = collapsed ? new Thickness(10, 8, 10, 10) : new Thickness(4, 8, 10, 10);
+        var label = collapsed ? "Show sidebar" : "Hide sidebar";
+        ToolTipService.SetToolTip(SidebarToggle, $"{label} (Ctrl+B)");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(SidebarToggle, label);
+        if (!remember) return;
+        try { File.WriteAllText(UiPrefsPath, JsonSerializer.Serialize(new { sidebarCollapsed = collapsed })); } catch (Exception) { /* a preference, not data */ }
+    }
+
+    private static bool LoadSidebarCollapsed()
+    {
+        try
+        {
+            if (!File.Exists(UiPrefsPath)) return false;
+            using var d = JsonDocument.Parse(File.ReadAllText(UiPrefsPath));
+            return d.RootElement.TryGetProperty("sidebarCollapsed", out var v) && v.ValueKind == JsonValueKind.True;
+        }
+        catch (Exception) { return false; }
+    }
+
+    private void OnToggleSidebar(object s, RoutedEventArgs e) => ApplySidebar(!_sidebarCollapsed, remember: true);
+
+    private void OnToggleSidebarAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e)
+    {
+        Handle(e);
+        ApplySidebar(!_sidebarCollapsed, remember: true);
+    }
+
     private void OnReloadClick(object s, RoutedEventArgs e) => WithActiveLease(l => l.View.CoreWebView2?.Reload());
 
     private void OnReloadAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); WithActiveLease(l => l.View.CoreWebView2?.Reload()); }
@@ -419,23 +480,30 @@ public sealed partial class MainWindow
         if (_kernel?.Active is not { } t || _shield is null) return;
         _shield.Stats.TryGetValue(t.Id, out var st);
         var sample = ProcessGroupProbe.Sample(_leases!.ProcessIds);
-        var live = _kernel.Tabs.Count(x => x.State.HasLiveRenderer());
-        var duration = st is null ? TimeSpan.Zero : DateTimeOffset.UtcNow - st.StartedAt;
-        var lines = new[]
+        var cls = _kernel.ClassOf(t);
+        var facts = new ReceiptFacts(
+            t.Url.Scheme == "jev" ? "this page" : t.Url.Host,
+            st is null ? TimeSpan.Zero : DateTimeOffset.UtcNow - st.StartedAt,
+            st?.Total ?? 0, st?.ThirdParty ?? 0, st?.ThirdPartyHosts.Count ?? 0, st?.Blocked ?? 0,
+            sample.PrivateMb, _kernel.Tabs.Count(x => x.State.HasLiveRenderer()),
+            ClassLabel(cls), ClassExplanation(cls), _kernel.ContainerOf(t).ToString(),
+            ProtectionPhrases.StayAwake(t.Protection));
+
+        // Label over value, stacked: reads in order with a screen reader and cannot wrap into misaligned columns.
+        var body = new StackPanel { Spacing = 10, MinWidth = 440 };
+        foreach (var (label, value) in ReceiptRows.Build(facts))
         {
-            $"SESSION RECEIPT — {t.Url.Host}",
-            $"Duration                 {duration:h\\:mm\\:ss}                (measured since renderer attached)",
-            $"Requests                 {st?.Total ?? 0,-6}                 (measured)",
-            $"Third-party requests     {st?.ThirdParty ?? 0,-6}                 (measured, {st?.ThirdPartyHosts.Count ?? 0} hosts)",
-            $"Blocked requests         {st?.Blocked ?? 0,-6}                 (measured)",
-            $"Transferred              not measured in V1",
-            $"Attributed memory        ~{(live == 0 ? 0 : sample.PrivateMb / live):F0} MB              (ESTIMATE: equal share of {sample.PrivateMb:F0} MB across {live} live renderers)",
-            $"Data class               {_kernel.ClassOf(t)}",
-            $"Container                {_kernel.ContainerOf(t)}",
-            $"Protection               {t.Protection}",
-            "",
-            "Measured values come from the OS or the request pipeline. Estimates are labelled.",
-        };
-        await new ContentDialog { Title = "Receipt", Content = new TextBlock { Text = string.Join("\n", lines), FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true }, CloseButtonText = "Close", XamlRoot = Content.XamlRoot }.ShowSerializedAsync();
+            body.Children.Add(new StackPanel
+            {
+                Spacing = 1,
+                Children =
+                {
+                    new TextBlock { Text = label, FontSize = 12, Opacity = 0.65 },
+                    new TextBlock { Text = value, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true },
+                },
+            });
+        }
+        body.Children.Add(new TextBlock { Text = ReceiptRows.Footnote, FontSize = 12, Opacity = 0.65, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 0) });
+        await new ContentDialog { Title = ReceiptRows.Title(facts), Content = new ScrollViewer { Content = body, MaxHeight = 460, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, HorizontalScrollMode = ScrollMode.Disabled }, CloseButtonText = "Close", XamlRoot = Content.XamlRoot }.ShowSerializedAsync();
     }
 }

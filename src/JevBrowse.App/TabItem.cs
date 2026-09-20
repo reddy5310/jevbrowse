@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using JevBrowse.Domain;
+using JevBrowse.VirtualTabs;
 using Microsoft.UI;
 using Microsoft.UI.Xaml.Media;
 
@@ -36,28 +37,9 @@ public sealed class TabItem(VirtualTab tab) : INotifyPropertyChanged
         _ => Tab.State.ToString().ToLowerInvariant(),
     };
 
-    /// <summary>Only what a person would want to know: why this tab is not going to sleep on its own.</summary>
-    private string ProtectionWords
-    {
-        get
-        {
-            var p = Tab.Protection;
-            var reasons = new List<string>();
-            if (Tab.IsPinned) reasons.Add("pinned");
-            if (p.HasFlag(ProtectionFlags.KeepActive)) reasons.Add("kept active");
-            if (p.HasFlag(ProtectionFlags.NeverHibernateSite)) reasons.Add("site kept active");
-            if (p.HasFlag(ProtectionFlags.Audible)) reasons.Add("playing sound");
-            // Named separately: "sharing your screen" and "using your microphone" are different things to be told,
-            // and a person deciding whether to close a tab needs to know which one it is.
-            if (p.HasFlag(ProtectionFlags.ScreenShareActive)) reasons.Add("sharing screen");
-            if (p.HasFlag(ProtectionFlags.CameraActive)) reasons.Add("using camera");
-            if (p.HasFlag(ProtectionFlags.MicrophoneActive)) reasons.Add("using microphone");
-            if (p.HasFlag(ProtectionFlags.WebRtcActive)) reasons.Add("call active");
-            if (p.HasFlag(ProtectionFlags.DownloadActive)) reasons.Add("downloading");
-            if (p.HasFlag(ProtectionFlags.DirtyForm)) reasons.Add("unsaved typing");
-            return string.Join(", ", reasons);
-        }
-    }
+    /// <summary>Why this tab is special, in words: placement first, then the reasons it will not sleep on its own.</summary>
+    private string ProtectionWords =>
+        string.Join(", ", (Tab.IsPinned ? new[] { "pinned" } : []).Concat(ProtectionPhrases.StayAwake(Tab.Protection)));
     public SolidColorBrush StateBrush => Brushes[Tab.State];
 
     /// <summary>
