@@ -345,6 +345,106 @@ public sealed class TabKernel
             return applied;
         }, ct);
 
+    /// <summary>Opens a tab in a named workspace WITHOUT switching to it. Open() is for the person; this is for work done on their behalf.</summary>
+    public VirtualTab OpenIn(ContextId workspace, Uri url)
+    {
+        RequireOpenWorkspace(workspace);
+        var t = new VirtualTab(ResourceId.New(), url, "", workspace);
+        _tabs.Add(t);
+        Persist(t);
+        Changed?.Invoke(new("opened", t.Id, url.Host));
+        return t;
+    }
+
+    /// <summary>
+    /// Brings a page to life without showing it: the active tab, the active workspace and what is on screen are left exactly as
+    /// they are. This is how an agent's pages run. The person's view is theirs; watching an agent is a choice they make
+    /// (ActivateAsync on its page), never something the agent does to them. If the tab is the one being shown, nothing changes.
+    /// </summary>
+    public Task EnsureLiveInBackgroundAsync(ResourceId id, CancellationToken ct = default) =>
+        SerializedAsync(() => EnsureLiveInBackgroundCoreAsync(id, ct), ct);
+
+    private async Task EnsureLiveInBackgroundCoreAsync(ResourceId id, CancellationToken ct)
+    {
+        var tab = Find(id);
+        RequireOpenWorkspace(tab.WorkspaceId);
+        if (Active?.Id == id) return;
+        var lease = await EnsureLeaseAsync(tab, RenderIntent.Background, ct);
+        if (lease.IsSuspended) lease.Resume();
+        lease.AllowThumbnails = May(tab, DataOperation.PersistThumbnail).Allowed;
+        lease.SetVisible(false);
+        if (!tab.State.HasLiveRenderer()) tab.TryTransition(ResourceState.Warm, Cause.User, _clock());
+        Persist(tab);
+        Changed?.Invoke(new("warmed", id, $"live={LiveCount}"));
+    }
+
+    /// <summary>
+    /// Gives a tab a live renderer, wired to the kernel's events, and returns it. Shared by everything that brings a page back
+    /// (the person activating a tab; an agent's page coming live in the background). It decides nothing about which tab is
+    /// active or visible: that is the caller's.
+    /// </summary>
+    private async Task<IRendererLease> EnsureLeaseAsync(VirtualTab tab, RenderIntent intent, CancellationToken ct)
+    {
+        var id = tab.Id;
+        if (_leases.TryGet(id, out var existing)) return existing;
+        IRendererLease lease;
+        await MakeRoomAsync(id, ct);
+        // The tab's durable URL is the truth. A checkpoint only contributes scroll, and only when it describes
+        // the very page we are about to load; an older checkpoint must never override newer navigation.
+        var checkpoint = _checkpoints.Get(id);
+        if (checkpoint is not null && checkpoint.Url != tab.Url) checkpoint = null;
+        var sw = Stopwatch.StartNew();
+        _restoreTimers[id] = sw;
+        // Say we are bringing it back before the wait begins, and say whether the place we saved is coming with it.
+        Changed?.Invoke(new("restoring", id, checkpoint is null ? "no saved position" : "with saved position"));
+        var ws = _workspaceList.FirstOrDefault(w => w.Id == tab.WorkspaceId);
+        lease = await _leases.AcquireAsync(id, tab.Url, intent, ContainerOf(tab), tab.WorkspaceId, ct);
+        lease.AllowThumbnails = May(tab, DataOperation.PersistThumbnail).Allowed;
+        bool IsCurrent() => !_endedPrivateSessions.Contains(tab.WorkspaceId)
+            && _tabs.Contains(tab) && _leases.TryGet(id, out var current) && ReferenceEquals(current, lease);
+        lease.NavigationChanged += n =>
+        {
+            if (!IsCurrent()) return;
+            // about:blank is never a destination the user chose. Locally rendered pages (jev://) report it
+            // because the content was pushed into the renderer rather than fetched, and treating that as a
+            // navigation would overwrite the tab's real address and discard its checkpoint.
+            if (n.Url.Scheme == "about") return;
+            if (n.Url != tab.Url)
+            {
+                // A real navigation: the old page's advisory, checkpoint and thumbnail no longer describe this tab.
+                _advisory.Remove(tab.Id);
+                _checkpoints.Delete(tab.Id);
+                DeleteThumb(ThumbPath(tab.Id));
+            }
+            tab.UpdateNavigation(n.Url, n.Title);
+            EnforcePolicy(tab);
+            Persist(tab);
+            Changed?.Invoke(new("navigated", tab.Id, n.Title));
+        };
+        lease.DetectedProtectionChanged += f => { if (!IsCurrent()) return; tab.SetDetected(f); Changed?.Invoke(new("protection", tab.Id, f.ToString())); };
+        lease.PageSignalsChanged += s =>
+        {
+            if (!IsCurrent()) return;
+            _signals[tab.Id] = s;
+            EnforcePolicy(tab); // a password field appearing must purge what was allowed a moment ago
+            Changed?.Invoke(new("signals", tab.Id, ClassOf(tab).ToString()));
+        };
+        lease.Loaded += () =>
+        {
+            if (!IsCurrent()) return;
+            if (_restoreTimers.Remove(id, out var timer))
+            {
+                RestoreTimingsMs.Add(timer.Elapsed.TotalMilliseconds);
+                // A tab with no saved place is loading for the first time, not waking up; the suffix lets the status line
+                // avoid announcing a wake-up that did not happen. Consumers key on the event kind, not this text.
+                Changed?.Invoke(new("restored", id, $"{timer.ElapsedMilliseconds} ms" + (checkpoint is null ? FirstLoadSuffix : "")));
+            }
+            Changed?.Invoke(new("loaded", id, tab.Url.ToString())); // every completed navigation, for the indexer
+        };
+        if (checkpoint is not null) lease.ApplyCheckpoint(checkpoint);
+        return lease;
+    }
+
     public Task ActivateAsync(ResourceId id, CancellationToken ct = default) =>
         SerializedAsync(() => ActivateCoreAsync(id, ct), ct);
 
@@ -362,63 +462,7 @@ public sealed class TabKernel
             Persist(Active);
         }
 
-        if (!_leases.TryGet(id, out var lease))
-        {
-            await MakeRoomAsync(id, ct);
-            // The tab's durable URL is the truth. A checkpoint only contributes scroll, and only when it describes
-            // the very page we are about to load; an older checkpoint must never override newer navigation.
-            var checkpoint = _checkpoints.Get(id);
-            if (checkpoint is not null && checkpoint.Url != tab.Url) checkpoint = null;
-            var sw = Stopwatch.StartNew();
-            _restoreTimers[id] = sw;
-            // Say we are bringing it back before the wait begins, and say whether the place we saved is coming with it.
-            Changed?.Invoke(new("restoring", id, checkpoint is null ? "no saved position" : "with saved position"));
-            var ws = _workspaceList.FirstOrDefault(w => w.Id == tab.WorkspaceId);
-            lease = await _leases.AcquireAsync(id, tab.Url, RenderIntent.Foreground, ContainerOf(tab), tab.WorkspaceId, ct);
-            lease.AllowThumbnails = May(tab, DataOperation.PersistThumbnail).Allowed;
-            bool IsCurrent() => !_endedPrivateSessions.Contains(tab.WorkspaceId)
-                && _tabs.Contains(tab) && _leases.TryGet(id, out var current) && ReferenceEquals(current, lease);
-            lease.NavigationChanged += n =>
-            {
-                if (!IsCurrent()) return;
-                // about:blank is never a destination the user chose. Locally rendered pages (jev://) report it
-                // because the content was pushed into the renderer rather than fetched, and treating that as a
-                // navigation would overwrite the tab's real address and discard its checkpoint.
-                if (n.Url.Scheme == "about") return;
-                if (n.Url != tab.Url)
-                {
-                    // A real navigation: the old page's advisory, checkpoint and thumbnail no longer describe this tab.
-                    _advisory.Remove(tab.Id);
-                    _checkpoints.Delete(tab.Id);
-                    DeleteThumb(ThumbPath(tab.Id));
-                }
-                tab.UpdateNavigation(n.Url, n.Title);
-                EnforcePolicy(tab);
-                Persist(tab);
-                Changed?.Invoke(new("navigated", tab.Id, n.Title));
-            };
-            lease.DetectedProtectionChanged += f => { if (!IsCurrent()) return; tab.SetDetected(f); Changed?.Invoke(new("protection", tab.Id, f.ToString())); };
-            lease.PageSignalsChanged += s =>
-            {
-                if (!IsCurrent()) return;
-                _signals[tab.Id] = s;
-                EnforcePolicy(tab); // a password field appearing must purge what was allowed a moment ago
-                Changed?.Invoke(new("signals", tab.Id, ClassOf(tab).ToString()));
-            };
-            lease.Loaded += () =>
-            {
-                if (!IsCurrent()) return;
-                if (_restoreTimers.Remove(id, out var timer))
-                {
-                    RestoreTimingsMs.Add(timer.Elapsed.TotalMilliseconds);
-                    // A tab with no saved place is loading for the first time, not waking up; the suffix lets the status line
-                    // avoid announcing a wake-up that did not happen. Consumers key on the event kind, not this text.
-                    Changed?.Invoke(new("restored", id, $"{timer.ElapsedMilliseconds} ms" + (checkpoint is null ? FirstLoadSuffix : "")));
-                }
-                Changed?.Invoke(new("loaded", id, tab.Url.ToString())); // every completed navigation, for the indexer
-            };
-            if (checkpoint is not null) lease.ApplyCheckpoint(checkpoint);
-        }
+        var lease = await EnsureLeaseAsync(tab, RenderIntent.Foreground, ct);
         if (lease.IsSuspended) lease.Resume();
         lease.AllowThumbnails = May(tab, DataOperation.PersistThumbnail).Allowed;
         lease.SetVisible(true);

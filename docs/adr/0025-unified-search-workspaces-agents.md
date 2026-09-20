@@ -48,7 +48,6 @@ A unit test caught the reason codes that start `hard:` (rules no setting can rel
 - Ask / Summarize, Memory search (with Clear index), Agent Gateway setup, DevSpace, JevBrain settings and the workspace dialogs
   are still dialogs. Some are decisions and should stay so; the rest are converted case by case, not blanket.
 - A live agent (Claude Code) has not been driven through the panel; the demo used the same local endpoint and gateway with a scripted session.
-- An agent's page becomes the active tab in the window when it navigates (seen in the demo screenshot). That is existing behaviour;
-  whether an agent should be able to take over the visible tab is a question for the next design pass.
+- ~~An agent's page becomes the active tab when it navigates.~~ **Fixed in ADR 0027**: agent pages run hidden; "Show its page" is the person's choice.
 - **Scaling (125/150/200%) and text size are still untested**, and reduced-transparency and a real high-contrast theme run were not done.
   The UI is **not** declared release-ready.

@@ -353,7 +353,7 @@ public sealed partial class MainWindow : Window
             });
         }
 
-        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--private-session-check") || args.Contains("--agent-check") || args.Contains("--media-check") || args.Contains("--site-sweep") || args.Any(a => a.StartsWith("--join=", StringComparison.Ordinal)))
+        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--private-session-check") || args.Contains("--agent-check") || args.Contains("--agent-window-check") || args.Contains("--media-check") || args.Contains("--site-sweep") || args.Any(a => a.StartsWith("--join=", StringComparison.Ordinal)))
         {
             Directory.CreateDirectory(Path.Combine(DataDir, "benchmarks"));
             try
@@ -363,6 +363,7 @@ public sealed partial class MainWindow : Window
                 else if (args.Contains("--site-sweep")) await RunSiteSweepAsync();
                 else if (args.Contains("--media-check")) await RunMediaCheckAsync();
                 else if (args.Contains("--agent-check")) await RunAgentCheckAsync();
+                else if (args.Contains("--agent-window-check")) await RunAgentWindowCheckAsync();
                 else if (args.Contains("--privacy-check")) await RunPrivacyCheckAsync();
                 else if (args.Contains("--memory-lab")) await RunMemoryLabAsync();
                 else if (args.Contains("--restore-bench")) await RunRestoreBenchAsync();
@@ -1312,6 +1313,61 @@ public sealed partial class MainWindow : Window
             audit = session.Audit.Select(a => $"{(a.Allowed ? "ok" : "no")} {a.Action} {a.Target} — {a.Reason}").ToList(),
         };
         var file = Path.Combine(DataDir, "benchmarks", $"agent-check-{DateTime.Now:yyyyMMdd-HHmmss}.json");
+        await File.WriteAllTextAsync(file, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    /// <summary>
+    /// Real engine, real endpoint: an agent navigates, reads and takes a screenshot while a person is reading another page. The
+    /// person's tab, workspace and what is on screen must not change, and the agent's page has to be readable and photographable
+    /// even though it is not shown (a hidden web view is not assumed to behave; this measures it).
+    /// </summary>
+    private async Task RunAgentWindowCheckAsync()
+    {
+        var k = _kernel!;
+        foreach (var t in k.Tabs.ToList()) await k.CloseAsync(t.Id);
+        var mine = k.Open(new Uri("https://example.com/"));
+        var loaded = new TaskCompletionSource();
+        void OnEv(KernelEvent e) { if (e.Kind == "restored" && e.Id == mine.Id) loaded.TrySetResult(); }
+        k.Changed += OnEv;
+        await k.ActivateAsync(mine.Id);
+        await Task.WhenAny(loaded.Task, Task.Delay(20000));
+        k.Changed -= OnEv;
+        var workspaceBefore = k.ActiveWorkspace;
+
+        var ceiling = new AgentCeiling { Limits = new AgentManifest { Agent = "ceiling", AllowDomains = ["example.org", "example.com"], Actions = [AgentAction.Navigate, AgentAction.Read, AgentAction.Screenshot], SessionMinutes = 10, MaxLivePages = 2, MaxActions = 50 } };
+        using var host = new LocalAgentHost(_agents!, ceiling);
+        var (session, _) = await host.GrantAsync(new AgentManifest { Agent = "window-probe", AllowDomains = ["example.org"], Actions = [AgentAction.Navigate, AgentAction.Read, AgentAction.Screenshot], SessionMinutes = 10, MaxLivePages = 2 });
+
+        var nav = await _agents!.ExecuteAsync(session, new AgentRequest(AgentAction.Navigate, "https://example.org/"), default);
+        await Task.Delay(3000);
+        var read = await _agents.ExecuteAsync(session, new AgentRequest(AgentAction.Read), default);
+        var shot = await _agents.ExecuteAsync(session, new AgentRequest(AgentAction.Screenshot), default);
+
+        string Vis(ResourceId id) => _leases!.TryGet(id, out var l) ? ((WebView2Lease)l).View.Visibility.ToString() : "no renderer";
+        var agentTab = k.Tabs.FirstOrDefault(t => session.Pages.Contains(t.Id));
+        var shotBytes = shot.ScreenshotPath is not null && File.Exists(shot.ScreenshotPath) ? new FileInfo(shot.ScreenshotPath).Length : 0;
+        var result = new
+        {
+            personsTabStillActive = k.Active?.Id == mine.Id,
+            personsWorkspaceUnchanged = k.ActiveWorkspace == workspaceBefore,
+            personsPageStillShown = Vis(mine.Id),
+            agentPageShown = agentTab is null ? "no page" : Vis(agentTab.Id),
+            agentPageLive = agentTab?.State.HasLiveRenderer() == true,
+            navigateOk = nav.Ok,
+            readOk = read.Ok,
+            readTitle = read.Page?.Title,
+            readTextChars = read.Page?.TextExcerpt?.Length ?? 0,
+            screenshotOk = shot.Ok,
+            screenshotBytes = shotBytes,
+            pass = k.Active?.Id == mine.Id && k.ActiveWorkspace == workspaceBefore && Vis(mine.Id) == "Visible"
+                   && agentTab is not null && Vis(agentTab.Id) == "Collapsed" && agentTab.State.HasLiveRenderer()
+                   && nav.Ok && read.Ok && (read.Page?.TextExcerpt?.Length ?? 0) > 20,
+            // Not part of the verdict: Screenshot returns no image in a Disposable session (thumbnails are refused there), with the page shown or hidden. A separate, older gap.
+            screenshotNote = "measured, not judged here: see docs/adr/0027",
+            audit = session.Audit.Select(a => $"{(a.Allowed ? "ok" : "no")} {a.Action} {a.Target} - {a.Reason}").ToList(),
+        };
+        await host.StopAsync(session);
+        var file = Path.Combine(DataDir, "benchmarks", $"agent-window-check-{DateTime.Now:yyyyMMdd-HHmmss}.json");
         await File.WriteAllTextAsync(file, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
     }
 

@@ -50,8 +50,7 @@ values are now range-checked before the registry is touched, and a run that test
   window is pixel-identical apart from live digits (122 of 1.1 M pixels), title contrast 16.7:1 dark / 16.5:1 light in both states, gate PASS.
 - **High contrast (a real Windows contrast theme): not run.** It changes the whole desktop's colours; you chose not to authorise it.
   The tokens are tested to use only system colours, but that is not the same as seeing it.
-- Agent-driven tab switching (an agent's page becomes the visible tab) and the unexplained transient gate failures noted in ADR 0024
-  remain **unresolved and tracked**.
+- Agent-driven tab switching is **fixed** (ADR 0027). The unexplained transient gate failures noted in ADR 0024 remain **unresolved and tracked**.
 
 ## Capture hygiene (a flaw in my own earlier work)
 

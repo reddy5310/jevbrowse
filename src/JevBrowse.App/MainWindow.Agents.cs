@@ -57,6 +57,19 @@ public sealed partial class MainWindow
             var scope = new TextBlock { Text = c.Scope, FontSize = 12, TextWrapping = TextWrapping.Wrap, Foreground = secondary };
             var recent = new TextBlock { Text = RecentText(c), FontSize = 12, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas") };
             AutomationProperties.SetName(recent, $"Recent actions by {c.Agent}");
+            // Watching is the person's choice, made here. An agent's page never takes over the window by itself.
+            var session0 = _agentHost.Sessions.FirstOrDefault(x => x.Id == c.Id);
+            var show = new Button { Content = "Show its page", HorizontalAlignment = HorizontalAlignment.Stretch, IsEnabled = c.CanStop && session0?.Current is not null };
+            AutomationProperties.SetName(show, $"Show the page {c.Agent} is on, in this window");
+            show.Click += async (_, _) =>
+            {
+                if (session0?.Current is not { } page || _kernel is null) return;
+                ClosePanel(restoreFocus: false);
+                if (_kernel.Tabs.All(t => t.Id != page)) return;
+                await _kernel.ActivateAsync(page);
+                RebuildWorkspaces();
+                StatusText.Text = $"showing the page {session0.Manifest.Agent} is on; it keeps working in its own workspace";
+            };
             var stop = new Button { Content = c.CanStop ? "Stop this agent" : "Stopped", IsEnabled = c.CanStop, HorizontalAlignment = HorizontalAlignment.Stretch };
             AutomationProperties.SetName(stop, $"Stop {c.Agent}, session {c.Id}");
             var session = _agentHost.Sessions.FirstOrDefault(x => x.Id == c.Id);
@@ -77,7 +90,7 @@ public sealed partial class MainWindow
                 {
                     Spacing = Tokens.Space(6),
                     Children = { new TextBlock { Text = c.Agent, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, TextWrapping = TextWrapping.Wrap }, status, summary, scope,
-                                 new TextBlock { Text = "Recent actions", FontSize = 12, Foreground = secondary }, recent, stop },
+                                 new TextBlock { Text = "Recent actions", FontSize = 12, Foreground = secondary }, recent, show, stop },
                 },
             });
         }

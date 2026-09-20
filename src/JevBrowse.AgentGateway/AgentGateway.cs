@@ -162,8 +162,8 @@ public sealed partial class AgentGateway : IAgentGateway
             if ((tab is null || !tab.State.HasLiveRenderer()) && !await EnsureQuotaAsync(s, ct)) return Deny("live_page_quota_unsatisfiable");
             if (tab is null)
             {
-                await _kernel.SwitchWorkspaceAsync(s.WorkspaceId, ct);
-                tab = _kernel.Open(url);
+                // Opened in the agent's own workspace, never by switching to it: the person's window is not the agent's to move.
+                tab = _kernel.OpenIn(s.WorkspaceId, url);
                 s.Pages.Add(tab.Id);
             }
             // Policy is registered BEFORE the renderer exists, so it is in force for the very first navigation and
@@ -311,7 +311,7 @@ public sealed partial class AgentGateway : IAgentGateway
         _kernel.Changed += OnEv;
         try
         {
-            await _kernel.ActivateAsync(id, ct);
+            await _kernel.EnsureLiveInBackgroundAsync(id, ct);   // live, not shown: see TabKernel.EnsureLiveInBackgroundAsync
             await Task.WhenAny(loaded.Task, Task.Delay(LoadTimeout, ct));
         }
         finally { _kernel.Changed -= OnEv; }
