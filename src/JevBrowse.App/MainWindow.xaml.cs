@@ -1392,12 +1392,14 @@ public sealed partial class MainWindow : Window
                 : !mediaSurvived ? "The scheduler was refused, but the renderer or the tracks did not survive it."
                 : !clearedAfterStop || !sleepsAfterStop ? "Protection did not clear after the capture stopped."
                 : "Top-level capture blocks automatic hibernation and releases it afterwards; loopback video and real device capture passed.",
-            scope = "Exercised: top-level capture, capture in a sibling frame and in a frame nested two deep, a "
-                  + "stalled page whose heartbeat stops while the microphone stays open, and release after stop. "
-                  + "NOT exercised: a real Meet or Zoom session end to end, the screen-share picker, and "
-                  + "disconnect/reconnect under memory pressure. SharedArrayBuffer was unavailable on the probe "
-                  + "page, which sends no COOP/COEP headers; availability in a cross-origin-isolated document has "
-                  + "not been tested, so this is not evidence that JevBrowse disables it.",
+            scope = "Exercised: top-level capture; capture in a sibling frame and in a frame nested two deep; a "
+                  + "stalled page whose heartbeat stops while the microphone stays open; a frame destroyed and a "
+                  + "frame navigated away while another keeps capturing; release after stop. NOT exercised: a real "
+                  + "Meet or Zoom session end to end, the screen-share picker, disconnect/reconnect under memory "
+                  + "pressure, and an unresponsive-renderer ProcessFailed (the branch on failure kind is by design "
+                  + "only). SharedArrayBuffer was unavailable on the probe page, which sends no COOP/COEP headers; "
+                  + "availability in a cross-origin-isolated document has not been tested, so this is not evidence "
+                  + "that JevBrowse disables it.",
             callProtection,
             stalledPage = stalled,
             frameCapture = frames,
@@ -1453,7 +1455,7 @@ public sealed partial class MainWindow : Window
                 System.Net.HttpListenerContext ctx;
                 try { ctx = await listener.GetContextAsync(); } catch (Exception) { return; }
                 var path = ctx.Request.Url?.AbsolutePath ?? "/";
-                var body = System.Text.Encoding.UTF8.GetBytes(path switch { "/child" => Child, "/nest" => Nest, _ => Parent });
+                var body = System.Text.Encoding.UTF8.GetBytes(path switch { "/child" => Child, "/nest" => Nest, "/blank" => "<!doctype html><title>done</title>", _ => Parent });
                 ctx.Response.ContentType = "text/html; charset=utf-8";
                 ctx.Response.ContentLength64 = body.Length;
                 try { await ctx.Response.OutputStream.WriteAsync(body); ctx.Response.Close(); } catch (Exception) { }
@@ -1482,13 +1484,31 @@ public sealed partial class MainWindow : Window
             await Task.Delay(3000);
             var clearedAtEnd = !tab.Protection.HasLiveMedia();
 
+            // Frame NAVIGATION, which is not destruction: a capturing frame whose document is replaced never sends
+            // media-end, so without frame-level ContentLoading its entry stays uncertain forever and the tab can
+            // never sleep again. Two frames capture; one navigates away; the other must stay protected, and the
+            // navigated one's claim must be gone.
+            live.Navigate(new Uri($"http://127.0.0.1:{port}/parent"));
+            await Task.Delay(6000);
+            var reloadedCapturing = tab.Protection.HasFlag(ProtectionFlags.MicrophoneActive);
+            await eval("document.getElementById('a').src = '/blank'; return { ok: true };", 10000);
+            await Task.Delay(4000);
+            var survivorHeld = tab.Protection.HasFlag(ProtectionFlags.MicrophoneActive);
+            // Now the nested one goes the same way. Nothing is capturing, and nothing may be left latched on.
+            await eval("document.getElementById('n').src = '/blank'; return { ok: true };", 10000);
+            await Task.Delay(4000);
+            var navigatedFrameReleased = !tab.Protection.HasLiveMedia();
+
             return new Dictionary<string, object>
             {
-                ["pass"] = bothCapturing && nestedSurvives && stillNested && clearedAtEnd,
+                ["pass"] = bothCapturing && nestedSurvives && stillNested && clearedAtEnd
+                           && reloadedCapturing && survivorHeld && navigatedFrameReleased,
                 ["siblingAndNestedCapturing"] = bothCapturing,
                 ["stoppingSiblingLeavesNestedProtected"] = nestedSurvives,
                 ["destroyingOneFrameLeavesSurvivorProtected"] = stillNested,
                 ["clearedWhenLastFrameStopped"] = clearedAtEnd,
+                ["navigatingOneFrameLeavesSurvivorProtected"] = survivorHeld,
+                ["navigatedFrameStopsClaimingCapture"] = navigatedFrameReleased,
             };
         }
         finally { stop.Cancel(); listener.Stop(); }

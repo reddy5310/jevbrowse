@@ -96,6 +96,7 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
         if (!_live.TryGetValue(id, out var lease)) return;
         if (disposition == ReleaseDisposition.Suspend) { await lease.TrySuspendAsync(); return; }
         _live.Remove(id);
+        lease.CleanupHostState();   // before the view goes: stops the media timer and drops its reference to the lease
         _host.Children.Remove(lease.View);
         lease.View.Close();
         OnCoreDisposed?.Invoke(id);
@@ -104,7 +105,7 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
     /// <summary>Close every renderer and mark this session's ephemeral profiles for deletion.</summary>
     public void Shutdown()
     {
-        foreach (var l in _live.Values.ToList()) { _host.Children.Remove(l.View); l.View.Close(); }
+        foreach (var l in _live.Values.ToList()) { l.CleanupHostState(); _host.Children.Remove(l.View); l.View.Close(); }
         _live.Clear();
         SweepEphemeral(); // best effort now; processes still winding down are caught on next start
     }
@@ -294,14 +295,28 @@ public sealed class WebView2Lease : IRendererLease
                 try { lease.OnMediaMessage(me.TryGetWebMessageAsString(), frame); } catch (Exception) { }
             };
             frame.Destroyed += (_, _) => lease.DropFrameMedia(frame);
+            // A frame can also REPLACE its document without being destroyed: the old document is gone, and it never
+            // sent a media-end. Without this its entry stays uncertain forever and the tab never sleeps again.
+            // ContentLoading commits, so a cancelled navigation inside the frame leaves a running call alone.
+            frame.ContentLoading += (_, _) => lease.DropFrameMedia(frame);
             frame.FrameCreated += (_, child) => Watch(child.Frame);
         }
         core.FrameCreated += (_, fe) => Watch(fe.Frame);
 
-        // Confirmed replacement of the top-level document. ContentLoading fires only once new content is actually
-        // committed, so a CANCELLED navigation does not reach here and leaves a running call alone.
+        // Confirmed replacement of the top-level document, on the same commit-not-intent basis.
         core.ContentLoading += (_, _) => lease.DropTopLevelMedia();
-        core.ProcessFailed += (_, _) => lease.DropAllMedia();
+
+        // ProcessFailed is NOT a synonym for "the renderer died". It also fires for an unresponsive renderer — which
+        // a long script can cause while the process is perfectly alive and still capturing — and for GPU and
+        // individual frame-renderer failures. Clearing on all of them would undo the stall fix by another route.
+        // Only an actually exited process is evidence that its documents are gone; everything else leaves the
+        // entries in place, uncertain, which is the safe direction.
+        core.ProcessFailed += (_, e) =>
+        {
+            if (e.ProcessFailedKind is CoreWebView2ProcessFailedKind.BrowserProcessExited
+                                    or CoreWebView2ProcessFailedKind.RenderProcessExited)
+                lease.DropAllMedia();
+        };
         await core.AddScriptToExecuteOnDocumentCreatedAsync(PageScript);
         return lease;
     }
@@ -617,12 +632,28 @@ public sealed class WebView2Lease : IRendererLease
         if (gone.Count > 0) ApplyMedia();
     }
 
-    /// <summary>The renderer process died: nothing it was doing survived, so nothing it claimed should either.</summary>
+    /// <summary>The renderer process exited: nothing it was doing survived, so nothing it claimed should either.</summary>
     internal void DropAllMedia()
     {
         if (_media.Count == 0) return;
         _media.Clear();
         ApplyMedia();
+    }
+
+    /// <summary>
+    /// The renderer is going away for good. Uncertain entries deliberately never expire, so without this the
+    /// two-second timer — and its reference to this lease — would outlive the tab that created it. Called on every
+    /// release and on shutdown, which is what makes "End private session" release host-side tracking too.
+    /// </summary>
+    public void CleanupHostState()
+    {
+        _mediaSweeper?.Stop();
+        _mediaSweeper = null;
+        _media.Clear();
+        _detected = ProtectionFlags.None;
+        DetectedProtectionChanged = null;
+        NavigationChanged = null;
+        Loaded = null;
     }
 
     internal void DropFrameMedia(CoreWebView2Frame frame)
