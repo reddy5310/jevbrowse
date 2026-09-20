@@ -428,7 +428,7 @@ public sealed partial class MainWindow : Window
         var container = new ComboBox { HorizontalAlignment = HorizontalAlignment.Stretch, Header = "Identity container" };
         foreach (var c in Enum.GetValues<IdentityContainer>()) container.Items.Add(c + (c.IsEphemeral() ? " (nothing persisted)" : ""));
         container.SelectedIndex = 0;
-        var dlg = new ContentDialog { Title = "New workspace", Content = new StackPanel { Spacing = 8, Children = { box, container } }, PrimaryButtonText = "Create", CloseButtonText = "Cancel", XamlRoot = Content.XamlRoot };
+        var dlg = new ContentDialog { Title = "New workspace", Content = new StackPanel { Spacing = Tokens.Space(8), Children = { box, container } }, PrimaryButtonText = "Create", CloseButtonText = "Cancel", XamlRoot = Content.XamlRoot };
         if (await dlg.ShowSerializedAsync() != ContentDialogResult.Primary || string.IsNullOrWhiteSpace(box.Text)) return;
         var w = _kernel!.CreateWorkspace(box.Text.Trim(), (IdentityContainer)container.SelectedIndex);
         await _kernel.SwitchWorkspaceAsync(w.Id);
@@ -686,7 +686,7 @@ public sealed partial class MainWindow : Window
         var dlg = new ContentDialog
         {
             Title = $"How should {site} be treated?",
-            Content = new StackPanel { Spacing = 8, Children = {
+            Content = new StackPanel { Spacing = Tokens.Space(8), Children = {
                 new TextBlock { Text = $"Now: {ClassLabel(current)}. {ClassExplanation(current)}", TextWrapping = TextWrapping.Wrap },
                 box,
                 new TextBlock { Text = "A page asking for a password or card number is always treated as Secret, whatever you choose here.", TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = 0.7 } } },
@@ -721,7 +721,7 @@ public sealed partial class MainWindow : Window
                     Title = $"{site} wants to {what}",
                     Content = new StackPanel
                     {
-                        Spacing = 8,
+                        Spacing = Tokens.Space(8),
                         Children =
                         {
                             new TextBlock { Text = "Choose how long to allow it. \"Not now\" (or Esc) refuses only this request and you will be asked again next time. \"Block this site\" refuses it until you change your mind.", TextWrapping = TextWrapping.Wrap },
@@ -787,7 +787,7 @@ public sealed partial class MainWindow : Window
                      + "search settings do not restrict that. Every request is recorded in this session's audit, and "
                      + "Stop in the Agents panel ends it immediately.",
             };
-            var body = new StackPanel { Spacing = 12, Children = {
+            var body = new StackPanel { Spacing = Tokens.Space(12), Children = {
                 new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas") },
                 reads } };
             var dlg = new ContentDialog { Title = "Agent session request", Content = new ScrollViewer { MaxHeight = 460, Content = body }, PrimaryButtonText = "Allow session", CloseButtonText = "Deny", DefaultButton = ContentDialogButton.Close, XamlRoot = Content.XamlRoot };
@@ -809,10 +809,10 @@ public sealed partial class MainWindow : Window
         var domains = new TextBox { Header = "Approved domains (comma-separated)", Text = "localhost, 127.0.0.1, github.com, learn.microsoft.com", IsEnabled = !running };
         var actionBoxes = new[] { AgentAction.Navigate, AgentAction.Read, AgentAction.Click, AgentAction.TypeNonSecret, AgentAction.Screenshot }
             .Select(a => new CheckBox { Content = a.ToString(), Tag = a, IsChecked = a is AgentAction.Navigate or AgentAction.Read, IsEnabled = !running }).ToList();
-        var actionRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        var actionRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = Tokens.Space(8) };
         foreach (var b in actionBoxes) actionRow.Children.Add(b);
         var minutes = new NumberBox { Header = "Max minutes per session", Value = 60, Minimum = 1, Maximum = 480, IsEnabled = !running };
-        var panel = new StackPanel { Spacing = 8, Children = { toggle } };
+        var panel = new StackPanel { Spacing = Tokens.Space(8), Children = { toggle } };
         if (!running)
         {
             panel.Children.Add(new TextBlock { TextWrapping = TextWrapping.Wrap, Opacity = 0.8, FontSize = 12, Text = "Approve what agents may ever do. A session request is clamped to this; anything wider is dropped, and you are asked about every session. Agents only ever get a throwaway identity, never your logins." });
@@ -839,7 +839,7 @@ public sealed partial class MainWindow : Window
                     state.Text = SessionLine(session);
                     StatusText.Text = released ? $"agent session {session.Id} revoked and its pages released" : $"agent session {session.Id} revoked; some pages could not be released yet";
                 };
-                panel.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { stop, state } });
+                panel.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = Tokens.Space(8), Children = { stop, state } });
             }
             var stopAll = new Button { Content = "Stop all sessions", Style = (Style)Application.Current.Resources["JevToolButton"] };
             stopAll.Click += async (_, _) => { var n = await _agentHost!.StopAllAsync(); StatusText.Text = $"revoked {n} agent session(s)"; };
@@ -900,7 +900,7 @@ public sealed partial class MainWindow : Window
     {
         if (_dev is null || _kernel is null) return;
         var enable = new ToggleSwitch { Header = "DevSpace enabled (attaches DevTools listeners to new renderers)", IsOn = _dev.Enabled };
-        var panel = new StackPanel { Spacing = 8, Children = { enable } };
+        var panel = new StackPanel { Spacing = Tokens.Space(8), Children = { enable } };
 
         if (_dev.Projects.Count == 0)
         {
@@ -994,7 +994,7 @@ public sealed partial class MainWindow : Window
         var dlg = new ContentDialog
         {
             Title = "Browser Memory",
-            Content = new StackPanel { Spacing = 8, Children = { box, info, results } },
+            Content = new StackPanel { Spacing = Tokens.Space(8), Children = { box, info, results } },
             PrimaryButtonText = "Open", SecondaryButtonText = "Clear index", CloseButtonText = "Close", XamlRoot = Content.XamlRoot,
         };
         box.Loaded += (_, _) => box.Focus(FocusState.Programmatic);
@@ -1107,7 +1107,7 @@ public sealed partial class MainWindow : Window
         var metric = new TextBlock { Text = "Cloud calls by data class: " + (byClass.Count == 0 ? "none" : string.Join(", ", byClass.Select(kv => $"{kv.Key}={kv.Value}"))), Opacity = 0.8 };
         var log = new TextBlock { FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), FontSize = 11, TextWrapping = TextWrapping.Wrap,
             Text = string.Join("\n", _decisions.Recent(25).Select(r => $"{r.At.ToLocalTime():HH:mm:ss} {r.Source,-10} {r.Rule}{(r.Redacted ? $" (redacted {r.RedactionCount})" : "")}")) };
-        var panel = new StackPanel { Spacing = 8, Children = { ai, cloud, auto, providers, metric, new TextBlock { Text = "Decision log (newest first):", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold }, new ScrollViewer { MaxHeight = 260, Content = log } } };
+        var panel = new StackPanel { Spacing = Tokens.Space(8), Children = { ai, cloud, auto, providers, metric, new TextBlock { Text = "Decision log (newest first):", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold }, new ScrollViewer { MaxHeight = 260, Content = log } } };
         var dlg = new ContentDialog { Title = "JevBrain", Content = panel, PrimaryButtonText = "Save", CloseButtonText = "Close", XamlRoot = Content.XamlRoot };
         if (await dlg.ShowSerializedAsync() != ContentDialogResult.Primary) return;
         _brainPolicy.AiEnabled = ai.IsOn;
@@ -1172,7 +1172,7 @@ public sealed partial class MainWindow : Window
         // is one button, not a table of rules.
         var repair = new StackPanel
         {
-            Spacing = 4,
+            Spacing = Tokens.Space(4),
             Children =
             {
                 new TextBlock { Text = "Site not working?", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15 },
@@ -1193,7 +1193,7 @@ public sealed partial class MainWindow : Window
         var dlg = new ContentDialog
         {
             Title = "Shield",
-            Content = new StackPanel { Spacing = 12, Children = { repair, new TextBlock { Text = summary, TextWrapping = TextWrapping.Wrap }, showHidden, undoNote, details } },
+            Content = new StackPanel { Spacing = Tokens.Space(12), Children = { repair, new TextBlock { Text = summary, TextWrapping = TextWrapping.Wrap }, showHidden, undoNote, details } },
             PrimaryButtonText = enabled ? "Turn off and reload" : "Turn on",
             SecondaryButtonText = "Update block lists",
             CloseButtonText = "Close",
@@ -2151,7 +2151,7 @@ public sealed partial class MainWindow : Window
             ProtectionPhrases.StayAwake(t.Protection)));
 
         // Sentences, in the interface font. The scheduler's raw record is not what anyone opened this to read.
-        var body = new StackPanel { Spacing = 10, MinWidth = 420 };
+        var body = new StackPanel { Spacing = Tokens.Space(10), MinWidth = 420 };
         body.Children.Add(new TextBlock { Text = view.Headline, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
         foreach (var line in view.Lines) body.Children.Add(new TextBlock { Text = line, TextWrapping = TextWrapping.Wrap, Opacity = 0.9 });
 

@@ -52,6 +52,16 @@ public static class Tokens
         Key = highContrast ? "HighContrast" : effective == ElementTheme.Light ? "Light" : "Dark";
     }
 
+    /// <summary>A layout inset from App.xaml (padding or margin) by role name. The numbers live in one place.</summary>
+    public static Thickness Inset(string name) => Application.Current.Resources.TryGetValue(name, out var v) && v is Thickness t ? t : new Thickness(0);
+
+    /// <summary>
+    /// A gap from the spacing scale in App.xaml. It never throws (spacing is cosmetic and this runs while dialogs are being
+    /// built); that call sites use only steps that exist is enforced by a test instead.
+    /// </summary>
+    public static double Space(int step) =>
+        Application.Current.Resources.TryGetValue("JevSpace" + step, out var v) && v is double d ? d : step;
+
     /// <summary>The brush for a token in the current theme. Never throws: a missing token falls back to the primary text colour.</summary>
     public static Brush Brush(string name)
     {

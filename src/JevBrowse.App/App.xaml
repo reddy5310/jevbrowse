@@ -203,6 +203,54 @@
 
             <ThemeShadow x:Key="JevShadow"/>
 
+            <!--
+              LAYOUT TOKENS: the same rule as colour. The window names a ROLE ("panel radius", "sidebar inset"), never a number,
+              so the scale can be changed in one place and a test can hold it to a rule (DesignTokenTests).
+
+              Radius:     Dot < Sm < Control < Card < Pill < Panel. (Five near-identical radii were in use; they are now a scale.)
+              Space:      the gaps between things. On a 2 px grid; nothing between the steps.
+              Inset:      padding and margin as named roles, so "how far the sidebar sits from the edge" has one answer.
+              Elevation:  how far a surface sits above the one beneath it: four Z depths, applied with local:Elevation.Level.
+            -->
+            <CornerRadius x:Key="JevRadiusDot">5</CornerRadius>
+            <CornerRadius x:Key="JevRadiusSm">8</CornerRadius>
+            <CornerRadius x:Key="JevRadiusControl">10</CornerRadius>
+            <CornerRadius x:Key="JevRadiusCard">12</CornerRadius>
+            <CornerRadius x:Key="JevRadiusPill">14</CornerRadius>
+            <CornerRadius x:Key="JevRadiusPanel">16</CornerRadius>
+            <CornerRadius x:Key="JevRadiusTag">0,0,10,0</CornerRadius>
+
+            <x:Double x:Key="JevSpace2">2</x:Double>
+            <x:Double x:Key="JevSpace4">4</x:Double>
+            <x:Double x:Key="JevSpace6">6</x:Double>
+            <x:Double x:Key="JevSpace8">8</x:Double>
+            <x:Double x:Key="JevSpace10">10</x:Double>
+            <x:Double x:Key="JevSpace12">12</x:Double>
+
+            <Thickness x:Key="JevInsetTitle">14,0</Thickness>
+            <Thickness x:Key="JevInsetSidebar">10,8,4,10</Thickness>
+            <Thickness x:Key="JevInsetSidebarHead">12,12,12,6</Thickness>
+            <Thickness x:Key="JevInsetSidebarFoot">10,6,10,10</Thickness>
+            <Thickness x:Key="JevInsetMain">4,8,10,10</Thickness>
+            <Thickness x:Key="JevInsetMainFull">10,8,10,10</Thickness>
+            <Thickness x:Key="JevInsetToolbar">0,0,0,8</Thickness>
+            <Thickness x:Key="JevInsetStatus">8,6,8,0</Thickness>
+            <Thickness x:Key="JevInsetSlim">6,0</Thickness>
+            <Thickness x:Key="JevInsetTight">4</Thickness>
+            <Thickness x:Key="JevInsetBox">10,8</Thickness>
+            <Thickness x:Key="JevInsetControl">10,6</Thickness>
+            <Thickness x:Key="JevInsetBadge">8,2</Thickness>
+            <Thickness x:Key="JevInsetTag">10,3</Thickness>
+            <Thickness x:Key="JevInsetScrim">8,4</Thickness>
+            <Thickness x:Key="JevInsetPanelPad">24</Thickness>
+            <Thickness x:Key="JevInsetNote">0,6,0,0</Thickness>
+
+            <!-- Depth in device-independent pixels of Z above the surface beneath. Applied with local:Elevation.Level="Panel". -->
+            <x:Double x:Key="JevElevationGlow">8</x:Double>
+            <x:Double x:Key="JevElevationRaised">12</x:Double>
+            <x:Double x:Key="JevElevationSurface">16</x:Double>
+            <x:Double x:Key="JevElevationPanel">24</x:Double>
+
             <!-- Text that names no colour is the primary text token. (A Grid has no Foreground to inherit from, so the
                  default is set here, once, and every TextBlock in the window and in dialogs picks it up.) -->
             <Style TargetType="TextBlock">
@@ -212,12 +260,12 @@
             <Style x:Key="JevToolButton" TargetType="Button">
                 <Setter Property="Background" Value="{ThemeResource JevSurface2Brush}"/>
                 <Setter Property="BorderBrush" Value="{ThemeResource JevBorderSubtleBrush}"/>
-                <Setter Property="CornerRadius" Value="10"/>
-                <Setter Property="Padding" Value="10,6"/>
+                <Setter Property="CornerRadius" Value="{StaticResource JevRadiusControl}"/>
+                <Setter Property="Padding" Value="{StaticResource JevInsetControl}"/>
                 <Setter Property="FontSize" Value="12.5"/>
             </Style>
             <Style x:Key="JevCombo" TargetType="ComboBox">
-                <Setter Property="CornerRadius" Value="10"/>
+                <Setter Property="CornerRadius" Value="{StaticResource JevRadiusControl}"/>
                 <Setter Property="Background" Value="{ThemeResource JevSurface2Brush}"/>
                 <Setter Property="BorderBrush" Value="{ThemeResource JevBorderSubtleBrush}"/>
             </Style>

@@ -179,6 +179,102 @@ public class DesignTokenTests
         Assert.Empty(Regex.Matches(stripped, @"(?<![\w-])#[0-9a-fA-F]{6}\b"));
     }
 
+    // ---- layout tokens: radius, spacing, inset, elevation ----
+
+    private static XElement AppResources() => XDocument.Load(Path.Combine(Src(), "App.xaml")).Descendants(P + "Application.Resources").Single();
+
+    private static double First(string v) => double.Parse(v.Split(',')[0].Trim(), System.Globalization.CultureInfo.InvariantCulture);
+
+    private static Dictionary<string, string> LayoutTokens(string element) =>
+        AppResources().Descendants(element == "Double" ? X + "Double" : P + element).Where(e => e.Attribute(X + "Key") is not null)
+            .ToDictionary(e => (string)e.Attribute(X + "Key")!, e => e.Value.Trim());
+
+    [Fact]
+    public void Text_that_names_no_colour_is_the_primary_text_token_by_an_implicit_style()
+    {
+        // Deleted once by an edit to a neighbouring block; every test stayed green and only a pixel diff noticed, because
+        // dark text quietly became pure white instead of the token. Nothing else looked for this style.
+        var implicitText = AppResources().Descendants(P + "Style").SingleOrDefault(e => (string?)e.Attribute("TargetType") == "TextBlock" && e.Attribute(X + "Key") is null);
+        Assert.NotNull(implicitText);
+        var fg = implicitText!.Elements(P + "Setter").Single(e => (string?)e.Attribute("Property") == "Foreground");
+        Assert.Equal("{ThemeResource JevTextPrimaryBrush}", (string?)fg.Attribute("Value"));
+    }
+
+    [Fact]
+    public void Radius_is_a_scale_that_only_grows()
+    {
+        var r = LayoutTokens("CornerRadius");
+        var order = new[] { "JevRadiusDot", "JevRadiusSm", "JevRadiusControl", "JevRadiusCard", "JevRadiusPill", "JevRadiusPanel" };
+        foreach (var k in order) Assert.True(r.ContainsKey(k), $"missing {k}");
+        for (var i = 1; i < order.Length; i++)
+            Assert.True(First(r[order[i]]) > First(r[order[i - 1]]), $"{order[i]} ({r[order[i]]}) must exceed {order[i - 1]} ({r[order[i - 1]]})");
+    }
+
+    [Fact]
+    public void Spacing_sits_on_a_two_pixel_grid_and_only_grows()
+    {
+        var sp = LayoutTokens("Double").Where(kv => kv.Key.StartsWith("JevSpace")).OrderBy(kv => First(kv.Value)).ToList();
+        Assert.NotEmpty(sp);
+        foreach (var (k, v) in sp) Assert.True(First(v) % 2 == 0, $"{k} = {v} is off the 2 px grid");
+        Assert.Equal(sp.Select(kv => kv.Key), sp.Select(kv => "JevSpace" + (int)First(kv.Value)));   // the name IS the value
+        Assert.Equal(sp.Count, sp.Select(kv => kv.Value).Distinct().Count());
+    }
+
+    [Fact]
+    public void Elevation_is_four_levels_each_higher_than_the_last()
+    {
+        var e = LayoutTokens("Double");
+        var levels = new[] { "JevElevationGlow", "JevElevationRaised", "JevElevationSurface", "JevElevationPanel" };
+        foreach (var k in levels) Assert.True(e.ContainsKey(k), $"missing {k}");
+        for (var i = 1; i < levels.Length; i++)
+            Assert.True(First(e[levels[i]]) > First(e[levels[i - 1]]), $"{levels[i]} must sit above {levels[i - 1]}");
+    }
+
+    [Fact]
+    public void Every_elevation_the_window_asks_for_is_a_defined_level()
+    {
+        var defined = LayoutTokens("Double").Keys.ToHashSet();
+        var xaml = File.ReadAllText(Path.Combine(Src(), "MainWindow.xaml"));
+        var used = Regex.Matches(xaml, @"local:Elevation\.Level=""(\w+)""").Select(m => m.Groups[1].Value).ToList();
+        Assert.NotEmpty(used);
+        foreach (var level in used) Assert.True(defined.Contains("JevElevation" + level), $"local:Elevation.Level=\"{level}\" has no JevElevation{level} in App.xaml");
+    }
+
+    [Fact]
+    public void The_window_markup_uses_layout_tokens_never_numbers()
+    {
+        var xaml = File.ReadAllText(Path.Combine(Src(), "MainWindow.xaml"));
+        foreach (var attr in new[] { "CornerRadius", "Spacing", "ColumnSpacing", "RowSpacing", "Padding", "Margin", "Translation", "Shadow" })
+            Assert.Empty(Regex.Matches(xaml, $@"(?<![\w.]){attr}=""[^{{""][^""]*"""));
+    }
+
+    [Fact]
+    public void Every_token_the_window_refers_to_exists()
+    {
+        var defined = AppResources().Descendants().Select(e => (string?)e.Attribute(X + "Key")).Where(k => k is not null).ToHashSet();
+        var xaml = File.ReadAllText(Path.Combine(Src(), "MainWindow.xaml"));
+        foreach (Match m in Regex.Matches(xaml, @"\{(?:Static|Theme)Resource (Jev\w+)\}"))
+            Assert.True(defined.Contains(m.Groups[1].Value), $"MainWindow.xaml refers to {m.Groups[1].Value}, which App.xaml does not define");
+    }
+
+    [Fact]
+    public void The_shell_code_takes_its_spacing_and_insets_from_the_tokens()
+    {
+        var src = Src();
+        var scale = LayoutTokens("Double").Keys.Where(k => k.StartsWith("JevSpace")).Select(k => int.Parse(k["JevSpace".Length..])).ToHashSet();
+        var insets = LayoutTokens("Thickness").Keys.ToHashSet();
+        foreach (var f in new[] { "MainWindow.xaml.cs", "MainWindow.Alpha.cs", "MainWindow.Theme.cs", "TabItem.cs" })
+        {
+            var code = File.ReadAllText(Path.Combine(src, f));
+            Assert.DoesNotMatch(@"\bSpacing = \d", code);
+            Assert.DoesNotMatch(@"new Thickness\(\s*\d", code);
+            foreach (Match m in Regex.Matches(code, @"Tokens\.Space\((\d+)\)"))
+                Assert.True(scale.Contains(int.Parse(m.Groups[1].Value)), $"{f}: Tokens.Space({m.Groups[1].Value}) is not a step on the scale");
+            foreach (Match m in Regex.Matches(code, @"Tokens\.Inset\(""(\w+)""\)"))
+                Assert.True(insets.Contains(m.Groups[1].Value), $"{f}: Tokens.Inset(\"{m.Groups[1].Value}\") is not defined in App.xaml");
+        }
+    }
+
     [Fact]
     public void Nothing_in_the_shell_code_picks_a_named_colour()
     {

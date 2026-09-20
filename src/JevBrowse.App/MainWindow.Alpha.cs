@@ -259,7 +259,7 @@ public sealed partial class MainWindow
         {
             SidebarColumn.Width = new GridLength(collapsed ? 0 : 276);
             Sidebar.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
-            MainArea.Margin = collapsed ? new Thickness(10, 8, 10, 10) : new Thickness(4, 8, 10, 10);
+            MainArea.Margin = collapsed ? Tokens.Inset("JevInsetMainFull") : Tokens.Inset("JevInsetMain");
         }
         // Only a person's own toggle animates (remember == true); the state restored at start-up just is. Hiding fades the
         // panel out and then gives its room back; showing gives the room back and fades the panel in.
@@ -351,7 +351,7 @@ public sealed partial class MainWindow
         }
         box.TextChanged += (_, _) => Filter();
         Filter();
-        var dlg = new ContentDialog { Title = "Command palette", Content = new StackPanel { Spacing = 8, Children = { box, list } }, PrimaryButtonText = "Run", CloseButtonText = "Close", XamlRoot = Content.XamlRoot, DefaultButton = ContentDialogButton.Primary };
+        var dlg = new ContentDialog { Title = "Command palette", Content = new StackPanel { Spacing = Tokens.Space(8), Children = { box, list } }, PrimaryButtonText = "Run", CloseButtonText = "Close", XamlRoot = Content.XamlRoot, DefaultButton = ContentDialogButton.Primary };
         box.Loaded += (_, _) => box.Focus(FocusState.Programmatic);
         box.KeyDown += (_, k) => { if (k.Key == Windows.System.VirtualKey.Down && list.SelectedIndex < list.Items.Count - 1) { list.SelectedIndex++; k.Handled = true; } else if (k.Key == Windows.System.VirtualKey.Up && list.SelectedIndex > 0) { list.SelectedIndex--; k.Handled = true; } };
         if (await dlg.ShowSerializedAsync() != ContentDialogResult.Primary || list.SelectedIndex < 0 || list.SelectedIndex >= shown.Count) return;
@@ -491,12 +491,12 @@ public sealed partial class MainWindow
             ProtectionPhrases.StayAwake(t.Protection));
 
         // Label over value, stacked: reads in order with a screen reader and cannot wrap into misaligned columns.
-        var body = new StackPanel { Spacing = 10, MinWidth = 440 };
+        var body = new StackPanel { Spacing = Tokens.Space(10), MinWidth = 440 };
         foreach (var (label, value) in ReceiptRows.Build(facts))
         {
             body.Children.Add(new StackPanel
             {
-                Spacing = 1,
+                Spacing = Tokens.Space(2),
                 Children =
                 {
                     new TextBlock { Text = label, FontSize = 12, Opacity = 0.65 },
@@ -504,7 +504,7 @@ public sealed partial class MainWindow
                 },
             });
         }
-        body.Children.Add(new TextBlock { Text = ReceiptRows.Footnote, FontSize = 12, Opacity = 0.65, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 0) });
+        body.Children.Add(new TextBlock { Text = ReceiptRows.Footnote, FontSize = 12, Opacity = 0.65, TextWrapping = TextWrapping.Wrap, Margin = Tokens.Inset("JevInsetNote") });
         await new ContentDialog { Title = ReceiptRows.Title(facts), Content = new ScrollViewer { Content = body, MaxHeight = 460, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, HorizontalScrollMode = ScrollMode.Disabled }, CloseButtonText = "Close", XamlRoot = Content.XamlRoot }.ShowSerializedAsync();
     }
 }
