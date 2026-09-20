@@ -1272,7 +1272,10 @@ public sealed partial class MainWindow : Window
         _autoAllowPermissions = false;
 
         // 4. Does a live call stop the scheduler putting the tab to sleep underneath it?
-        var protectionDuringCall = "not observed";
+        // Asserted specifically, not by looking for the word "refused" in a message: a capture failure or an
+        // unrelated protection flag would satisfy that, and then a regression would read as a pass.
+        object callProtection = "not observed";
+        bool micFlagged = false, vetoedByMedia = false, mediaSurvived = false, clearedAfterStop = false, sleepsAfterStop = false;
         try
         {
             _autoAllowPermissions = true;
@@ -1280,33 +1283,60 @@ public sealed partial class MainWindow : Window
             if (opened.TryGetProperty("ok", out _))
             {
                 await Task.Delay(2500);
+                var during = tab.Protection;
+                micFlagged = during.HasFlag(ProtectionFlags.MicrophoneActive) && during.HasFlag(ProtectionFlags.CameraActive);
+
                 var demote = await k.VirtualizeAsync(tab.Id, Cause.Scheduler);
-                protectionDuringCall = $"{tab.Protection} → scheduler {(demote.Allowed ? "PUT IT TO SLEEP" : "refused: " + demote.Reason)}";
-                // If it did get put to sleep the renderer is gone; touching it again would throw.
-                if (!demote.Allowed) await EvalAsync("window.__jevCall.getTracks().forEach(t => t.stop()); return { ok: true };", 10000);
+                vetoedByMedia = !demote.Allowed && demote.Reason.Contains("MicrophoneActive", StringComparison.Ordinal);
+
+                // The renderer must still be there, and the media still running — a veto that killed the call anyway
+                // would be worthless.
+                var alive = await EvalAsync("return { live: window.__jevCall.getTracks().filter(t => t.readyState === 'live').length };", 10000);
+                mediaSurvived = tab.State.HasLiveRenderer() && alive.TryGetProperty("live", out var lv) && lv.GetInt32() == 2;
+
+                // And when the call ends, the tab must go back to being an ordinary tab.
+                await EvalAsync("window.__jevCall.getTracks().forEach(t => t.stop()); return { ok: true };", 10000);
+                await Task.Delay(1500);
+                clearedAfterStop = !tab.Protection.HasLiveMedia();
+                sleepsAfterStop = (await k.VirtualizeAsync(tab.Id, Cause.Scheduler)).Allowed;
+
+                callProtection = new
+                {
+                    duringCall = during.ToString(),
+                    schedulerVerdict = demote.Allowed ? "PUT IT TO SLEEP" : demote.Reason,
+                    liveTracksAfterVeto = alive.TryGetProperty("live", out var l2) ? l2.GetInt32() : -1,
+                    afterStop = tab.Protection.ToString(),
+                    sleepsAfterStop,
+                };
             }
-            else protectionDuringCall = "no media to hold: " + opened;
+            else callProtection = "no media to hold: " + opened;
         }
-        catch (Exception ex) { protectionDuringCall = "probe failed: " + ex.GetType().Name; }
+        catch (Exception ex) { callProtection = "probe failed: " + ex.GetType().Name + ": " + ex.Message; }
         finally { _autoAllowPermissions = false; }
 
         bool B(JsonElement e, string p) => e.TryGetProperty(p, out var v) && v.ValueKind == JsonValueKind.True;
         var stackWorks = B(apis, "getUserMedia") && B(apis, "RTCPeerConnection") && B(loopback, "connected") && B(loopback, "remoteTrackReceived");
         var framesFlowed = loopback.TryGetProperty("framesDecoded", out var fd) && fd.GetInt32() > 0;
 
-        // A call that the scheduler is free to hibernate is not a working call, so protection is part of PASS.
-        var callSurvivesScheduler = protectionDuringCall.Contains("refused", StringComparison.Ordinal);
+        // A call the scheduler may hibernate is not a working call, so protection is part of PASS — and so is
+        // releasing it afterwards, because protection that never clears is its own bug.
+        var callSurvivesScheduler = micFlagged && vetoedByMedia && mediaSurvived;
         var result = new
         {
-            pass = stackWorks && framesFlowed && callSurvivesScheduler,
+            pass = stackWorks && framesFlowed && callSurvivesScheduler && clearedAfterStop && sleepsAfterStop,
             summary = !stackWorks ? "The WebRTC stack did not complete a loopback call."
                 : !framesFlowed ? "WebRTC negotiated but no frames decoded."
-                : !callSurvivesScheduler ? "WebRTC works, but the scheduler is willing to hibernate a live call."
-                : "WebRTC negotiates and carries video end to end, and a live call blocks hibernation.",
+                : !micFlagged ? "Capture ran but the tab did not report microphone and camera."
+                : !vetoedByMedia ? "The scheduler was willing to hibernate a live capture."
+                : !mediaSurvived ? "The scheduler was refused, but the renderer or the tracks did not survive it."
+                : !clearedAfterStop || !sleepsAfterStop ? "Protection did not clear after the capture stopped."
+                : "Top-level capture blocks automatic hibernation and releases it afterwards; loopback video and real device capture passed.",
+            scope = "Top-level document only. Capture inside iframes, real Meet/Zoom sessions, screen-share picker "
+                  + "and disconnect/reconnect are not exercised by this check.",
+            callProtection,
             apiSurface = apis,
             loopbackCall = loopback,
             realDevices = devices,
-            sleepDuringCall = protectionDuringCall,
             note = "Permission prompts were auto-allowed for this run; in normal use camera and microphone are Ask. "
                  + "Device counts of 0 mean this machine has no camera/microphone attached, not that JevBrowse blocked them.",
         };
@@ -1593,17 +1623,49 @@ public sealed partial class MainWindow : Window
         if (wasActive && _kernel.Tabs.Count > 0) await _kernel.ActivateAsync(_kernel.Tabs[^1].Id);
     }
 
+    /// <summary>Protection flags in the words a person would use, for the cases that are not live media.</summary>
+    private static string ReadableProtection(ProtectionFlags p)
+    {
+        var parts = new List<string>();
+        if (p.HasFlag(ProtectionFlags.DownloadActive)) parts.Add("a download is running");
+        if (p.HasFlag(ProtectionFlags.DirtyForm)) parts.Add("you have typed something that is not saved");
+        if (p.HasFlag(ProtectionFlags.Audible)) parts.Add("it is playing sound");
+        if (p.HasFlag(ProtectionFlags.KeepActive)) parts.Add("you asked to keep it active");
+        if (p.HasFlag(ProtectionFlags.NeverHibernateSite)) parts.Add("this site is set to stay active");
+        return parts.Count == 0 ? "This tab is protected." : char.ToUpperInvariant(parts[0][0]) + string.Join(", ", parts)[1..] + ".";
+    }
+
     private async void OnHibernateCurrent(object s, RoutedEventArgs e)
     {
         if (_kernel?.Active is not { } tab) return;
         // A manual request overrides protections, so say what is being overridden before dropping the renderer.
         if (tab.IsDemotionVetoed)
         {
+            // Live media is not "a protection flag" to a person: it is their microphone, their camera, their screen
+            // being shared right now. Lead with that, in those words, before anything about renderers.
+            var media = tab.Protection.HasLiveMedia();
+            var doing = new List<string>();
+            if (tab.Protection.HasFlag(ProtectionFlags.ScreenShareActive)) doing.Add("sharing your screen");
+            if (tab.Protection.HasFlag(ProtectionFlags.CameraActive)) doing.Add("using your camera");
+            if (tab.Protection.HasFlag(ProtectionFlags.MicrophoneActive)) doing.Add("using your microphone");
+            if (tab.Protection.HasFlag(ProtectionFlags.WebRtcActive) && doing.Count == 0) doing.Add("in a call");
             var dlg = new ContentDialog
             {
-                Title = "This tab is protected",
-                Content = new TextBlock { TextWrapping = TextWrapping.Wrap, Text = $"Protection: {tab.Protection}.\nHibernating discards the live page. Anything not saved on the site (a typed form, an upload, a call, a download in progress) will be lost; only the address and scroll position are kept." },
-                PrimaryButtonText = "Hibernate anyway", CloseButtonText = "Keep it live", DefaultButton = ContentDialogButton.Close, XamlRoot = Content.XamlRoot,
+                Title = media ? $"This page is {string.Join(" and ", doing)}" : "This tab is busy",
+                Content = new TextBlock
+                {
+                    TextWrapping = TextWrapping.Wrap,
+                    Text = media
+                        ? $"Putting “{(string.IsNullOrWhiteSpace(tab.Title) ? tab.Url.Host : tab.Title)}” to sleep ends it. "
+                          + "You will leave the call or stop sharing, and the other people will see you go.\n\n"
+                          + "Only the address and scroll position are kept."
+                        : $"{ReadableProtection(tab.Protection)}\n\nPutting this tab to sleep closes the live page. "
+                          + "Anything the site has not saved — typing in a form, an upload, a download in progress — "
+                          + "is lost. Only the address and scroll position are kept.",
+                },
+                PrimaryButtonText = media ? "Leave and sleep" : "Put it to sleep",
+                CloseButtonText = media ? "Stay in the call" : "Keep it open",
+                DefaultButton = ContentDialogButton.Close, XamlRoot = Content.XamlRoot,
             };
             if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
         }

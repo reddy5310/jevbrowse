@@ -47,7 +47,12 @@ public sealed class TabItem(VirtualTab tab) : INotifyPropertyChanged
             if (p.HasFlag(ProtectionFlags.KeepActive)) reasons.Add("kept active");
             if (p.HasFlag(ProtectionFlags.NeverHibernateSite)) reasons.Add("site kept active");
             if (p.HasFlag(ProtectionFlags.Audible)) reasons.Add("playing sound");
-            if (p.HasFlag(ProtectionFlags.WebRtcActive)) reasons.Add("in a call");
+            // Named separately: "sharing your screen" and "using your microphone" are different things to be told,
+            // and a person deciding whether to close a tab needs to know which one it is.
+            if (p.HasFlag(ProtectionFlags.ScreenShareActive)) reasons.Add("sharing screen");
+            if (p.HasFlag(ProtectionFlags.CameraActive)) reasons.Add("using camera");
+            if (p.HasFlag(ProtectionFlags.MicrophoneActive)) reasons.Add("using microphone");
+            if (p.HasFlag(ProtectionFlags.WebRtcActive)) reasons.Add("call active");
             if (p.HasFlag(ProtectionFlags.DownloadActive)) reasons.Add("downloading");
             if (p.HasFlag(ProtectionFlags.DirtyForm)) reasons.Add("unsaved typing");
             return string.Join(", ", reasons);

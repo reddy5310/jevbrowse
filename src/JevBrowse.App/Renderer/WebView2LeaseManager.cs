@@ -149,26 +149,53 @@ public sealed class WebView2Lease : IRendererLease
             // shell the assessment is settled rather than still loading.
             if (!pw && !cc && !out && document.body && (document.body.innerText || '').trim().length > 200) post('jev:content-rendered');
           };
-          // Camera / microphone / screen capture in progress. IsDocumentPlayingAudio cannot see this: a microphone
-          // capture makes no sound come OUT of the page, so a live video call looks exactly like an idle tab and the
-          // scheduler hibernates it mid-call. We count live capture tracks instead, and an open peer connection for
-          // the case where the user is only receiving.
-          let live = 0, peers = 0;
-          const busy = () => post(live + peers > 0 ? 'jev:capture-on' : 'jev:capture-off');
+          // Camera / microphone / screen capture, and calls. IsDocumentPlayingAudio cannot see any of this: a
+          // microphone capture makes no sound come OUT of the page, so a live call looks exactly like an idle tab
+          // and the scheduler disposes the renderer mid-meeting.
+          //
+          // Reported as a HEARTBEAT keyed by this document, not as on/off edges. A document that navigates away,
+          // crashes or is discarded simply stops sending, and the host expires it -- so a stale "in a call" cannot
+          // outlive the page that was in one, and a CANCELLED navigation does not wrongly clear a running call
+          // either. Frames each report under their own id and the host adds them up.
+          const docId = (Math.random().toString(36).slice(2) + Date.now().toString(36));
+          const mic = new Set(), cam = new Set(), screen = new Set();
+          let peers = 0, beat = null, lastSent = '';
+          const kinds = () => (mic.size ? 'mic,' : '') + (cam.size ? 'cam,' : '') + (screen.size ? 'screen,' : '') + (peers > 0 ? 'peer' : '');
+          const send = () => {
+            const k = kinds();
+            if (k === '' ) {
+              if (beat) { clearInterval(beat); beat = null; }
+              if (lastSent !== '') { lastSent = ''; post('jev:media-end:' + docId); }
+              return;
+            }
+            lastSent = k;
+            post('jev:media:' + docId + ':' + k);
+            if (!beat) beat = setInterval(() => post('jev:media:' + docId + ':' + kinds()), 2000);
+          };
+          const forget = t => { mic.delete(t); cam.delete(t); screen.delete(t); send(); };
           const md = navigator.mediaDevices;
           if (md) {
-            const watch = stream => {
-              stream.getTracks().forEach(t => {
-                let counted = true; live++; busy();
-                const off = () => { if (!counted) return; counted = false; live--; busy(); };
-                t.addEventListener('ended', off);
-                const stop = t.stop.bind(t); t.stop = () => { stop(); off(); };
-              });
+            // Clones have independent lifetimes: a page may clone a track, stop the original and keep using the
+            // clone. Counting only what getUserMedia handed back would then report no capture during live capture.
+            const track = (t, set) => {
+              if (set.has(t)) return t;
+              set.add(t);
+              t.addEventListener('ended', () => forget(t));
+              const stop = t.stop.bind(t); t.stop = () => { stop(); forget(t); };
+              const clone = t.clone.bind(t); t.clone = () => track(clone(), set);
+              send();
+              return t;
+            };
+            const watch = (stream, screenShare) => {
+              stream.getAudioTracks().forEach(t => track(t, screenShare ? screen : mic));
+              stream.getVideoTracks().forEach(t => track(t, screenShare ? screen : cam));
+              const add = stream.clone.bind(stream);
+              stream.clone = () => watch(add(), screenShare);
               return stream;
             };
-            for (const fn of ['getUserMedia', 'getDisplayMedia']) {
+            for (const [fn, isScreen] of [['getUserMedia', false], ['getDisplayMedia', true]]) {
               const orig = md[fn] && md[fn].bind(md);
-              if (orig) md[fn] = (...a) => orig(...a).then(watch);
+              if (orig) md[fn] = (...a) => orig(...a).then(s => watch(s, isScreen));
             }
           }
           if (typeof RTCPeerConnection === 'function') {
@@ -177,12 +204,16 @@ public sealed class WebView2Lease : IRendererLease
               const pc = new Orig(...a);
               let counted = false;
               const sync = () => {
-                const on = pc.connectionState === 'connected' || pc.connectionState === 'connecting';
+                // 'disconnected' is the RECOVERY window, not the end of the call -- it is exactly when a participant
+                // with no local capture needs the renderer most. Only 'failed' and 'closed' are terminal.
+                // 'new' is not counted: a page may construct a connection and never use it.
+                const s = pc.connectionState;
+                const on = s === 'connecting' || s === 'connected' || s === 'disconnected';
                 if (on === counted) return;
-                counted = on; peers += on ? 1 : -1; busy();
+                counted = on; peers += on ? 1 : -1; send();
               };
               pc.addEventListener('connectionstatechange', sync);
-              const close = pc.close.bind(pc); pc.close = () => { close(); if (counted) { counted = false; peers--; busy(); } };
+              const close = pc.close.bind(pc); pc.close = () => { close(); if (counted) { counted = false; peers--; send(); } };
               return pc;
             };
             Patched.prototype = Orig.prototype;
@@ -246,9 +277,22 @@ public sealed class WebView2Lease : IRendererLease
                 case "jev:payment-field": lease.SetSignals(lease._signals | PageSignals.PaymentField); break;
                 case "jev:authenticated": lease.SetSignals((lease._signals | PageSignals.Authenticated) & ~PageSignals.ContentRendered); break;
                 case "jev:content-rendered": if (!lease._signals.HasFlag(PageSignals.Authenticated)) lease.SetSignals(lease._signals | PageSignals.ContentRendered); break;
-                case "jev:capture-on": lease.SetDetected(ProtectionFlags.WebRtcActive, true); break;
-                case "jev:capture-off": lease.SetDetected(ProtectionFlags.WebRtcActive, false); break;
+                default: lease.OnMediaMessage(msg); break;
             }
+        };
+        // A call can live in an iframe (embedded Meet, a widget). CoreWebView2.WebMessageReceived only carries the
+        // TOP-LEVEL document's messages, so without this an embedded, microphone-only call reports nothing at all
+        // and gets hibernated. Each frame reports under its own document id and is dropped when it is destroyed.
+        core.FrameCreated += (_, fe) =>
+        {
+            var frame = fe.Frame;
+            frame.WebMessageReceived += (_, me) =>
+            {
+                try { lease.OnMediaMessage(me.TryGetWebMessageAsString()); } catch (Exception) { }
+            };
+            // No need to map frames to document ids: a destroyed frame stops its heartbeat and expires. Sweeping
+            // here just makes it prompt.
+            frame.Destroyed += (_, _) => lease.SweepMedia();
         };
         await core.AddScriptToExecuteOnDocumentCreatedAsync(PageScript);
         return lease;
@@ -497,6 +541,71 @@ public sealed class WebView2Lease : IRendererLease
 
     public event Action<NavigationInfo>? NavigationChanged;
     public event Action? Loaded;
+    // ---- live capture and calls, per document ----
+    //
+    // Keyed by the reporting document, never by the tab: a tab can hold a top-level page and several frames, each
+    // with its own media, and one of them stopping must not clear another's protection. Entries are refreshed by a
+    // heartbeat and expire, so a page that navigates away, crashes or is discarded cannot leave "in a call" stuck on.
+
+    private readonly Dictionary<string, (ProtectionFlags Kinds, DateTimeOffset Seen)> _media = [];
+    private static readonly TimeSpan MediaHeartbeatGrace = TimeSpan.FromSeconds(6);   // 3 missed 2 s beats
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _mediaSweeper;
+
+    internal void OnMediaMessage(string? msg)
+    {
+        if (msg is null) return;
+        if (msg.StartsWith("jev:media-end:", StringComparison.Ordinal))
+        {
+            if (_media.Remove(msg["jev:media-end:".Length..])) ApplyMedia();
+            return;
+        }
+        if (!msg.StartsWith("jev:media:", StringComparison.Ordinal)) return;
+        var rest = msg["jev:media:".Length..];
+        var split = rest.IndexOf(':');
+        if (split <= 0) return;
+        var kinds = ProtectionFlags.None;
+        foreach (var k in rest[(split + 1)..].Split(',', StringSplitOptions.RemoveEmptyEntries)) kinds |= k switch
+        {
+            "mic" => ProtectionFlags.MicrophoneActive,
+            "cam" => ProtectionFlags.CameraActive,
+            "screen" => ProtectionFlags.ScreenShareActive,
+            "peer" => ProtectionFlags.WebRtcActive,
+            _ => ProtectionFlags.None,
+        };
+        if (kinds == ProtectionFlags.None) { if (_media.Remove(rest[..split])) ApplyMedia(); return; }
+        _media[rest[..split]] = (kinds, DateTimeOffset.UtcNow);
+        ApplyMedia();
+        StartSweeper();
+    }
+
+    private void StartSweeper()
+    {
+        if (_mediaSweeper is not null) return;
+        _mediaSweeper = View.DispatcherQueue.CreateTimer();
+        _mediaSweeper.Interval = TimeSpan.FromSeconds(2);
+        _mediaSweeper.Tick += (_, _) => SweepMedia();
+        _mediaSweeper.Start();
+    }
+
+    internal void SweepMedia()
+    {
+        var cutoff = DateTimeOffset.UtcNow - MediaHeartbeatGrace;
+        var stale = _media.Where(kv => kv.Value.Seen < cutoff).Select(kv => kv.Key).ToList();
+        foreach (var k in stale) _media.Remove(k);
+        if (stale.Count > 0) ApplyMedia();
+        if (_media.Count == 0) { _mediaSweeper?.Stop(); _mediaSweeper = null; }
+    }
+
+    private void ApplyMedia()
+    {
+        var all = ProtectionFlags.None;
+        foreach (var e in _media.Values) all |= e.Kinds;
+        var next = (_detected & ~ProtectionFlagsExtensions.LiveMedia) | all;
+        if (next == _detected) return;
+        _detected = next;
+        DetectedProtectionChanged?.Invoke(_detected);
+    }
+
     public event Action<ProtectionFlags>? DetectedProtectionChanged;
     public event Action<PageSignals>? PageSignalsChanged;
 

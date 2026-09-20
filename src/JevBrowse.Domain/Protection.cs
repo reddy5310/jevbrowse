@@ -23,4 +23,21 @@ public enum ProtectionFlags
     /// </summary>
     KeepActive = 1 << 4,
     NeverHibernateSite = 1 << 5,
+    /// <summary>The microphone is open. Separate from the others because a person needs to know which one it is.</summary>
+    MicrophoneActive = 1 << 6,
+    CameraActive = 1 << 7,
+    ScreenShareActive = 1 << 8,
+}
+
+public static class ProtectionFlagsExtensions
+{
+    /// <summary>
+    /// Live capture or a call: the things that are destroyed, not merely paused, by disposing the renderer. Used
+    /// where the difference matters to a person — "you are sharing your screen" is not the same warning as
+    /// "a download is running".
+    /// </summary>
+    public const ProtectionFlags LiveMedia =
+        ProtectionFlags.MicrophoneActive | ProtectionFlags.CameraActive | ProtectionFlags.ScreenShareActive | ProtectionFlags.WebRtcActive;
+
+    public static bool HasLiveMedia(this ProtectionFlags f) => (f & LiveMedia) != 0;
 }
