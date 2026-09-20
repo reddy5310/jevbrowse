@@ -282,7 +282,7 @@ public sealed partial class MainWindow : Window
                 await Task.Delay(9000);
                 DispatcherQueue.TryEnqueue(async () =>
                 {
-                    if (args.FirstOrDefault(a => a.StartsWith("--ui-panel=", StringComparison.Ordinal)) is { } up) { var which = up["--ui-panel=".Length..]; if (which == "receipt") OnReceipt(this, new RoutedEventArgs()); else if (which == "shield") OnShield(this, new RoutedEventArgs()); else if (which == "explain") OnExplain(this, new RoutedEventArgs()); await Task.Delay(700); }
+                    if (args.FirstOrDefault(a => a.StartsWith("--ui-panel=", StringComparison.Ordinal)) is { } up) { var which = up["--ui-panel=".Length..]; if (which == "receipt") OnReceipt(this, new RoutedEventArgs()); else if (which == "shield") OnShield(this, new RoutedEventArgs()); else if (which == "explain") OnExplain(this, new RoutedEventArgs()); else if (which == "search") OnPalette(this, new RoutedEventArgs()); await Task.Delay(700); }
                     try
                     {
                         // What the person's Windows "Show animations" setting did to this run: the decision, and how long a real

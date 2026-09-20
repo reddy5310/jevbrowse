@@ -258,6 +258,33 @@ try {
         [System.Windows.Forms.SendKeys]::SendWait('{ESC}'); Start-Sleep -Milliseconds 700
         if ($AE::FocusedElement.Current.Name -ne $name) { $failures.Add("MORE: after Escape focus is on '$($AE::FocusedElement.Current.Name)', not on the More button") }
     }
+    # Unified search: Ctrl+K opens it with focus in the box, typing finds a command AND the open tab, Esc closes it and puts focus
+    # back where it was.
+    function Test-Search {
+        $boxName = 'Search tabs, workspaces, commands and pages you have read'
+        $start = 'Reload'
+        (Find-ByName $start).SetFocus(); Start-Sleep -Milliseconds 400
+        [System.Windows.Forms.SendKeys]::SendWait('^k'); Start-Sleep -Milliseconds 1200
+        if (-not (Panel-Open)) { $failures.Add('SEARCH: Ctrl+K did not open the search panel'); return }
+        $box = Find-ByName $boxName
+        if (-not $box -or -not $box.Current.HasKeyboardFocus) { $failures.Add('SEARCH: opening did not put keyboard focus in the search box') }
+        [System.Windows.Forms.SendKeys]::SendWait('example'); Start-Sleep -Milliseconds 900
+        $names = @($win.FindAll($Scope::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::ListItem))) | ForEach-Object { $_.Current.Name })
+        if (-not ($names | Where-Object { $_ -like 'Open tab: Example Domain*' })) { $failures.Add("SEARCH: typing 'example' did not list the open tab (saw: $($names -join ' | '))") }
+        [System.Windows.Forms.SendKeys]::SendWait('^a{BACKSPACE}receipt'); Start-Sleep -Milliseconds 900
+        $names = @($win.FindAll($Scope::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::ListItem))) | ForEach-Object { $_.Current.Name })
+        if (-not ($names | Where-Object { $_ -like 'Command: Session receipt*' })) { $failures.Add("SEARCH: typing 'receipt' did not list the receipt command (saw: $($names -join ' | '))") }
+        [System.Windows.Forms.SendKeys]::SendWait('{ESC}'); Start-Sleep -Milliseconds 900
+        if (Panel-Open) { $failures.Add('SEARCH: Escape did not close the search panel') }
+        elseif ($AE::FocusedElement.Current.Name -ne $start) { $failures.Add("SEARCH: after Escape focus is on '$($AE::FocusedElement.Current.Name)', not on '$start' where it was") }
+        # Enter runs the top result and leaves the panel closed: 'receipt' -> the Receipt panel opens (a panel replaces the search panel).
+        (Find-ByName $start).SetFocus(); Start-Sleep -Milliseconds 300
+        [System.Windows.Forms.SendKeys]::SendWait('^k'); Start-Sleep -Milliseconds 1000
+        [System.Windows.Forms.SendKeys]::SendWait('session receipt{ENTER}'); Start-Sleep -Milliseconds 1500
+        $title = Panel-Open
+        if (-not $title) { $failures.Add('SEARCH: Enter on the top result did not run it (no panel opened)') }
+        else { (Find-ByName 'Close panel').SetFocus(); [System.Windows.Forms.SendKeys]::SendWait('{ESC}'); Start-Sleep -Milliseconds 700 }
+    }
     if (-not (Ensure-Foreground)) { $panelStatus = 'INCONCLUSIVE: the app could not be brought to the front, so no key was sent' }
     else {
         $before = $failures.Count
@@ -266,6 +293,7 @@ try {
             Test-Panel $b
         }
         if ($panelStatus -eq 'not started' -and (Ensure-Foreground)) { Test-More }
+        if ($panelStatus -eq 'not started' -and (Ensure-Foreground)) { Test-Search }
         if ($panelStatus -eq 'not started') { if ($failures.Count -eq $before) { $panelProven = $true; $panelStatus = 'complete' } else { $panelStatus = 'FAILED' } }
     }
 

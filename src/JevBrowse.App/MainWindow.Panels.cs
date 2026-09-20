@@ -18,6 +18,8 @@ public sealed partial class MainWindow
     private string? _panelId;
     private Func<(string Title, UIElement Body)?>? _panelBuild;
     private Control? _panelReturnTo;
+    private bool _panelLive = true;
+    private Control? _panelFocus;   // a builder that has a better first control than the close button (the search box) names it here
 
     private bool PanelOpen => SidePanel.Visibility == Visibility.Visible;
 
@@ -25,9 +27,10 @@ public sealed partial class MainWindow
     /// Shows (or, if the same panel is already open, closes) a panel. <paramref name="home"/> is where focus goes back to
     /// when it closes, unless the person was somewhere else in the toolbar or sidebar when they opened it.
     /// </summary>
-    private void OpenPanel(string id, Func<(string Title, UIElement Body)?> build, Control home)
+    private void OpenPanel(string id, Func<(string Title, UIElement Body)?> build, Control home, bool live = true)
     {
         if (PanelOpen && _panelId == id) { ClosePanel(); return; }
+        _panelFocus = null;
         var built = build();
         if (built is null) return;
 
@@ -40,11 +43,15 @@ public sealed partial class MainWindow
         }
         _panelId = id;
         _panelBuild = build;
+        _panelLive = live;   // a panel holding typed input must not be rebuilt under the person's hands
         ShowPanelContent(built.Value);
         SidePanel.Visibility = Visibility.Visible;
         LayoutPanel();
         // Keyboard focus lands on the panel's own close button: reading order starts at the title, and Esc works at once.
-        SidePanelClose.Focus(FocusState.Keyboard);
+        SidePanel.UpdateLayout();   // a control that has never been visible cannot take focus yet
+        var first = _panelFocus ?? SidePanelClose;
+        _panelFocus = null;
+        if (!first.Focus(FocusState.Keyboard)) SidePanelClose.Focus(FocusState.Keyboard);
     }
 
     private void ShowPanelContent((string Title, UIElement Body) built)
@@ -57,7 +64,7 @@ public sealed partial class MainWindow
     /// <summary>Called when the active tab changes: a panel about "this page" must not go on describing the last one.</summary>
     private void RefreshPanel()
     {
-        if (!PanelOpen || _panelBuild is null) return;
+        if (!PanelOpen || _panelBuild is null || !_panelLive) return;
         var hadFocusInside = FocusManager.GetFocusedElement(Content.XamlRoot) is Control c && IsInsidePanel(c);
         var built = _panelBuild();
         if (built is null) { ClosePanel(restoreFocus: false); return; }

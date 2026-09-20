@@ -349,32 +349,6 @@ public sealed partial class MainWindow
 
     private void OnPaletteAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { e.Handled = true; OnPalette(s, new RoutedEventArgs()); }
 
-    private async void OnPalette(object s, RoutedEventArgs e)
-    {
-        if (_kernel is null) return;
-        var commands = BuildCommands();
-        var box = new TextBox { PlaceholderText = "Type a command, or text to search browser memory…" };
-        var list = new ListView { SelectionMode = ListViewSelectionMode.Single, MaxHeight = 360 };
-        List<Command> shown = [];
-        void Filter()
-        {
-            var words = box.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            shown = commands.Where(c => words.All(w => c.Text.Contains(w, StringComparison.OrdinalIgnoreCase))).Take(30).ToList();
-            if (box.Text.Trim().Length > 1) shown.Add(new Command($"Search browser memory for \"{box.Text.Trim()}\"", () => ShowMemoryAsync(box.Text.Trim())));
-            list.Items.Clear();
-            foreach (var c in shown) list.Items.Add(c.Text);
-            if (list.Items.Count > 0) list.SelectedIndex = 0;
-        }
-        box.TextChanged += (_, _) => Filter();
-        Filter();
-        var dlg = new ContentDialog { Title = "Command palette", Content = new StackPanel { Spacing = Tokens.Space(8), Children = { box, list } }, PrimaryButtonText = "Run", CloseButtonText = "Close", XamlRoot = Content.XamlRoot, DefaultButton = ContentDialogButton.Primary };
-        box.Loaded += (_, _) => box.Focus(FocusState.Programmatic);
-        box.KeyDown += (_, k) => { if (k.Key == Windows.System.VirtualKey.Down && list.SelectedIndex < list.Items.Count - 1) { list.SelectedIndex++; k.Handled = true; } else if (k.Key == Windows.System.VirtualKey.Up && list.SelectedIndex > 0) { list.SelectedIndex--; k.Handled = true; } };
-        if (await dlg.ShowSerializedAsync() != ContentDialogResult.Primary || list.SelectedIndex < 0 || list.SelectedIndex >= shown.Count) return;
-        try { await shown[list.SelectedIndex].Run(); }
-        catch (Exception ex) { StatusText.Text = "command failed: " + ex.Message; }
-    }
-
     private List<Command> BuildCommands()
     {
         var k = _kernel!;
