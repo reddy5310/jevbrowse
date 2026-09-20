@@ -409,8 +409,11 @@ public sealed partial class MainWindow : Window
         if (e.Kind is "activated" or "navigated" or "signals") { UpdateClassBadge(); UpdateEnvChrome(); }
         if (e.Kind is "activated" or "navigated") RefreshPanel();
         if (e.Kind is "activated" or "pinned" or "protection" or "loaded") UpdateTabControls();
-        if (e.Kind == "restoring") ShowRestoring(e.Id, e.Reason.StartsWith("with"));
-        if (e.Kind is "restored" or "loaded") FinishRestore(e.Id);
+        // The restore panel, its timer and its buttons belong to the page in front of the person. Work done in the background (an
+        // agent's page coming live) raises the same kernel events but must not touch any of it: it once replaced the tracked restore
+        // with its own, so the person's real restore finished unnoticed and the panel stayed up.
+        if (e.Kind == "restoring" && !e.Background) ShowRestoring(e.Id, e.Reason.StartsWith("with"));
+        if ((e.Kind is "restored" or "loaded") && !e.Background) FinishRestore(e.Id);
         UpdateIdlePanel();
         UpdatePoolText();
         // The private session's tab count and controls are facts about the tab set, so they follow it: opening or
@@ -552,6 +555,11 @@ public sealed partial class MainWindow : Window
     private void UpdateIdlePanel()
     {
         ClearStaleRestoreMessage();
+        // A restore whose tab has since been closed is over; nothing will ever finish it.
+        if (_restoringId is { } gone && _kernel is not null && _kernel.Tabs.All(t => t.Id != gone)) { _restoringId = null; _restoreTimer?.Stop(); }
+        // No active tab is exactly when a restore is most visible (start-up, or after the last tab was closed): the tab that is about to
+        // become active is still coming back. Saying "Nothing open here" over that restore was wrong, so an in-flight restore keeps the panel.
+        if (_kernel?.Active is null && _restoringId is not null) return;
         if (_kernel?.Active is null)
         {
             _restoringId = null;
@@ -1338,19 +1346,45 @@ public sealed partial class MainWindow : Window
         using var host = new LocalAgentHost(_agents!, ceiling);
         var (session, _) = await host.GrantAsync(new AgentManifest { Agent = "window-probe", AllowDomains = ["example.org"], Actions = [AgentAction.Navigate, AgentAction.Read, AgentAction.Screenshot], SessionMinutes = 10, MaxLivePages = 2 });
 
+        // The person's OWN restore is in flight (their page put to sleep, then woken) while the agent's page comes live at the same moment.
+        // The restore panel, its timer and its buttons belong to the person's page: sample which tab the panel is tracking throughout.
+        await k.VirtualizeAsync(mine.Id, Cause.User);
+        var tracked = new List<ResourceId?>();
+        var sampler = DispatcherQueue.CreateTimer();
+        sampler.Interval = TimeSpan.FromMilliseconds(25); sampler.IsRepeating = true;
+        sampler.Tick += (_, _) => tracked.Add(_restoringId);
+        sampler.Start();
+        var mineRestored = new TaskCompletionSource();
+        void OnMine(KernelEvent e) { if (e.Kind == "restored" && e.Id == mine.Id && !e.Background) mineRestored.TrySetResult(); }
+        k.Changed += OnMine;
+        var activation = k.ActivateAsync(mine.Id);
         var nav = await _agents!.ExecuteAsync(session, new AgentRequest(AgentAction.Navigate, "https://example.org/"), default);
-        await Task.Delay(3000);
+        await activation;
+        await Task.WhenAny(mineRestored.Task, Task.Delay(20000));
+        k.Changed -= OnMine;
+        await Task.Delay(1800);                                    // past the fade that hides the panel
+        sampler.Stop();
+        var panelAfter = RestorePanel.Visibility.ToString();
+        var trackingAfter = _restoringId;
+        await Task.Delay(1200);
         var read = await _agents.ExecuteAsync(session, new AgentRequest(AgentAction.Read), default);
         var shot = await _agents.ExecuteAsync(session, new AgentRequest(AgentAction.Screenshot), default);
 
         string Vis(ResourceId id) => _leases!.TryGet(id, out var l) ? ((WebView2Lease)l).View.Visibility.ToString() : "no renderer";
         var agentTab = k.Tabs.FirstOrDefault(t => session.Pages.Contains(t.Id));
+        var agentTabForRestore = agentTab;
         var shotBytes = shot.ScreenshotPath is not null && File.Exists(shot.ScreenshotPath) ? new FileInfo(shot.ScreenshotPath).Length : 0;
         var result = new
         {
             personsTabStillActive = k.Active?.Id == mine.Id,
             personsWorkspaceUnchanged = k.ActiveWorkspace == workspaceBefore,
             personsPageStillShown = Vis(mine.Id),
+            restorePanelOnlyEverTrackedThePersonsPage = agentTabForRestore is null || tracked.All(t => t is null || t == mine.Id),
+            restoreSamples = tracked.Count,
+            restoreSamplesTrackingPerson = tracked.Count(t => t == mine.Id),
+            personsRestoreCompleted = mineRestored.Task.IsCompleted,
+            restorePanelAfter = panelAfter,
+            restoreStillTrackingAfter = trackingAfter is null ? "nothing" : trackingAfter.ToString(),
             agentPageShown = agentTab is null ? "no page" : Vis(agentTab.Id),
             agentPageLive = agentTab?.State.HasLiveRenderer() == true,
             navigateOk = nav.Ok,
@@ -1360,6 +1394,8 @@ public sealed partial class MainWindow : Window
             screenshotOk = shot.Ok,
             screenshotBytes = shotBytes,
             pass = k.Active?.Id == mine.Id && k.ActiveWorkspace == workspaceBefore && Vis(mine.Id) == "Visible"
+                   && agentTabForRestore is not null && tracked.All(t => t is null || t == mine.Id) && tracked.Count(t => t == mine.Id) > 0 && mineRestored.Task.IsCompleted
+                   && panelAfter == "Collapsed" && trackingAfter is null
                    && agentTab is not null && Vis(agentTab.Id) == "Collapsed" && agentTab.State.HasLiveRenderer()
                    && nav.Ok && read.Ok && (read.Page?.TextExcerpt?.Length ?? 0) > 20,
             // Not part of the verdict: Screenshot returns no image in a Disposable session (thumbnails are refused there), with the page shown or hidden. A separate, older gap.

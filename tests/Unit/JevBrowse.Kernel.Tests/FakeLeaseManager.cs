@@ -9,6 +9,10 @@ public sealed class FakeLeaseManager : IRendererLeaseManager
     private readonly Dictionary<ResourceId, FakeLease> _live = [];
     public int MaxLive { get; set; } = 5;
     public int Acquires { get; private set; }
+    /// <summary>Every acquire in the order it began, with the intent it was asked for.</summary>
+    public List<(ResourceId Id, RenderIntent Intent)> AcquireLog { get; } = [];
+    /// <summary>Awaited inside AcquireAsync: return a task you complete later to simulate a slow restore.</summary>
+    public Func<ResourceId, RenderIntent, Task>? AcquireGate { get; set; }
     public int Disposes { get; private set; }
     public int Suspends { get; private set; }
     /// <summary>Set to make the next capture throw (simulates a renderer crash mid-checkpoint).</summary>
@@ -44,6 +48,9 @@ public sealed class FakeLeaseManager : IRendererLeaseManager
     public async Task<IRendererLease> AcquireAsync(ResourceId id, Uri url, RenderIntent intent, IdentityContainer container, ContextId isolationKey, CancellationToken ct)
     {
         Acquires++;
+        AcquireLog.Add((id, intent));
+        // A per-tab hold, so a test can make ONE restore slow and decide exactly when it finishes.
+        if (AcquireGate is not null) await AcquireGate(id, intent);
         MaxConcurrentAcquires = Math.Max(MaxConcurrentAcquires, ++_inFlight);
         try { if (AcquireDelay > TimeSpan.Zero) await Task.Delay(AcquireDelay, ct); }
         finally { _inFlight--; }

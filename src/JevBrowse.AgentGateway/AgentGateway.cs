@@ -169,7 +169,13 @@ public sealed partial class AgentGateway : IAgentGateway
             // Policy is registered BEFORE the renderer exists, so it is in force for the very first navigation and
             // any redirect inside it. Attaching it afterwards left that first load unguarded.
             Guard(tab.Id, s);
-            await ActivateAndWaitAsync(tab.Id, ct);
+            if (!await ActivateAndWaitAsync(tab.Id, ct))
+            {
+                // The pool is full and only the page the person is reading could have been released: refuse, and do not leave a
+                // never-loaded tab behind in the agent's workspace.
+                if (!_leases.TryGet(tab.Id, out _)) { s.Pages.Remove(tab.Id); await _kernel.CloseAsync(tab.Id, ct); }
+                return Deny("renderer_pool_full");
+            }
             s.Current = tab.Id;
             Record(s, "navigate", url.ToString(), true, $"live={LiveAgentPages(s)}/{s.Manifest.MaxLivePages}");
             return new(true, "navigated");
@@ -188,7 +194,7 @@ public sealed partial class AgentGateway : IAgentGateway
         {
             if (!await EnsureQuotaAsync(s, ct)) return Deny("live_page_quota_unsatisfiable");
             Guard(cur, s);                       // before the restore acquires a renderer, for the same reason
-            await ActivateAndWaitAsync(cur, ct);
+            if (!await ActivateAndWaitAsync(cur, ct)) return Deny("renderer_pool_full");
             _leases.TryGet(cur, out lease);
         }
         if (lease is null) return Deny("renderer_unavailable");
@@ -304,15 +310,16 @@ public sealed partial class AgentGateway : IAgentGateway
         return true;
     }
 
-    private async Task ActivateAndWaitAsync(ResourceId id, CancellationToken ct)
+    private async Task<bool> ActivateAndWaitAsync(ResourceId id, CancellationToken ct)
     {
         var loaded = new TaskCompletionSource();
         void OnEv(KernelEvent e) { if (e.Kind == "restored" && e.Id == id) loaded.TrySetResult(); }
         _kernel.Changed += OnEv;
         try
         {
-            await _kernel.EnsureLiveInBackgroundAsync(id, ct);   // live, not shown: see TabKernel.EnsureLiveInBackgroundAsync
+            if (!await _kernel.EnsureLiveInBackgroundAsync(id, ct)) return false;   // live, not shown; refused when only the person's page could be released
             await Task.WhenAny(loaded.Task, Task.Delay(LoadTimeout, ct));
+            return true;
         }
         finally { _kernel.Changed -= OnEv; }
     }

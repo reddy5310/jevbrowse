@@ -7,10 +7,15 @@ using JevBrowse.TrustOS;
 
 namespace JevBrowse.VirtualTabs;
 
-public sealed record KernelEvent(string Kind, ResourceId Id, string Reason);
+/// <summary>
+/// <paramref name="Background"/> marks an event about work done on the person's behalf that they are not looking at (an agent's page
+/// coming live). The interface must not present those as if they were about the page in front of them: no restore panel, no restore
+/// timer, no "woke a tab" message.
+/// </summary>
+public sealed record KernelEvent(string Kind, ResourceId Id, string Reason, bool Background = false);
 
 /// <summary>
-/// Virtual Tab Kernel (Architecture §5): owns durable tab identity, ordering, lifecycle, checkpoints and renderer leases.
+/// Virtual Tab Kernel (Architecture Â§5): owns durable tab identity, ordering, lifecycle, checkpoints and renderer leases.
 ///
 /// Concurrency: every operation that changes renderer ownership or lifecycle state (activate, virtualize, close,
 /// workspace switch, plan application, restore, checkpoint-all) runs through one gate, so acquisitions cannot
@@ -193,12 +198,12 @@ public sealed class TabKernel
         Changed?.Invoke(new("opened", nt.Id, nt.Url.Host));
         await CloseAsync(id, ct);
         ApplyPinnedOrder(dest);
-        Changed?.Invoke(new("moved", nt.Id, $"identity boundary {src.Container}→{dst.Container}: new tab, old one closed"));
+        Changed?.Invoke(new("moved", nt.Id, $"identity boundary {src.Container}â†’{dst.Container}: new tab, old one closed"));
         return nt;
     }
 
     /// <summary>
-    /// Switching changes scheduling priority, not renderer lifetime (§7). Live tabs of the old workspace stay live
+    /// Switching changes scheduling priority, not renderer lifetime (Â§7). Live tabs of the old workspace stay live
     /// and the Resource OS drains them on its own schedule; the new workspace's last-active tab is activated if any.
     /// </summary>
     public Task SwitchWorkspaceAsync(ContextId ws, CancellationToken ct = default) =>
@@ -313,7 +318,7 @@ public sealed class TabKernel
     /// </summary>
     public CaptureResult? LastCapture(ResourceId id) => _lastCapture.GetValueOrDefault(id);
 
-    /// <summary>The last automated decision that touched a tab, for "explain why" (§11.1).</summary>
+    /// <summary>The last automated decision that touched a tab, for "explain why" (Â§11.1).</summary>
     public ScheduledAction? LastDecision(ResourceId id) => _lastDecision.GetValueOrDefault(id);
 
     /// <summary>Renderer-free snapshot for the Resource OS.</summary>
@@ -361,21 +366,25 @@ public sealed class TabKernel
     /// they are. This is how an agent's pages run. The person's view is theirs; watching an agent is a choice they make
     /// (ActivateAsync on its page), never something the agent does to them. If the tab is the one being shown, nothing changes.
     /// </summary>
-    public Task EnsureLiveInBackgroundAsync(ResourceId id, CancellationToken ct = default) =>
+    public Task<bool> EnsureLiveInBackgroundAsync(ResourceId id, CancellationToken ct = default) =>
         SerializedAsync(() => EnsureLiveInBackgroundCoreAsync(id, ct), ct);
 
-    private async Task EnsureLiveInBackgroundCoreAsync(ResourceId id, CancellationToken ct)
+    /// <returns>True when the page is live. False when it could not be admitted without exceeding the pool or costing the person the
+    /// page they are looking at; the tab is left as it was and the caller must defer or refuse the work.</returns>
+    private async Task<bool> EnsureLiveInBackgroundCoreAsync(ResourceId id, CancellationToken ct)
     {
         var tab = Find(id);
         RequireOpenWorkspace(tab.WorkspaceId);
-        if (Active?.Id == id) return;
+        if (Active?.Id == id) return true;
         var lease = await EnsureLeaseAsync(tab, RenderIntent.Background, ct);
+        if (lease is null) { Changed?.Invoke(new("background-refused", id, "the pool is full and only the page being shown could be released", true)); return false; }
         if (lease.IsSuspended) lease.Resume();
         lease.AllowThumbnails = May(tab, DataOperation.PersistThumbnail).Allowed;
         lease.SetVisible(false);
         if (!tab.State.HasLiveRenderer()) tab.TryTransition(ResourceState.Warm, Cause.User, _clock());
         Persist(tab);
-        Changed?.Invoke(new("warmed", id, $"live={LiveCount}"));
+        Changed?.Invoke(new("warmed", id, $"live={LiveCount}", true));
+        return true;
     }
 
     /// <summary>
@@ -383,12 +392,13 @@ public sealed class TabKernel
     /// (the person activating a tab; an agent's page coming live in the background). It decides nothing about which tab is
     /// active or visible: that is the caller's.
     /// </summary>
-    private async Task<IRendererLease> EnsureLeaseAsync(VirtualTab tab, RenderIntent intent, CancellationToken ct)
+    private async Task<IRendererLease?> EnsureLeaseAsync(VirtualTab tab, RenderIntent intent, CancellationToken ct)
     {
         var id = tab.Id;
+        var background = intent != RenderIntent.Foreground;
         if (_leases.TryGet(id, out var existing)) return existing;
         IRendererLease lease;
-        await MakeRoomAsync(id, ct);
+        if (!await MakeRoomAsync(id, ct, background)) return null;   // background work is refused rather than allowed to cost the person a page
         // The tab's durable URL is the truth. A checkpoint only contributes scroll, and only when it describes
         // the very page we are about to load; an older checkpoint must never override newer navigation.
         var checkpoint = _checkpoints.Get(id);
@@ -396,7 +406,7 @@ public sealed class TabKernel
         var sw = Stopwatch.StartNew();
         _restoreTimers[id] = sw;
         // Say we are bringing it back before the wait begins, and say whether the place we saved is coming with it.
-        Changed?.Invoke(new("restoring", id, checkpoint is null ? "no saved position" : "with saved position"));
+        Changed?.Invoke(new("restoring", id, checkpoint is null ? "no saved position" : "with saved position", background));
         var ws = _workspaceList.FirstOrDefault(w => w.Id == tab.WorkspaceId);
         lease = await _leases.AcquireAsync(id, tab.Url, intent, ContainerOf(tab), tab.WorkspaceId, ct);
         lease.AllowThumbnails = May(tab, DataOperation.PersistThumbnail).Allowed;
@@ -437,9 +447,9 @@ public sealed class TabKernel
                 RestoreTimingsMs.Add(timer.Elapsed.TotalMilliseconds);
                 // A tab with no saved place is loading for the first time, not waking up; the suffix lets the status line
                 // avoid announcing a wake-up that did not happen. Consumers key on the event kind, not this text.
-                Changed?.Invoke(new("restored", id, $"{timer.ElapsedMilliseconds} ms" + (checkpoint is null ? FirstLoadSuffix : "")));
+                Changed?.Invoke(new("restored", id, $"{timer.ElapsedMilliseconds} ms" + (checkpoint is null ? FirstLoadSuffix : ""), background));
             }
-            Changed?.Invoke(new("loaded", id, tab.Url.ToString())); // every completed navigation, for the indexer
+            Changed?.Invoke(new("loaded", id, tab.Url.ToString(), background)); // every completed navigation, for the indexer
         };
         if (checkpoint is not null) lease.ApplyCheckpoint(checkpoint);
         return lease;
@@ -462,7 +472,7 @@ public sealed class TabKernel
             Persist(Active);
         }
 
-        var lease = await EnsureLeaseAsync(tab, RenderIntent.Foreground, ct);
+        var lease = (await EnsureLeaseAsync(tab, RenderIntent.Foreground, ct))!;   // foreground admission never refuses
         if (lease.IsSuspended) lease.Resume();
         lease.AllowThumbnails = May(tab, DataOperation.PersistThumbnail).Allowed;
         lease.SetVisible(true);
@@ -495,7 +505,7 @@ public sealed class TabKernel
     }
 
     /// <summary>
-    /// Virtualize = checkpoint → commit → dispose renderer (§11.1).
+    /// Virtualize = checkpoint â†’ commit â†’ dispose renderer (Â§11.1).
     /// - An automatic demotion whose capture fails is ABORTED and the renderer kept: losing the checkpoint of an
     ///   unfinished page is not something a scheduler may decide. An explicit user request may proceed without one.
     /// - If the durable commit fails the in-memory state is rolled back and the renderer is left alone.
@@ -686,27 +696,34 @@ public sealed class TabKernel
     /// AdmissionMinResidency; if every candidate is younger, the budget still wins and the oldest-active goes.
     /// The choice is recorded so "Explain" can say why.
     /// </summary>
-    private async Task MakeRoomAsync(ResourceId incoming, CancellationToken ct)
+    /// <summary>
+    /// Makes room for one more renderer. For the person's own action (<paramref name="background"/> false) the budget can be
+    /// exceeded if everything live is protected: never losing their work is the higher rule. For work done in the background it
+    /// is the other way round: the pool is never exceeded and the tab being shown is never a victim, so this returns false and
+    /// the caller must defer or refuse. Nothing an agent asks for is worth the page a person is reading.
+    /// </summary>
+    private async Task<bool> MakeRoomAsync(ResourceId incoming, CancellationToken ct, bool background = false)
     {
         while (_leases.LiveResources.Count >= _leases.MaxLive)
         {
             var now = _clock();
             var candidates = _tabs
-                .Where(t => t.State.HasLiveRenderer() && t.Id != incoming && !t.IsDemotionVetoed)
+                .Where(t => t.State.HasLiveRenderer() && t.Id != incoming && !t.IsDemotionVetoed && !(background && Active is not null && t.Id == Active.Id))
                 .OrderBy(t => _lastActive.GetValueOrDefault(t.Id, DateTimeOffset.MinValue)).ToList();
             var aged = candidates.Where(t => now - t.LastStateChange >= AdmissionMinResidency).ToList();
             var victim = aged.FirstOrDefault() ?? candidates.FirstOrDefault();
-            if (victim is null) break; // everything live is protected; pool may temporarily exceed budget (§19 veto)
+            if (victim is null) return !background; // everything live is protected: the person's own action may exceed the budget (Â§19 veto); background work may not
             _lastDecision[victim.Id] = new ScheduledAction(victim.Id, "virtualize", new Dictionary<string, string>
             {
-                ["trigger"] = "foreground_admission",
+                ["trigger"] = background ? "background_admission" : "foreground_admission",
                 ["live_renderers"] = $"{_leases.LiveResources.Count}/{_leases.MaxLive}",
                 ["residency_respected"] = (aged.Count > 0).ToString().ToLower(),
                 ["jev_consulted"] = "no",
             });
             var r = await VirtualizeCoreAsync(victim.Id, Cause.Scheduler, ct);
-            if (!r.Allowed) break; // e.g. capture failed: keep the renderer, let the pool exceed the budget rather than lose work
+            if (!r.Allowed) return !background; // e.g. capture failed: keep the renderer; only the person's own action may exceed the budget
         }
+        return true;
     }
 
     private void Persist(VirtualTab t)

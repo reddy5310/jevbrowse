@@ -10,7 +10,7 @@ namespace JevBrowse.VirtualTabs;
 /// </summary>
 public static class KernelStatus
 {
-    public static string? For(KernelEvent e) => e.Kind switch
+    public static string? For(KernelEvent e) => e.Background ? null : e.Kind switch
     {
         // Only the automatic case is news. When the user put a tab to sleep themselves, they know.
         "virtualized" when e.Reason == "Scheduler" => "A tab went to sleep to save memory.",

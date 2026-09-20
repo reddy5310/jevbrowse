@@ -116,6 +116,38 @@ public class AgentDoesNotMoveTheWindowTests : IDisposable
     }
 
     [Fact]
+    public async Task When_the_pool_is_full_the_agents_navigate_is_refused_the_page_you_are_reading_stays_and_no_orphan_tab_is_left()
+    {
+        _leases.MaxLive = 1;
+        var mine = await PersonIsReading();
+        var s = await _gw.OpenAsync(Manifest(), default);
+
+        var r = await _gw.ExecuteAsync(s, new(AgentAction.Navigate, "https://github.com/reddy5310/jevbrowse"), default);
+
+        Assert.False(r.Ok);
+        Assert.Equal("renderer_pool_full", r.Message);
+        Assert.Equal(mine.Id, _k.Active?.Id);
+        Assert.True(_leases[mine.Id].IsVisible);
+        Assert.True(_leases.TryGet(mine.Id, out _));
+        Assert.Empty(s.Pages);
+        Assert.DoesNotContain(_k.Tabs, t => t.WorkspaceId == s.WorkspaceId);
+        Assert.Contains(s.Audit, e => !e.Allowed && e.Reason == "renderer_pool_full");
+    }
+
+    [Fact]
+    public async Task Once_capacity_returns_the_same_request_succeeds()
+    {
+        _leases.MaxLive = 1;
+        var mine = await PersonIsReading();
+        var s = await _gw.OpenAsync(Manifest(), default);
+        Assert.False((await _gw.ExecuteAsync(s, new(AgentAction.Navigate, "https://github.com/x"), default)).Ok);
+
+        _leases.MaxLive = 2;                                        // the person opened room (a bigger budget, or a tab closed)
+        Assert.True((await _gw.ExecuteAsync(s, new(AgentAction.Navigate, "https://github.com/x"), default)).Ok);
+        Assert.Equal(mine.Id, _k.Active?.Id);
+    }
+
+    [Fact]
     public async Task The_live_page_limit_still_holds_for_background_pages()
     {
         await PersonIsReading();

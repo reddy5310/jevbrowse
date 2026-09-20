@@ -64,6 +64,7 @@ public static class AgentActivity
             "bad_url" => "that was not a web address",
             "domain_not_allowed" => $"{detail} is not on the approved list",
             "live_page_quota_unsatisfiable" => "it would have needed more open pages than allowed",
+            "renderer_pool_full" => "the browser had no spare capacity, and it will not close the page you are reading to make room",
             "no_current_page" or "renderer_unavailable" => "there was no page open for it to use",
             "hard:secret_page" => "the page holds secrets, which an agent never touches",
             "data_class_denied" => $"the page is {detail.ToLowerInvariant()}, which you kept off limits",
