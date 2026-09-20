@@ -315,7 +315,7 @@ public sealed class WebView2Lease : IRendererLease
             if (lease.NavigationGuard is { } guard && Uri.TryCreate(e.Uri, UriKind.Absolute, out var dest) && dest.Scheme is "http" or "https" && !guard(dest)) { e.Cancel = true; return; }
             if (e.Cancel) return;
             lease.BumpDocument();
-            if (!e.IsRedirected) lease.SetSignals(PageSignals.None);
+            if (!e.IsRedirected) lease.ResetSignals();
         };
         core.NavigationCompleted += (_, _) => { lease.ClearDetected(ProtectionFlags.DirtyForm); lease.Loaded?.Invoke(); };
         core.IsDocumentPlayingAudioChanged += (_, _) => lease.SetDetected(ProtectionFlags.Audible, core.IsDocumentPlayingAudio);
@@ -358,15 +358,24 @@ public sealed class WebView2Lease : IRendererLease
             // rather than hopeful. Frames come and go, so their handlers are registered here too.
             void OnFrameMessage(CoreWebView2Frame _, CoreWebView2WebMessageReceivedEventArgs me)
             {
-                try { lease.OnMediaMessage(me.TryGetWebMessageAsString(), frame); } catch (Exception) { }
+                try
+                {
+                    var msg = me.TryGetWebMessageAsString();
+                    // The page script runs in every frame and reports secret and payment fields the same way. These used to be dropped here
+                    // (only media was routed), so a password field in an iframe never reached the guards.
+                    if (msg == "jev:secret-field") lease.AddFrameSignal(frame, PageSignals.PasswordField);
+                    else if (msg == "jev:payment-field") lease.AddFrameSignal(frame, PageSignals.PaymentField);
+                    else lease.OnMediaMessage(msg, frame);
+                }
+                catch (Exception) { }
             }
             frame.WebMessageReceived += OnFrameMessage;
             lease._detach.Add(() => { try { frame.WebMessageReceived -= OnFrameMessage; } catch (Exception) { } });
-            frame.Destroyed += (_, _) => lease.DropFrameMedia(frame);
+            frame.Destroyed += (_, _) => { lease.DropFrameMedia(frame); lease.DropFrameSignals(frame); };
             // A frame can also REPLACE its document without being destroyed: the old document is gone, and it never
             // sent a media-end. Without this its entry stays uncertain forever and the tab never sleeps again.
             // ContentLoading commits, so a cancelled navigation inside the frame leaves a running call alone.
-            frame.ContentLoading += (_, _) => lease.DropFrameMedia(frame);
+            frame.ContentLoading += (_, _) => { lease.DropFrameMedia(frame); lease.DropFrameSignals(frame); };
             frame.FrameCreated += (_, child) => Watch(child.Frame);
         }
         void OnFrameCreated(CoreWebView2 _, CoreWebView2FrameCreatedEventArgs fe) => Watch(fe.Frame);
@@ -883,11 +892,46 @@ public sealed class WebView2Lease : IRendererLease
 
     private void ClearDetected(ProtectionFlags flag) => SetDetected(flag, false);
 
+    // The top document's own signals live in _signals (the handlers above add to it); frames contribute through the tracker, and what
+    // is published is the sum, so a password or payment field anywhere on the page, in any frame, is on screen and is reported.
+    private readonly PageSignalTracker<CoreWebView2Frame> _tracker = new();
+    private PageSignals _published;
+
     private void SetSignals(PageSignals s)
     {
         if (_disposed) return;
-        if (s == _signals) return;
         _signals = s;
-        PageSignalsChanged?.Invoke(_signals);
+        _tracker.SetTop(s);
+        Publish();
+    }
+
+    private void Publish()
+    {
+        var effective = _tracker.Effective;
+        if (effective == _published) return;
+        _published = effective;
+        PageSignalsChanged?.Invoke(effective);
+    }
+
+    private void AddFrameSignal(CoreWebView2Frame frame, PageSignals flag)
+    {
+        if (_disposed) return;
+        _tracker.AddFrame(frame, flag);
+        Publish();
+    }
+
+    private void DropFrameSignals(CoreWebView2Frame frame)
+    {
+        if (_disposed) return;
+        _tracker.DropFrame(frame);
+        Publish();
+    }
+
+    private void ResetSignals()
+    {
+        if (_disposed) return;
+        _signals = PageSignals.None;
+        _tracker.Reset();
+        Publish();
     }
 }

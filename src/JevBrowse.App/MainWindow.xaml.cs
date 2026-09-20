@@ -354,7 +354,7 @@ public sealed partial class MainWindow : Window
             });
         }
 
-        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--private-session-check") || args.Contains("--agent-check") || args.Contains("--agent-window-check") || args.Contains("--agent-screenshot-stage-check") || args.Contains("--media-check") || args.Contains("--site-sweep") || args.Any(a => a.StartsWith("--join=", StringComparison.Ordinal)))
+        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--private-session-check") || args.Contains("--agent-check") || args.Contains("--agent-window-check") || args.Contains("--agent-screenshot-stage-check") || args.Contains("--agent-frame-secret-check") || args.Contains("--media-check") || args.Contains("--site-sweep") || args.Any(a => a.StartsWith("--join=", StringComparison.Ordinal)))
         {
             Directory.CreateDirectory(Path.Combine(DataDir, "benchmarks"));
             try
@@ -366,6 +366,7 @@ public sealed partial class MainWindow : Window
                 else if (args.Contains("--agent-check")) await RunAgentCheckAsync();
                 else if (args.Contains("--agent-window-check")) await RunAgentWindowCheckAsync();
                 else if (args.Contains("--agent-screenshot-stage-check")) await RunAgentScreenshotStageCheckAsync();
+                else if (args.Contains("--agent-frame-secret-check")) await RunAgentFrameSecretCheckAsync();
                 else if (args.Contains("--privacy-check")) await RunPrivacyCheckAsync();
                 else if (args.Contains("--memory-lab")) await RunMemoryLabAsync();
                 else if (args.Contains("--restore-bench")) await RunRestoreBenchAsync();
@@ -1510,6 +1511,103 @@ public sealed partial class MainWindow : Window
         WebView2Lease.StagedObserver = null;
         await host.StopAsync(session);
         await File.WriteAllTextAsync(Path.Combine(dir, "stage-result.json"), JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    /// <summary>
+    /// A picture must never be delivered of a page that shows a password or payment field, wherever the field is: in the page, in an
+    /// iframe of the same origin, in a cross-origin iframe, two frames deep, or one that appears while the picture is being taken.
+    /// A local server provides the pages under two origins (127.0.0.1 and localhost) so "cross-origin" is real. The control (no field)
+    /// must be delivered, so a refusal cannot be a broken capture.
+    /// </summary>
+    private sealed record FrameCase(string name, string path, bool expectDelivered, bool delivered, bool ok, bool navigateOk, string message);
+
+    private async Task RunAgentFrameSecretCheckAsync()
+    {
+        var k = _kernel!;
+        var dir = Path.Combine(DataDir, "benchmarks"); Directory.CreateDirectory(dir);
+        await Task.Delay(3000);
+        int port; System.Net.HttpListener? server = null;
+        for (port = 47800; port < 47900; port++)
+        {
+            var l = new System.Net.HttpListener();
+            l.Prefixes.Add($"http://127.0.0.1:{port}/"); l.Prefixes.Add($"http://localhost:{port}/");
+            try { l.Start(); server = l; break; } catch (Exception) { l.Close(); }
+        }
+        if (server is null) { await File.WriteAllTextAsync(Path.Combine(dir, "frame-secret-check.json"), "{\"error\":\"no free port\"}"); return; }
+        string A = $"http://127.0.0.1:{port}", B = $"http://localhost:{port}";
+        string Page(string body) => "<!doctype html><html><head><meta charset=utf-8><title>t</title></head><body><h1>A perfectly ordinary page</h1><p>" + string.Concat(Enumerable.Repeat("Some readable words so the page has real content. ", 12)) + "</p>" + body + "</body></html>";
+        var pages = new Dictionary<string, string>
+        {
+            ["/plain"] = Page(""),
+            ["/inner-a"] = "<!doctype html><html><body><form><label>Password <input type=\"password\" name=\"p\"></label></form></body></html>",
+            ["/inner-b"] = "<!doctype html><html><body><form><label>Card <input autocomplete=\"cc-number\" name=\"c\"></label></form></body></html>",
+            ["/f1"] = Page($"<iframe src=\"/inner-a\" width=\"420\" height=\"120\"></iframe>"),
+            ["/f2"] = Page($"<iframe src=\"{B}/inner-a\" width=\"420\" height=\"120\"></iframe>"),
+            ["/f3"] = Page($"<iframe src=\"{B}/inner-b\" width=\"420\" height=\"120\"></iframe>"),
+            ["/inner-c"] = "<!doctype html><html><body><p>A harmless embedded widget with no fields at all.</p></body></html>",
+            ["/mid"] = "<!doctype html><html><body><p>middle frame</p><iframe src=\"" + A + "/inner-a\" width=\"400\" height=\"100\"></iframe></body></html>",
+            ["/f4"] = Page($"<iframe src=\"{B}/mid\" width=\"440\" height=\"160\"></iframe>"),
+        };
+        var serving = Task.Run(async () =>
+        {
+            while (server.IsListening)
+            {
+                System.Net.HttpListenerContext c;
+                try { c = await server.GetContextAsync(); } catch (Exception) { break; }
+                var path = c.Request.Url!.AbsolutePath;
+                var html = pages.TryGetValue(path, out var h) ? h : "<html><body>not found</body></html>";
+                var bytes = System.Text.Encoding.UTF8.GetBytes(html);
+                c.Response.ContentType = "text/html; charset=utf-8"; c.Response.ContentLength64 = bytes.Length;
+                await c.Response.OutputStream.WriteAsync(bytes); c.Response.Close();
+            }
+        });
+
+        var ceiling = new AgentCeiling { Limits = new AgentManifest { Agent = "ceiling", AllowDomains = ["127.0.0.1", "localhost"], Actions = [AgentAction.Navigate, AgentAction.Read, AgentAction.Screenshot], SessionMinutes = 10, MaxLivePages = 2, MaxActions = 200, MaxScreenshots = 40, DenyDataClasses = [DataClass.Secret] } };
+        using var host = new LocalAgentHost(_agents!, ceiling, approveScreenshots: _ => Task.FromResult(true));   // a check with nobody present: approval given on purpose
+        var (session, _) = await host.GrantAsync(new AgentManifest { Agent = "frame-probe", AllowDomains = ["127.0.0.1", "localhost"], Actions = [AgentAction.Navigate, AgentAction.Read, AgentAction.Screenshot], SessionMinutes = 10, MaxLivePages = 2, MaxScreenshots = 40, DenyDataClasses = [DataClass.Secret] });
+
+        var cases = new List<FrameCase>();
+        async Task Case(string name, string path, bool expectDelivered, Func<Task>? during = null)
+        {
+            var nav = await _agents!.ExecuteAsync(session, new AgentRequest(AgentAction.Navigate, A + path), default);
+            await Task.Delay(3000);                                  // frames load and the page script reports what it found
+            var shot = during is null
+                ? await _agents.ExecuteAsync(session, new AgentRequest(AgentAction.Screenshot), default)
+                : await ShotWhile(during);
+            var delivered = shot.Screenshot is { Length: > 0 };
+            cases.Add(new FrameCase(name, path, expectDelivered, delivered, delivered == expectDelivered, nav.Ok, shot.Message));
+        }
+        async Task<AgentResponse> ShotWhile(Func<Task> during)
+        {
+            var taking = _agents!.ExecuteAsync(session, new AgentRequest(AgentAction.Screenshot), default);
+            await Task.Delay(120);                                   // inside the 200 ms the page is being drawn
+            await during();
+            return await taking;
+        }
+        async Task InjectBenignFrame()
+        {
+            var page = k.Tabs.FirstOrDefault(t => session.Pages.Contains(t.Id) && t.Id == session.Current);
+            if (page is not null && _leases!.TryGet(page.Id, out var l) && ((WebView2Lease)l).View.CoreWebView2 is { } core)
+                await core.ExecuteScriptAsync($"(()=>{{const f=document.createElement('iframe');f.src='{B}/inner-c';f.width=400;f.height=100;document.body.appendChild(f);}})()");
+        }
+        async Task InjectSecretFrame()
+        {
+            var page = k.Tabs.FirstOrDefault(t => session.Pages.Contains(t.Id) && t.Id == session.Current);
+            if (page is not null && _leases!.TryGet(page.Id, out var l) && ((WebView2Lease)l).View.CoreWebView2 is { } core)
+                await core.ExecuteScriptAsync($"(()=>{{const f=document.createElement('iframe');f.src='{B}/inner-a';f.width=400;f.height=100;document.body.appendChild(f);}})()");
+        }
+        await Case("control: an ordinary page", "/plain", expectDelivered: true);
+        await Case("password field in a same-origin iframe", "/f1", false);
+        await Case("password field in a cross-origin iframe", "/f2", false);
+        await Case("payment field in a cross-origin iframe", "/f3", false);
+        await Case("password field two frames deep (cross-origin, then back)", "/f4", false);
+        for (var i = 1; i <= 3; i++) await Case($"password iframe appears during the capture (run {i})", $"/plain?late={i}", false, InjectSecretFrame);
+        // Ordinary frame activity while a picture is taken (an ad, a widget) must not by itself throw the picture away: only a change that matters may.
+        await Case("control: a harmless iframe appears during the capture", "/plain?benign=1", expectDelivered: true, InjectBenignFrame);
+        server.Stop(); server.Close();
+        await host.StopAsync(session);
+        var result = new { pass = cases.All(c => c.ok), cases };
+        await File.WriteAllTextAsync(Path.Combine(dir, "frame-secret-check.json"), JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
     }
 
     /// <summary>
