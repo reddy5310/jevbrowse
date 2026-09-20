@@ -63,3 +63,5 @@ directly.
   (the kernel's wish is re-applied afterwards) but not exercised on the real engine.
 - Pictures are only as private as the agent that receives them: an agent may send one anywhere. The controls are the grant, the
   budget, the page checks and the audit, not what happens after the bytes leave.
+
+Update (ADR 0030): Screenshot is now experimental and opt-in per session; three findings against this design were fixed (expiry after capture, document identity, password/payment fields in frames).

@@ -1,0 +1,93 @@
+﻿[
+    {
+        "scenario":  "baseline",
+        "exit":  0,
+        "trust":  "ok",
+        "procs":  "7-7",
+        "cpuAvg":  1.33,
+        "cpuPeak":  3.44,
+        "gpuAvg":  0.02,
+        "wsMB":  521.62,
+        "privMB":  260.74,
+        "pagesShown":  "",
+        "warn":  ""
+    },
+    {
+        "scenario":  "hidden static x1",
+        "exit":  0,
+        "trust":  "ok",
+        "procs":  "13-13",
+        "cpuAvg":  2.77,
+        "cpuPeak":  11.86,
+        "gpuAvg":  0,
+        "wsMB":  857.06,
+        "privMB":  411.42,
+        "pagesShown":  "Collapsed",
+        "warn":  ""
+    },
+    {
+        "scenario":  "hidden static x4",
+        "exit":  0,
+        "trust":  "ok",
+        "procs":  "16-16",
+        "cpuAvg":  3.25,
+        "cpuPeak":  9.78,
+        "gpuAvg":  0.01,
+        "wsMB":  1041.43,
+        "privMB":  503.19,
+        "pagesShown":  "Collapsed,Collapsed,Collapsed,Collapsed",
+        "warn":  ""
+    },
+    {
+        "scenario":  "hidden busy x1",
+        "exit":  0,
+        "trust":  "ok",
+        "procs":  "13-13",
+        "cpuAvg":  2.99,
+        "cpuPeak":  8.08,
+        "gpuAvg":  0.01,
+        "wsMB":  853.79,
+        "privMB":  395.96,
+        "pagesShown":  "Collapsed",
+        "warn":  ""
+    },
+    {
+        "scenario":  "hidden busy x4",
+        "exit":  0,
+        "trust":  "ok",
+        "procs":  "16-16",
+        "cpuAvg":  5.15,
+        "cpuPeak":  11.68,
+        "gpuAvg":  0.02,
+        "wsMB":  1064.37,
+        "privMB":  499.85,
+        "pagesShown":  "Collapsed,Collapsed,Collapsed,Collapsed",
+        "warn":  ""
+    },
+    {
+        "scenario":  "CONTROL busy x1 SHOWN",
+        "exit":  2,
+        "trust":  "ok",
+        "procs":  "13-13",
+        "cpuAvg":  38.99,
+        "cpuPeak":  64.87,
+        "gpuAvg":  5.11,
+        "wsMB":  869.63,
+        "privMB":  392.41,
+        "pagesShown":  "Visible",
+        "warn":  "WARNING: -StartUrl was not the page that loaded (address bar shows \u0027http://127.0.0.1:47900/busy-shown?n=0\u0027); this is not the control it was meant to be.\r"
+    },
+    {
+        "scenario":  "baseline (again, drift check)",
+        "exit":  0,
+        "trust":  "ok",
+        "procs":  "8-8",
+        "cpuAvg":  1.46,
+        "cpuPeak":  3.69,
+        "gpuAvg":  0,
+        "wsMB":  542.98,
+        "privMB":  356.79,
+        "pagesShown":  "",
+        "warn":  ""
+    }
+]
