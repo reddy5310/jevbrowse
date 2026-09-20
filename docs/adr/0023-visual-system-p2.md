@@ -1,4 +1,4 @@
-# ADR 0023: The visual system (P2): tokens, themes, contrast, purposeful motion
+﻿# ADR 0023: The visual system (P2): tokens, themes, contrast, purposeful motion
 
 Status: accepted (2026-09-20). Dark stays the default. Scope is what was built and what was *proven*; the open items are listed
 plainly at the end, not folded into a success story.
@@ -22,7 +22,7 @@ and a test fails the build if one is added.
 Nothing in the window names a raw colour any more. Semantic tokens for surfaces, text (exactly two: primary and secondary),
 borders, focus, accent, tab state, data-class badges, environment strip and the preview scrim, in three dictionaries:
 **Dark** (default), **Light**, **HighContrast** (Windows system colours only). Dimming text with `Opacity` is banned because it
-produces a contrast nobody chose. Themes: dark, light, or match Windows (Ctrl+K → "Theme: …"), remembered, following Windows live.
+produces a contrast nobody chose. Themes: dark, light, or match Windows (Ctrl+K â†’ "Theme: â€¦"), remembered, following Windows live.
 Dialogs and web pages follow the app's theme too (the browser reports the app's scheme to pages), so the welcome page is light in
 a light window.
 
@@ -40,14 +40,14 @@ The tests also caught two near-misses in my own new values (dark boundary 2.83:1
 
 ## "No added continuous rendering at idle": measured against a rule fixed in advance
 
-Rule, written before any P2 code: **average idle CPU ≤ 2.2% of one core and GPU ≤ 0.10% on all three "after" runs**, instrument
+Rule, written before any P2 code: **average idle CPU â‰¤ 2.2% of one core and GPU â‰¤ 0.10% on all three "after" runs**, instrument
 trust "ok". Method: `scripts/idle-cost.ps1`, only the launched process tree, window in front on the local welcome page, untouched.
 
 | Set | CPU average (range) | GPU average | Trust |
 |---|---|---|---|
 | Before P2 (3 runs) | 1.12-1.67% (mean 1.32) | 0.01-0.05% | ok |
 | After, first set | 1.15-1.32% (mean 1.25) | 0-0.01% | **2 of 3 UNRELIABLE** ("1 process reading failed") |
-| After, rerun | 1.16-1.52% (mean **1.30**) | 0.01% | ok ×3 → **rule PASS** |
+| After, rerun | 1.16-1.52% (mean **1.30**) | 0.01% | ok Ã—3 â†’ **rule PASS** |
 
 Honest notes:
 - The first "after" set **failed the trust condition** on two runs, so under the rule as written it failed. The instrument was then
@@ -69,7 +69,7 @@ Honest notes:
 | Contrast (text, boundaries, focus, badges) | **done**, tested from the real files; three real defects fixed |
 | High contrast | dictionary built and tested to use **only** Windows system colours; **not run on a real Windows contrast theme** (would change your desktop) |
 | Scaling (display scale, text size) | **open**: not tested at 125/150/200% or with large text |
-| Reduced motion | policy tested (animations off ⇒ zero duration; ceiling 250 ms); the Windows "Show animations" setting is read on each use; the welcome page honours `prefers-reduced-motion`. **Not exercised by actually toggling the Windows setting** |
+| Reduced motion | policy tested (animations off â‡’ zero duration; ceiling 250 ms); the Windows "Show animations" setting is read on each use; the welcome page honours `prefers-reduced-motion`. **Exercised on the real setting** (`scripts/reduced-motion-check.ps1`, session-only change, original restored and read back): a fade took 224 ms with animations on and 1 ms with them off; the welcome page's CSS rule was not re-checked in a browser |
 | Reduced transparency | nothing relies on transparency: Mica sits behind an opaque root, and Windows removes Mica itself when transparency is off. No separate plumbing was added |
 | No added continuous rendering at idle | **measured**, rule passed (above); no endless animation is allowed by a test |
 | 700 px address bar clipped with the sidebar shown | **fixed and asserted.** Below 560 DIP of toolbar width the address bar takes a row of its own (its old column's 180 px minimum was what pushed the grid past the window), the badge shortens to its identity (full state stays in the accessible name and tooltip), and *This tab* / *Tools* drop to a further row instead of scrolling. `ui-a11y-check.ps1 -Sidebar open|hidden` fails on any interactive control that is clipped, squeezed or has no bounds. Run at 700/900/1422 x shown/hidden: no layout failure; 700 shown reached a full PASS (Tab cycle proven). Supported minimum window width is 700 px: at 420 the check fails, as it should |

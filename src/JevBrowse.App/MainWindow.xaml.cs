@@ -284,6 +284,24 @@ public sealed partial class MainWindow : Window
                 {
                     try
                     {
+                        // What the person's Windows "Show animations" setting did to this run: the decision, and how long a real
+                        // fade took to finish. Written for scripts/reduced-motion-check.ps1, which flips the setting and restores it.
+                        var watch = System.Diagnostics.Stopwatch.StartNew();
+                        var faded = new TaskCompletionSource();
+                        Motion.Fade(StatusText, 1f, JevBrowse.VirtualTabs.MotionKind.Base, () => faded.TrySetResult());
+                        await Task.WhenAny(faded.Task, Task.Delay(2000));
+                        Directory.CreateDirectory(Path.Combine(DataDir, "benchmarks"));
+                        await File.WriteAllTextAsync(Path.Combine(DataDir, "benchmarks", "motion-report.json"), System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            animationsEnabled = Motion.Enabled,
+                            fadeCompleted = faded.Task.IsCompleted,
+                            fadeMilliseconds = watch.ElapsedMilliseconds,
+                            policyBaseMilliseconds = JevBrowse.VirtualTabs.MotionPolicy.Duration(JevBrowse.VirtualTabs.MotionKind.Base, Motion.Enabled).TotalMilliseconds,
+                        }));
+                    }
+                    catch (Exception ex) { try { await File.WriteAllTextAsync(Path.Combine(DataDir, "benchmarks", "motion-error.txt"), ex.ToString()); } catch (Exception) { } }
+                    try
+                    {
                         var rtb = new Microsoft.UI.Xaml.Media.Imaging.RenderTargetBitmap();
                         await rtb.RenderAsync(Root);
                         var buf = await rtb.GetPixelsAsync();
