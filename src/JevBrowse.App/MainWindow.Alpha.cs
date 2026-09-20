@@ -40,13 +40,13 @@ public sealed partial class MainWindow
         Show(AskButton, ai);
         Show(BrainButton, ai);
         Show(MemoryButton, mode != ProductMode.Simple && mode != ProductMode.Private);
-        Show(ExplainButton, power);
-        Show(MoveButton, power);
         Show(TimelineButton, power);
         Show(ModeBox, power);
         Show(DevButton, mode == ProductMode.Developer);
         Show(AgentsButton, mode == ProductMode.Agent);
-        Show(ReceiptButton, mode != ProductMode.Simple);
+        // Explain, Receipt and the "This tab" menu are always present. The Tools menu appears only when at least one
+        // of its items does, so Simple mode does not show a menu that opens onto nothing.
+        Show(ToolsButton, mode is not (ProductMode.Simple or ProductMode.Private));
         // Modes are capability switches, not just visibility: what a mode hides it must also stop doing.
         if (_indexer is not null) _indexer.Enabled = mode is not (ProductMode.Simple or ProductMode.Private);
         if (_dev is not null) _dev.SetEnabled(mode == ProductMode.Developer || Environment.GetEnvironmentVariable("JEVBROWSE_DEVSPACE") == "1");
@@ -224,6 +224,8 @@ public sealed partial class MainWindow
 
     private void OnFocusAddress(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); AddressBox.Focus(FocusState.Keyboard); AddressBox.SelectAll(); }
     private void OnNewTabAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); OnNewTab(s, new RoutedEventArgs()); }
+    private void OnReloadClick(object s, RoutedEventArgs e) => WithActiveLease(l => l.View.CoreWebView2?.Reload());
+
     private void OnReloadAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); WithActiveLease(l => l.View.CoreWebView2?.Reload()); }
 
     private async void OnCloseTabAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e)

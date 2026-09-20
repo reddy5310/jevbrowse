@@ -42,6 +42,9 @@ public sealed class TabKernel
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly HashSet<ContextId> _endedPrivateSessions = [];
 
+    /// <summary>Marks a "restored" event for a tab that had nothing saved, i.e. a first load rather than a wake-up.</summary>
+    public const string FirstLoadSuffix = " (first load)";
+
     private void RequireOpenWorkspace(ContextId id)
     {
         if (_endedPrivateSessions.Contains(id)) throw new InvalidOperationException("This private session has ended.");
@@ -408,7 +411,9 @@ public sealed class TabKernel
                 if (_restoreTimers.Remove(id, out var timer))
                 {
                     RestoreTimingsMs.Add(timer.Elapsed.TotalMilliseconds);
-                    Changed?.Invoke(new("restored", id, $"{timer.ElapsedMilliseconds} ms"));
+                    // A tab with no saved place is loading for the first time, not waking up; the suffix lets the status line
+                    // avoid announcing a wake-up that did not happen. Consumers key on the event kind, not this text.
+                    Changed?.Invoke(new("restored", id, $"{timer.ElapsedMilliseconds} ms" + (checkpoint is null ? FirstLoadSuffix : "")));
                 }
                 Changed?.Invoke(new("loaded", id, tab.Url.ToString())); // every completed navigation, for the indexer
             };

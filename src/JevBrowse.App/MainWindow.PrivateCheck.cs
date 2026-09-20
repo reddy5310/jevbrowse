@@ -62,7 +62,7 @@ public sealed partial class MainWindow
             checks["probeMediaProtectedBeforeEnd"] = first.Protection.HasLiveMedia();
 
             var answer = new TaskCompletionSource<PermissionAdapter.Choice>();
-            var permissions = new PermissionAdapter(new SitePermissionsRepository(_db!), (_, _) => answer.Task);
+            var permissions = new PermissionAdapter(new SitePermissionsRepository(_db!), (_, _, _) => answer.Task);
             permissions.Block(IdentityContainer.Private, session, new Uri("https://private-session.test"), PermissionKind.Geolocation);
             var pending = permissions.DecideAsync(IdentityContainer.Private, session, new Uri("https://private-session.test"), PermissionKind.Camera);
             checks["permissionAnswerWasPending"] = !pending.IsCompleted;

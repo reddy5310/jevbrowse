@@ -192,7 +192,9 @@ public sealed partial class MainWindow : Window
         // Browser Memory: indexes only what Trust OS allows (PUBLIC by default); 200 MB budget.
         _memory = new BrowserMemory(_db);
         _indexer = new MemoryIndexer(_kernel, _leases, _memory);
-        _indexer.Decided += (_, why) => DispatcherQueue.TryEnqueue(() => StatusText.Text = "memory: " + why);
+        // Skipping is the normal case (Not assessed pages are deliberately left out) and the reason is on the class badge.
+        // Only saying something when a page WAS saved keeps the status line for things a person acted on.
+        _indexer.Decided += (_, why) => { if (why.StartsWith("indexed", StringComparison.Ordinal)) DispatcherQueue.TryEnqueue(() => StatusText.Text = "Saved this page so you can search it later."); };
 
         // Dev/bench: JEVBROWSE_AI=1 starts with AI + Cloud on (the UI switches remain the user's control).
         if (Environment.GetEnvironmentVariable("JEVBROWSE_AI") == "1") { _brainPolicy.AiEnabled = true; _brainPolicy.CloudEnabled = true; _brainPolicy.AutomaticJudgments = true; }
@@ -286,6 +288,7 @@ public sealed partial class MainWindow : Window
                         await enc.FlushAsync();
                     }
                     catch (Exception ex) { await File.WriteAllTextAsync(Path.Combine(DataDir, "benchmarks", "bench-error.txt"), ex.ToString()); }
+                    try { _leases?.Shutdown(); } catch (Exception) { }   // Exit() alone orphans every renderer process
                     Application.Current.Exit();
                 });
             });
@@ -327,7 +330,7 @@ public sealed partial class MainWindow : Window
 
     private void OnKernelChanged(KernelEvent e)
     {
-        if (e.Kind is "workspace-created" or "workspace-ended" or "context-restored") RebuildWorkspaces();
+        if (e.Kind is "workspace-created" or "workspace-ended" or "context-restored" or "opened" or "closed" or "moved") RebuildWorkspaces();
         if (e.Kind is "workspace-switched") { SyncWorkspaceBox(); RebuildList(); }
         else if (e.Kind is "opened" or "closed" or "loaded" or "moved" or "context-restored" or "pinned") RebuildList();
         else foreach (var i in Items) i.Refresh();
@@ -345,8 +348,12 @@ public sealed partial class MainWindow : Window
         if (e.Kind is "restored" or "loaded") FinishRestore(e.Id);
         UpdateIdlePanel();
         UpdatePoolText();
-        if (e.Kind is "workspace-switched" or "workspace-ended") UpdatePrivateSessionUi();
-        StatusText.Text = $"{e.Kind} {e.Reason}";
+        // The private session's tab count and controls are facts about the tab set, so they follow it: opening or
+        // closing a private tab changes what the sidebar must say, not just switching workspaces.
+        if (e.Kind is "workspace-switched" or "workspace-ended" or "opened" or "closed" or "moved" or "context-restored") UpdatePrivateSessionUi();
+        // Only events worth telling a person about produce text; the rest leave the line alone, so a message an action
+        // just wrote is not overwritten by bookkeeping.
+        if (KernelStatus.For(e) is { } friendly) StatusText.Text = friendly;
     }
 
     /// <summary>
@@ -356,10 +363,10 @@ public sealed partial class MainWindow : Window
     private void UpdateTabControls()
     {
         var t = _kernel?.Active;
-        PinButton.IsEnabled = KeepActiveButton.IsEnabled = t is not null;
+        PinButton.IsEnabled = KeepActiveButton.IsEnabled = SleepItem.IsEnabled = t is not null;
         if (t is null) return;
-        PinButton.Content = t.IsPinned ? "Unpin" : "Pin";
-        KeepActiveButton.Content = t.UserProtection.HasFlag(ProtectionFlags.KeepActive) ? "Let it sleep" : "Keep active";
+        PinButton.Text = t.IsPinned ? "Unpin" : "Pin to top";
+        KeepActiveButton.Text = t.UserProtection.HasFlag(ProtectionFlags.KeepActive) ? "Let it sleep" : "Keep active";
     }
 
     /// <summary>The sidebar shows the active workspace only; other workspaces' tabs stay durable and (eventually) virtual.</summary>
@@ -458,9 +465,12 @@ public sealed partial class MainWindow : Window
     private void UpdatePoolText()
     {
         var s = ProcessGroupProbe.Sample(_leases!.ProcessIds);
-        var band = _lastPlan is null ? "" : $" • {_lastPlan.Band} band, budget {_lastPlan.TargetLiveRenderers}";
         var blocked = _shield?.SessionBlockedTotal ?? 0;
-        PoolText.Text = $"{_kernel!.Tabs.Count} tabs • {_kernel.LiveCount}/{_leases.MaxLive} live{band}\n{s.ProcessCount} procs • {s.PrivateMb:F0} MB private (measured)\nShield: {blocked} blocked this session";
+        var tabs = _kernel!.Tabs.Count;
+        // Plain words. The scheduler band and process count are diagnostics; Explain and Receipt carry them.
+        PoolText.Text = $"{tabs} {(tabs == 1 ? "tab" : "tabs")} open, {_kernel.LiveCount} awake (up to {_leases.MaxLive})\n"
+                      + $"Pages are using {s.PrivateMb:F0} MB of memory\n"
+                      + $"Shield has blocked {blocked:N0} {(blocked == 1 ? "request" : "requests")} this session";
     }
 
     // ---- Restore experience ----
@@ -659,31 +669,42 @@ public sealed partial class MainWindow : Window
     /// <summary>Set by unattended checks that load real sites: nobody is there to answer, and granting is not the point.</summary>
     private bool _autoDenyPermissions;
 
-    private async Task<PermissionAdapter.Choice> PromptPermissionAsync(string site, PermissionKind kind)
+    private async Task<PermissionAdapter.Choice> PromptPermissionAsync(string site, PermissionKind kind, string what)
     {
-        try { File.AppendAllText(Path.Combine(DataDir, "benchmarks", "site-sweep.progress.log"), $"{DateTime.Now:HH:mm:ss}   PERMISSION PROMPT {kind} from {site}\n"); } catch (Exception) { }
+        try { File.AppendAllText(Path.Combine(DataDir, "benchmarks", "site-sweep.progress.log"), $"{DateTime.Now:HH:mm:ss}   PERMISSION PROMPT {kind} ({what}) from {site}\n"); } catch (Exception) { }
         if (_autoAllowPermissions) return PermissionAdapter.Choice.AllowOnce;
         if (_autoDenyPermissions) return PermissionAdapter.Choice.BlockOnce;
         var tcs = new TaskCompletionSource<PermissionAdapter.Choice>();
         if (!DispatcherQueue.TryEnqueue(async () =>
         {
-          try
-          {
-            var dlg = new ContentDialog
+            try
             {
-                Title = $"{site} wants {kind}",
-                Content = new TextBlock { Text = "Grants can be temporary. Denied by default if you close this.", TextWrapping = TextWrapping.Wrap },
-                PrimaryButtonText = "Allow for 1 hour", SecondaryButtonText = "Allow once", CloseButtonText = "Block", XamlRoot = Content.XamlRoot,
-            };
-            var r = await dlg.ShowSerializedAsync();
-            tcs.TrySetResult(r switch
-            {
-                ContentDialogResult.Primary => PermissionAdapter.Choice.AllowForHour,
-                ContentDialogResult.Secondary => PermissionAdapter.Choice.AllowOnce,
-                _ => PermissionAdapter.Choice.Block,
-            });
-          }
-          catch (Exception) { tcs.TrySetResult(PermissionAdapter.Choice.BlockOnce); }   // could not ask: deny this request
+                // Escape and the close button mean "not now", never "never". A permanent block is a decision, so it is
+                // an explicit tick box; before this, pressing Esc on a prompt blocked the site for good.
+                var remember = new CheckBox { Content = "Don't ask this site again", Margin = new Thickness(0, 8, 0, 0) };
+                var dlg = new ContentDialog
+                {
+                    Title = $"{site} wants to {what}",
+                    Content = new StackPanel
+                    {
+                        Spacing = 4,
+                        Children =
+                        {
+                            new TextBlock { Text = "Allow it for an hour, allow it just this time, or say no. Saying no only refuses this request; you will be asked again next time.", TextWrapping = TextWrapping.Wrap },
+                            remember,
+                        },
+                    },
+                    PrimaryButtonText = "Allow for 1 hour", SecondaryButtonText = "Allow once", CloseButtonText = "Don't allow", XamlRoot = Content.XamlRoot,
+                };
+                var r = await dlg.ShowSerializedAsync();
+                tcs.TrySetResult(r switch
+                {
+                    ContentDialogResult.Primary => PermissionAdapter.Choice.AllowForHour,
+                    ContentDialogResult.Secondary => PermissionAdapter.Choice.AllowOnce,
+                    _ => remember.IsChecked == true ? PermissionAdapter.Choice.Block : PermissionAdapter.Choice.BlockOnce,
+                });
+            }
+            catch (Exception) { tcs.TrySetResult(PermissionAdapter.Choice.BlockOnce); }   // could not ask: deny this request
         })) tcs.TrySetResult(PermissionAdapter.Choice.BlockOnce);                          // dispatcher gone: same
         return await tcs.Task;
     }
@@ -1106,12 +1127,37 @@ public sealed partial class MainWindow : Window
         {
             if (_leases!.TryGet(t.Id, out var l)) { var n = await _shield.RestoreHiddenAsync(((WebView2Lease)l).View.CoreWebView2, t.Id); undoNote.Text = n > 0 ? $"Restored {n} hidden item(s). Nothing more is hidden until you navigate." : "Nothing on this page was hidden."; }
         };
+        var summary = st is null ? "Nothing has been checked on this page yet."
+            : st.Blocked == 0 ? $"Nothing was blocked on this page ({st.Total} requests checked)."
+            : $"Blocked {st.Blocked} of {st.Total} requests on this page: ads and trackers.";
+        // Lead with what a person opens this for. Most visits to this dialog are "this site is broken", and the answer
+        // is one button, not a table of rules.
+        var repair = new StackPanel
+        {
+            Spacing = 4,
+            Children =
+            {
+                new TextBlock { Text = "Site not working?", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15 },
+                new TextBlock
+                {
+                    TextWrapping = TextWrapping.Wrap, Opacity = 0.85,
+                    Text = enabled
+                        ? $"Some sites break when their ads or trackers are blocked. Turn Shield off for {site} and the page reloads with nothing blocked. You can turn it back on here."
+                        : $"Shield is off for {site}, so nothing is blocked there. Turn it on to block ads and trackers again.",
+                },
+            },
+        };
+        var details = new Expander
+        {
+            Header = "Technical details", HorizontalAlignment = HorizontalAlignment.Stretch,
+            Content = new ScrollViewer { Content = new TextBlock { Text = string.Join("\n", lines), FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), FontSize = 12, TextWrapping = TextWrapping.Wrap }, MaxHeight = 300 },
+        };
         var dlg = new ContentDialog
         {
             Title = "Shield",
-            Content = new StackPanel { Spacing = 8, Children = { showHidden, undoNote, new ScrollViewer { Content = new TextBlock { Text = string.Join("\n", lines), FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap }, MaxHeight = 360 } } },
-            PrimaryButtonText = enabled ? $"Disable for {site}" : $"Enable for {site}",
-            SecondaryButtonText = "Update lists",
+            Content = new StackPanel { Spacing = 12, Children = { repair, new TextBlock { Text = summary, TextWrapping = TextWrapping.Wrap }, showHidden, undoNote, details } },
+            PrimaryButtonText = enabled ? $"Turn off for {site} and reload" : $"Turn on for {site}",
+            SecondaryButtonText = "Update block lists",
             CloseButtonText = "Close",
             XamlRoot = Content.XamlRoot,
         };
@@ -1120,7 +1166,7 @@ public sealed partial class MainWindow : Window
         {
             await _shield.SetEnabledForAsync(site, !enabled);   // removes cosmetic + site-module scripts in every open tab of this site
             WithActiveLease(l => l.View.CoreWebView2.Reload());
-            StatusText.Text = $"Shield {(enabled ? "disabled" : "enabled")} for {site}; page reloaded";
+            StatusText.Text = enabled ? $"Shield is now off for {site}. The page was reloaded without blocking." : $"Shield is back on for {site}.";
         }
         else if (result == ContentDialogResult.Secondary) await UpdateFilterListsAsync();
     }

@@ -51,6 +51,16 @@ public class PrivateSessionPresentationTests
     }
 
     [Fact]
+    public void A_new_session_does_not_hide_an_earlier_unfinished_cleanup()
+    {
+        var v = Describe(active: Work.Id, mine: Mine.Id, returnTo: Work.Id, tabs: 1, pending: 1);
+        Assert.Contains("still open in the background (1 tab)", v.Text);      // the new session, singular
+        Assert.Contains("earlier private session's temporary data has not been deleted", v.Text);
+        Assert.True(v.ShowEnd);
+        Assert.Equal("End private session", v.EndLabel);                       // and ending it retries the earlier one
+    }
+
+    [Fact]
     public void After_ending_only_an_unfinished_cleanup_keeps_a_control_visible()
     {
         var gone = Describe(active: Personal.Id, mine: null, returnTo: Personal.Id, pending: 0);

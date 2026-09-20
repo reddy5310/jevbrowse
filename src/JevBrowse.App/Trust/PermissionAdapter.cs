@@ -27,7 +27,7 @@ public sealed class PermissionAdapter
     }
 
     private readonly SitePermissionsRepository _repo;
-    private readonly Func<string, PermissionKind, Task<Choice>> _prompt;
+    private readonly Func<string, PermissionKind, string, Task<Choice>> _prompt;
     private readonly Dictionary<(string Key, PermissionKind Kind), PermissionGrant> _memory = [];
     private readonly Func<DateTimeOffset> _clock;
     private readonly HashSet<(IdentityContainer Container, ContextId Isolation)> _ended = [];
@@ -41,7 +41,7 @@ public sealed class PermissionAdapter
             _memory.Remove(key);
     }
 
-    public PermissionAdapter(SitePermissionsRepository repo, Func<string, PermissionKind, Task<Choice>> prompt, Func<DateTimeOffset>? clock = null)
+    public PermissionAdapter(SitePermissionsRepository repo, Func<string, PermissionKind, string, Task<Choice>> prompt, Func<DateTimeOffset>? clock = null)
     {
         _repo = repo;
         _prompt = prompt;
@@ -80,7 +80,7 @@ public sealed class PermissionAdapter
             {
                 if (_ended.Contains((container, isolation))) { e.State = CoreWebView2PermissionState.Deny; return; }
                 if (!Uri.TryCreate(e.Uri, UriKind.Absolute, out var origin)) { e.State = CoreWebView2PermissionState.Deny; return; }
-                var verdict = await DecideAsync(container, isolation, origin, Map(e.PermissionKind));
+                var verdict = await DecideAsync(container, isolation, origin, Map(e.PermissionKind), Phrase(e.PermissionKind));
                 e.State = verdict == PermissionVerdict.Allow ? CoreWebView2PermissionState.Allow : CoreWebView2PermissionState.Deny;
             }
             catch (Exception)
@@ -95,7 +95,7 @@ public sealed class PermissionAdapter
     internal int SessionGrantCount(IdentityContainer container, ContextId isolation) =>
         _memory.Keys.Count(k => k.Key.StartsWith($"{container}:{isolation}|", StringComparison.Ordinal));
 
-    internal async Task<PermissionVerdict> DecideAsync(IdentityContainer container, ContextId isolation, Uri origin, PermissionKind kind)
+    internal async Task<PermissionVerdict> DecideAsync(IdentityContainer container, ContextId isolation, Uri origin, PermissionKind kind, string? what = null)
     {
         if (_ended.Contains((container, isolation))) return PermissionVerdict.Deny;
         var key = PermissionKey.For(container, isolation, origin);
@@ -103,7 +103,7 @@ public sealed class PermissionAdapter
         if (verdict != PermissionVerdict.Ask) return verdict;
         var label = $"{origin.Scheme}://{origin.Host}{(origin.IsDefaultPort ? "" : ":" + origin.Port)} ({container})";
         Choice choice;
-        try { choice = await _prompt(label, kind); }
+        try { choice = await _prompt(label, kind, what ?? Phrase(kind)); }
         catch (Exception) { choice = Choice.BlockOnce; }
         if (_ended.Contains((container, isolation))) return PermissionVerdict.Deny;
         var now = _clock();
@@ -115,6 +115,40 @@ public sealed class PermissionAdapter
         }
         return choice is Choice.Block or Choice.BlockOnce ? PermissionVerdict.Deny : PermissionVerdict.Allow;
     }
+
+    /// <summary>
+    /// What the site is asking to do, in words a person would use. The prompt used to say "wants Other" for every
+    /// permission we do not model, which asks the user to consent to something we have not told them.
+    /// </summary>
+    internal static string Phrase(PermissionKind k) => k switch
+    {
+        PermissionKind.Geolocation => "see your location",
+        PermissionKind.Camera => "use your camera",
+        PermissionKind.Microphone => "use your microphone",
+        PermissionKind.Notifications => "show notifications",
+        PermissionKind.Clipboard => "read what you have copied",
+        PermissionKind.Midi => "use MIDI devices",
+        PermissionKind.Sensors => "use your device's motion sensors",
+        _ => "use a browser feature",
+    };
+
+    // Matched by name so an SDK that adds or renames a member degrades to the generic phrase instead of failing to build.
+    internal static string Phrase(CoreWebView2PermissionKind k) => k.ToString() switch
+    {
+        "MultipleAutomaticDownloads" => "download several files automatically",
+        "FileReadWrite" => "read and write files on your device",
+        "Autoplay" => "play media automatically",
+        "LocalFonts" => "see the fonts installed on your device",
+        "MidiSystemExclusiveMessages" => "control MIDI devices",
+        "WindowManagement" => "manage your windows and screens",
+        "ClipboardRead" => "read what you have copied",
+        "Notifications" => "show notifications",
+        "Geolocation" => "see your location",
+        "Camera" => "use your camera",
+        "Microphone" => "use your microphone",
+        "OtherSensors" => "use your device's motion sensors",
+        _ => "use a browser feature",
+    };
 
     private static PermissionKind Map(CoreWebView2PermissionKind k) => k switch
     {

@@ -30,11 +30,16 @@ public static class PrivateSessionPresentation
         var showEnd = exists || cleanupPending > 0;
         var tabs = tabsInSession == 1 ? "1 tab" : $"{tabsInSession} tabs";
 
-        var text = cleanupPending > 0 && !exists
-            ? "Private cleanup is incomplete. Retry to check again."
-            : inside ? $"You are in your private session ({tabs}). Returning keeps it open; ending it closes it."
+        // Two independent facts, each stated when true. An earlier session whose files could not be deleted stays
+        // visible however many new sessions have been started since: hiding it behind a fresh one would make "retry"
+        // disappear exactly when the user has most reason to think everything is clean.
+        var session = inside ? $"You are in your private session ({tabs}). Returning keeps it open; ending it closes it."
             : exists ? $"Your private session is still open in the background ({tabs}) and keeps its cookies until you end it."
             : "";
+        var cleanup = cleanupPending == 0 ? ""
+            : exists ? "An earlier private session's temporary data has not been deleted yet. Ending this session will try that again too."
+            : "Private cleanup is incomplete. Retry to check again.";
+        var text = string.Join(" ", new[] { session, cleanup }.Where(t => t.Length > 0));
 
         return new PrivateSessionView(
             HasSession: exists,
