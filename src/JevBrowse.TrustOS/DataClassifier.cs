@@ -21,13 +21,18 @@ public sealed class DataClassifier
 
         // Independent evidence is combined by taking the STRICTER result: a "logged in" signal must never mask a
         // banking URL, and a banking URL must never mask a password field.
-        var heuristic = (DataClass)Math.Max((int)FromUrl(url), (int)(FromSignals(signals) ?? DataClass.Public));
+        var known = (DataClass)Math.Max((int)FromUrl(url), (int)(FromSignals(signals) ?? DataClass.Public));
 
         // An explicit user decision about a site outranks heuristics (their site, their call), but a page that is
         // actually asking for a password or card number is SECRET whatever the user said.
         if (_userOverride(Site(url.Host)) is { } over)
             return signals.HasFlag(PageSignals.PasswordField) || signals.HasFlag(PageSignals.PaymentField) ? DataClass.Secret : over;
-        return heuristic;
+
+        if (known > DataClass.Public) return known;     // something concrete points at sensitivity
+
+        // Nothing does. That is not the same as knowing the page is public: say so, and only call it PUBLIC on
+        // positive evidence (a recognisably public URL, or a page with no sign-in affordances at all).
+        return signals.HasFlag(PageSignals.PublicEvidence) || IsKnownPublic(url) ? DataClass.Public : DataClass.Unknown;
     }
 
     private static DataClass? FromSignals(PageSignals s)
@@ -46,6 +51,19 @@ public sealed class DataClassifier
         if (url.Scheme == "http" && host is "localhost" or "127.0.0.1") return DataClass.Authenticated; // dev servers are rarely public
         return DataClass.Public;
     }
+
+    /// <summary>
+    /// URLs whose public nature is structural rather than guessed: reference and documentation sites that serve the
+    /// same content to everyone. Deliberately short; everything else must earn PUBLIC from the page itself.
+    /// </summary>
+    private static bool IsKnownPublic(Uri url)
+    {
+        var host = url.Host.ToLowerInvariant();
+        return KnownPublicSuffixes.Any(s => host == s || host.EndsWith("." + s, StringComparison.Ordinal));
+    }
+
+    private static readonly string[] KnownPublicSuffixes =
+        ["wikipedia.org", "wikimedia.org", "wiktionary.org", "learn.microsoft.com", "developer.mozilla.org", "docs.python.org", "w3.org", "rfc-editor.org", "gnu.org", "archive.org"];
 
     public static string Site(string host)
     {

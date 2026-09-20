@@ -9,7 +9,7 @@ namespace JevBrowse.Storage;
 /// </summary>
 public sealed class BrowserDb : IDisposable
 {
-    public const int LatestVersion = 7;
+    public const int LatestVersion = 8;
 
     private static readonly (int Version, string Sql)[] Steps =
     [
@@ -120,6 +120,14 @@ public sealed class BrowserDb : IDisposable
                 INSERT INTO memory_fts(memory_fts, rowid, title, text) VALUES ('delete', old.rowid, old.title, old.text);
                 INSERT INTO memory_fts(rowid, title, text) VALUES (new.rowid, new.title, new.text);
             END;
+            """),
+        // DataClass gained Unknown = 1, shifting everything above it. site_settings.data_class holds user overrides
+        // as ints, so they are remapped highest-first to avoid collisions. (decision_log stores class NAMES and
+        // agent manifests serialise names, so neither needs migrating.)
+        (8, """
+            UPDATE site_settings SET data_class = 4 WHERE data_class = 3;
+            UPDATE site_settings SET data_class = 3 WHERE data_class = 2;
+            UPDATE site_settings SET data_class = 2 WHERE data_class = 1;
             """),
     ];
 

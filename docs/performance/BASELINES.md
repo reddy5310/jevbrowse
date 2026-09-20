@@ -96,3 +96,18 @@ The Phase 2 figure (p50 350 ms) predates Shield, cosmetic filtering, site module
 | After review fixes | 512–530 ms | 1,270–1,380 ms |
 
 The independent-review changes did **not** move restore latency: the pre-review and post-review builds agree within run-to-run spread. The ≈170 ms drift since Phase 2 comes from pre-navigation work; hypothesis, unverified: registering the ~1 MB per-host cosmetic stylesheet script and the site modules on every renderer acquisition. Tracked in ROADMAP as a performance item; the 10 % PR gate in this file applies from these numbers onward.
+
+### Agent scope gate (real engine, `--agent-check`, ADR 0017, 2026-09-20)
+
+A grant for `youtu.be` only; `https://youtu.be/<id>` 301-redirects to `www.youtube.com`, which is out of scope.
+
+| Check | Result |
+|---|---|
+| Navigate accepted for the granted host | yes |
+| Renderer landed on | `about:blank` (the out-of-scope redirect was cancelled) |
+| Out-of-scope redirect blocked on the FIRST load | yes |
+| Stop released the session's pages | yes (0 live after) |
+| Request after Stop | `session_closed` |
+
+**PASS.** Before ADR 0017 the policy was attached after the load completed, so this redirect would have landed on
+`www.youtube.com` with the agent still inside its session.

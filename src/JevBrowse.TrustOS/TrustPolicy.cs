@@ -27,6 +27,15 @@ public sealed class DefaultTrustPolicy : ITrustPolicy
 
             (DataClass.Public, _) => TrustDecision.Allow("public page"),
 
+            // UNKNOWN: we have no evidence either way, so keep it on this device. Local artifacts that help the user
+            // (scroll, thumbnail) are allowed; building a searchable corpus or sending it anywhere is not.
+            // Agents are still allowed: the user allow-listed the domain, and that grant is the control there.
+            (DataClass.Unknown, DataOperation.PersistCheckpoint) => TrustDecision.Allow("scroll/favicon are low sensitivity"),
+            (DataClass.Unknown, DataOperation.PersistThumbnail) => TrustDecision.Allow("local preview only"),
+            (DataClass.Unknown, DataOperation.ExposeToAgent) => TrustDecision.Allow("the agent's domain grant is the control"),
+            (DataClass.Unknown, DataOperation.IndexContent) => TrustDecision.Deny("not assessed: content is not indexed without positive evidence the page is public"),
+            (DataClass.Unknown, DataOperation.SendToCloudAI) => TrustDecision.Deny("not assessed: nothing leaves the device"),
+
             (DataClass.Authenticated, DataOperation.PersistCheckpoint) => TrustDecision.Allow("scroll/favicon are low sensitivity"),
             (DataClass.Authenticated, DataOperation.PersistThumbnail) => TrustDecision.Allow("thumbnail is policy-controlled; allowed for authenticated"),
             (DataClass.Authenticated, DataOperation.IndexContent) => TrustDecision.Deny("content indexing off for authenticated pages unless user enables"),

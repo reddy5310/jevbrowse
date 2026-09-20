@@ -275,12 +275,13 @@ public sealed partial class MainWindow : Window
             });
         }
 
-        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check"))
+        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--agent-check"))
         {
             Directory.CreateDirectory(Path.Combine(DataDir, "benchmarks"));
             try
             {
-                if (args.Contains("--privacy-check")) await RunPrivacyCheckAsync();
+                if (args.Contains("--agent-check")) await RunAgentCheckAsync();
+                else if (args.Contains("--privacy-check")) await RunPrivacyCheckAsync();
                 else if (args.Contains("--memory-lab")) await RunMemoryLabAsync();
                 else if (args.Contains("--restore-bench")) await RunRestoreBenchAsync();
                 else if (args.Contains("--shield-check")) await RunShieldCheckAsync();
@@ -315,7 +316,9 @@ public sealed partial class MainWindow : Window
             AddressBox.Text = _kernel!.Active?.Url.ToString() ?? "";
         }
         if (e.Kind is "activated" or "navigated" or "signals") { UpdateClassBadge(); UpdateEnvChrome(); }
-        VirtualPlaceholder.Visibility = _kernel!.Active is null ? Visibility.Visible : Visibility.Collapsed;
+        if (e.Kind == "restoring") ShowRestoring(e.Id, e.Reason.StartsWith("with"));
+        if (e.Kind is "restored" or "loaded") FinishRestore(e.Id);
+        UpdateIdlePanel();
         UpdatePoolText();
         StatusText.Text = $"{e.Kind} {e.Reason}";
     }
@@ -353,7 +356,7 @@ public sealed partial class MainWindow : Window
         if (_syncingWorkspace || _kernel is null || WorkspaceBox.SelectedIndex < 0 || WorkspaceBox.SelectedIndex >= _kernel.Workspaces.Count) return;
         await _kernel.SwitchWorkspaceAsync(_kernel.Workspaces[WorkspaceBox.SelectedIndex].Id);
         RebuildWorkspaces();
-        VirtualPlaceholder.Visibility = _kernel.Active is null ? Visibility.Visible : Visibility.Collapsed;
+        UpdateIdlePanel();
         UpdatePoolText();
     }
 
@@ -368,7 +371,7 @@ public sealed partial class MainWindow : Window
         var w = _kernel!.CreateWorkspace(box.Text.Trim(), (IdentityContainer)container.SelectedIndex);
         await _kernel.SwitchWorkspaceAsync(w.Id);
         RebuildWorkspaces();
-        VirtualPlaceholder.Visibility = Visibility.Visible;
+        UpdateIdlePanel();
     }
 
     private void OnMoveMenuOpening(object s, object e)
@@ -421,16 +424,122 @@ public sealed partial class MainWindow : Window
         PoolText.Text = $"{_kernel!.Tabs.Count} tabs • {_kernel.LiveCount}/{_leases.MaxLive} live{band}\n{s.ProcessCount} procs • {s.PrivateMb:F0} MB private (measured)\nShield: {blocked} blocked this session";
     }
 
+    // ---- Restore experience ----
+
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _restoreTimer;
+    private ResourceId? _restoringId;
+
+    /// <summary>Nothing selected, or the selected tab is back: the panel says which, and never sits there lying.</summary>
+    private void UpdateIdlePanel()
+    {
+        if (_kernel?.Active is null)
+        {
+            _restoringId = null;
+            _restoreTimer?.Stop();
+            RestorePanel.Visibility = Visibility.Visible;
+            PreviewFrame.Visibility = Visibility.Collapsed;
+            RestoreProgress.Visibility = Visibility.Collapsed;
+            RestoreActions.Visibility = Visibility.Collapsed;
+            RestoreTitle.Text = "Nothing open here";
+            RestoreStatus.Text = "Choose a tab on the left, or press Ctrl+K.";
+        }
+        else if (_restoringId is null) RestorePanel.Visibility = Visibility.Collapsed;
+    }
+
+    private void ShowRestoring(ResourceId id, bool hasSavedPlace)
+    {
+        var tab = _kernel?.Tabs.FirstOrDefault(t => t.Id == id);
+        if (tab is null) return;
+        _restoringId = id;
+        RestorePanel.Visibility = Visibility.Visible;
+        RestoreActions.Visibility = Visibility.Collapsed;
+        RestoreProgress.Visibility = Visibility.Visible;
+        RestoreTitle.Text = string.IsNullOrWhiteSpace(tab.Title) ? tab.Url.Host : tab.Title;
+        RestoreStatus.Text = hasSavedPlace ? "Restoring… your place is saved." : "Restoring… we did not save a position for this page, so it will open at the top.";
+
+        // The preview is only ever a previously saved image, and only when policy let us keep one.
+        PreviewFrame.Visibility = Visibility.Collapsed;
+        var thumb = _kernel!.GetCheckpoint(id)?.ThumbnailPath;
+        if (thumb is not null && File.Exists(thumb))
+        {
+            try
+            {
+                var bmp = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
+                using var fs = File.OpenRead(thumb);
+                bmp.SetSource(fs.AsRandomAccessStream());
+                PreviewImage.Source = bmp;
+                PreviewFrame.Visibility = Visibility.Visible;
+            }
+            catch (Exception) { }
+        }
+
+        _restoreTimer ??= DispatcherQueue.CreateTimer();
+        _restoreTimer.Stop();
+        _restoreTimer.Interval = TimeSpan.FromSeconds(12);
+        _restoreTimer.IsRepeating = false;
+        _restoreTimer.Tick -= OnRestoreTimeout;
+        _restoreTimer.Tick += OnRestoreTimeout;
+        _restoreTimer.Start();
+    }
+
+    private void OnRestoreTimeout(Microsoft.UI.Dispatching.DispatcherQueueTimer s, object e)
+    {
+        if (_restoringId is null) return;
+        RestoreProgress.Visibility = Visibility.Collapsed;
+        RestoreActions.Visibility = Visibility.Visible;
+        RestoreStatus.Text = "This page is taking longer than expected. It may be slow, offline, or blocking the load.";
+    }
+
+    private void FinishRestore(ResourceId id)
+    {
+        if (_restoringId != id) return;
+        _restoreTimer?.Stop();
+        _restoringId = null;
+        RestorePanel.Visibility = Visibility.Collapsed;
+        PreviewImage.Source = null;
+        // Say so when we could not put them back where they were, rather than quietly opening at the top.
+        if (_kernel?.LastCapture(id) is { Outcome: CaptureOutcome.Partial } partial)
+            StatusText.Text = $"Restored, but not your exact place: {partial.Detail}";
+    }
+
+    private async void OnRestoreRetry(object s, RoutedEventArgs e)
+    {
+        if (_restoringId is not { } id || _kernel is null) return;
+        await _kernel.VirtualizeAsync(id, Cause.User);
+        ShowRestoring(id, _kernel.GetCheckpoint(id) is not null);
+        await _kernel.ActivateAsync(id);
+    }
+
+    private async void OnRestoreOpenAddress(object s, RoutedEventArgs e)
+    {
+        if (_restoringId is not { } id || _kernel?.Tabs.FirstOrDefault(t => t.Id == id) is not { } tab) return;
+        AddressBox.Text = tab.Url.ToString();
+        await _kernel.VirtualizeAsync(id, Cause.User);
+        ShowRestoring(id, false);
+        await _kernel.ActivateAsync(id);
+    }
+
+    private void OnRestoreKeepActive(object s, RoutedEventArgs e)
+    {
+        if (_restoringId is not { } id || _kernel?.Tabs.FirstOrDefault(t => t.Id == id) is not { } tab) return;
+        _kernel.SetProtection(id, tab.UserProtection | ProtectionFlags.NeverHibernateSite);
+        StatusText.Text = "This tab will be kept active and will not be put to sleep automatically.";
+        foreach (var i in Items) i.Refresh();
+    }
+
     // ---- Trust OS ----
 
     private void UpdateClassBadge()
     {
         if (_kernel?.Active is not { } t) { ClassBadgeText.Text = ""; return; }
         var cls = _kernel.ClassOf(t);
-        ClassBadgeText.Text = $"{_kernel.ContainerOf(t).ToString().ToUpperInvariant()} • {cls.ToString().ToUpperInvariant()}";
+        // The badge states the identity and what we know about the page. "Not assessed" is an honest answer and is
+        // never dressed up as a safety verdict.
+        ClassBadgeText.Text = $"{_kernel.ContainerOf(t).ToString().ToUpperInvariant()} • {ClassLabel(cls).ToUpperInvariant()}";
         ClassBadge.Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(cls switch
         {
             DataClass.Public => Microsoft.UI.Colors.DarkSeaGreen,
+            DataClass.Unknown => Microsoft.UI.Colors.SlateGray,
             DataClass.Authenticated => Microsoft.UI.Colors.SteelBlue,
             DataClass.Sensitive => Microsoft.UI.Colors.DarkOrange,
             DataClass.Secret => Microsoft.UI.Colors.Firebrick,
@@ -438,26 +547,49 @@ public sealed partial class MainWindow : Window
         });
     }
 
+    /// <summary>User-facing name for a data class. Internal names are diagnostics, not labels.</summary>
+    internal static string ClassLabel(DataClass c) => c switch
+    {
+        DataClass.Public => "Public",
+        DataClass.Unknown => "Not assessed",
+        DataClass.Authenticated => "Signed in",
+        DataClass.Sensitive => "Sensitive",
+        DataClass.Secret => "Secret",
+        _ => "Private session",
+    };
+
+    private static string ClassExplanation(DataClass c) => c switch
+    {
+        DataClass.Public => "Saved for search, and can be summarized if you ask.",
+        DataClass.Unknown => "We have no evidence either way, so this page is treated carefully: kept on this device, not added to search, never sent to AI.",
+        DataClass.Authenticated => "Looks like you are signed in: kept on this device, not added to search, never sent automatically.",
+        DataClass.Sensitive => "Only the address and scroll position are kept. No screenshot, no search, no AI.",
+        DataClass.Secret => "This page asks for a password or card number. Nothing about it is stored or sent.",
+        _ => "This session is private: nothing is written to disk.",
+    };
+
     private async void OnClassBadgeTapped(object s, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
     {
         if (_kernel?.Active is not { } t) return;
         var site = DataClassifier.Site(t.Url.Host);
         var current = _kernel.ClassOf(t);
+        // Bound to the enum values, not to positions: adding a class must not silently re-point saved overrides.
+        var choices = new DataClass?[] { null, DataClass.Public, DataClass.Authenticated, DataClass.Sensitive };
         var box = new ComboBox { HorizontalAlignment = HorizontalAlignment.Stretch };
-        box.Items.Add("Let JevBrowse decide");
-        foreach (var c in new[] { DataClass.Public, DataClass.Authenticated, DataClass.Sensitive }) box.Items.Add(c.ToString());
+        foreach (var c in choices) box.Items.Add(c is null ? "Let JevBrowse decide" : ClassLabel(c.Value));
         var over = _siteSettings!.DataClassOverride(site);
-        box.SelectedIndex = over is null ? 0 : (int)over + 1;
+        box.SelectedIndex = Math.Max(0, Array.FindIndex(choices, c => (int?)c == over));
         var dlg = new ContentDialog
         {
-            Title = $"Data class for {site}",
+            Title = $"How should {site} be treated?",
             Content = new StackPanel { Spacing = 8, Children = {
-                new TextBlock { Text = $"Currently {current}. Higher classes persist less and never send content to AI. A password field on the page always forces SECRET.", TextWrapping = TextWrapping.Wrap },
-                box } },
+                new TextBlock { Text = $"Now: {ClassLabel(current)}. {ClassExplanation(current)}", TextWrapping = TextWrapping.Wrap },
+                box,
+                new TextBlock { Text = "A page asking for a password or card number is always treated as Secret, whatever you choose here.", TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = 0.7 } } },
             PrimaryButtonText = "Save", CloseButtonText = "Cancel", XamlRoot = Content.XamlRoot,
         };
         if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
-        _siteSettings.SetDataClassOverride(site, box.SelectedIndex == 0 ? null : box.SelectedIndex - 1);
+        _siteSettings.SetDataClassOverride(site, (int?)choices[Math.Max(0, box.SelectedIndex)]);
         UpdateClassBadge();
     }
 
@@ -515,6 +647,10 @@ public sealed partial class MainWindow : Window
         return tcs.Task;
     }
 
+    private string SessionLine(AgentGateway.AgentSession ses) =>
+        $"{ses.Manifest.Agent} [{ses.Id}] {(ses.CleanedUp ? "stopped" : ses.Closed ? "closing" : "open")} • {ses.ActionsUsed}/{ses.Manifest.MaxActions} actions • {_agents!.LiveAgentPages(ses)}/{ses.Manifest.MaxLivePages} live • expires {ses.ExpiresAt.ToLocalTime():HH:mm}\n"
+        + string.Join("\n", ses.Audit.TakeLast(6).Select(a => $"   {(a.Allowed ? "✓" : "✕")} {a.Action} {a.Target} — {a.Reason}"));
+
     private async void OnAgents(object s, RoutedEventArgs e)
     {
         if (_agents is null) return;
@@ -540,7 +676,25 @@ public sealed partial class MainWindow : Window
             panel.Children.Add(new TextBlock { Text = $"Token:    {_agentHost.Token}", IsTextSelectionEnabled = true, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas") });
             panel.Children.Add(new TextBlock { Text = "Sessions:", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
             foreach (var ses in _agentHost.Sessions)
-                panel.Children.Add(new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 12, Text = $"{ses.Manifest.Agent} [{ses.Id}] {(ses.Closed ? "closed" : "open")} • {ses.ActionsUsed}/{ses.Manifest.MaxActions} actions • {_agents.LiveAgentPages(ses)}/{ses.Manifest.MaxLivePages} live • expires {ses.ExpiresAt.ToLocalTime():HH:mm}\n" + string.Join("\n", ses.Audit.TakeLast(6).Select(a => $"   {(a.Allowed ? "✓" : "✕")} {a.Action} {a.Target} — {a.Reason}")) });
+            {
+                // "Stopped" is only shown once the pages are actually released, so the control never overstates itself.
+                var state = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 12, Text = SessionLine(ses) };
+                var stop = new Button { Content = "Stop", Style = (Style)Application.Current.Resources["JevToolButton"], IsEnabled = !ses.CleanedUp };
+                var session = ses;
+                stop.Click += async (_, _) =>
+                {
+                    stop.IsEnabled = false; stop.Content = "Stopping…";
+                    var released = await _agentHost!.StopAsync(session);
+                    stop.Content = released ? "Stopped" : "Stop (retrying)";
+                    stop.IsEnabled = !released;
+                    state.Text = SessionLine(session);
+                    StatusText.Text = released ? $"agent session {session.Id} revoked and its pages released" : $"agent session {session.Id} revoked; some pages could not be released yet";
+                };
+                panel.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { stop, state } });
+            }
+            var stopAll = new Button { Content = "Stop all sessions", Style = (Style)Application.Current.Resources["JevToolButton"] };
+            stopAll.Click += async (_, _) => { var n = await _agentHost!.StopAllAsync(); StatusText.Text = $"revoked {n} agent session(s)"; };
+            panel.Children.Add(stopAll);
         }
         panel.Children.Add(new TextBlock { TextWrapping = TextWrapping.Wrap, Opacity = 0.7, FontSize = 12, Text = "Agents get a manifest-scoped session: allowed domains, allowed actions, data-class ceiling, a live-page quota, and a time/action budget. Destructive clicks ask you. Every request is written to data/agents/audit/<session>.jsonl. See docs/AGENT_SECURITY.md." });
         var dlg = new ContentDialog { Title = "Agent Gateway", Content = new ScrollViewer { MaxHeight = 480, Content = panel }, PrimaryButtonText = "Apply", CloseButtonText = "Close", XamlRoot = Content.XamlRoot };
@@ -874,6 +1028,54 @@ public sealed partial class MainWindow : Window
             StatusText.Text = $"Shield {(enabled ? "disabled" : "enabled")} for {site}; page reloaded";
         }
         else if (result == ContentDialogResult.Secondary) await UpdateFilterListsAsync();
+    }
+
+    /// <summary>
+    /// Agent scope gate (ADR 0017, condition 1): a REAL cross-domain redirect against a real renderer.
+    /// youtu.be/&lt;id&gt; 301s to www.youtube.com, which is outside a grant for youtu.be. If the policy is attached after
+    /// the load (as it used to be), the renderer lands on youtube.com and the boundary we advertise is not real.
+    /// Also exercises revocation: after Stop, the page must not be able to navigate at all.
+    /// </summary>
+    private async Task RunAgentCheckAsync()
+    {
+        var k = _kernel!;
+        foreach (var t in k.Tabs.ToList()) await k.CloseAsync(t.Id);
+
+        var ceiling = new AgentCeiling { Limits = new AgentManifest { Agent = "ceiling", AllowDomains = ["youtu.be", "example.com"], Actions = [AgentAction.Navigate, AgentAction.Read], SessionMinutes = 10, MaxLivePages = 2, MaxActions = 50 } };
+        using var host = new LocalAgentHost(_agents!, ceiling);
+        var (session, _) = await host.GrantAsync(new AgentManifest { Agent = "redirect-probe", AllowDomains = ["youtu.be"], Actions = [AgentAction.Navigate, AgentAction.Read], SessionMinutes = 10, MaxLivePages = 2 });
+
+        var nav = await _agents!.ExecuteAsync(session, new AgentRequest(AgentAction.Navigate, "https://youtu.be/dQw4w9WgXcQ"), default);
+        await Task.Delay(8000);
+
+        string landed = "", scope = "unknown";
+        var tab = k.Tabs.FirstOrDefault(t => session.Pages.Contains(t.Id));
+        if (tab is not null && _leases!.TryGet(tab.Id, out var l))
+        {
+            landed = ((WebView2Lease)l).View.CoreWebView2?.Source ?? "";
+            var host2 = Uri.TryCreate(landed, UriKind.Absolute, out var lu) ? lu.Host.ToLowerInvariant() : "";
+            scope = host2.EndsWith("youtu.be", StringComparison.Ordinal) || host2.Length == 0 || landed.StartsWith("about:", StringComparison.Ordinal) ? "in-scope" : "ESCAPED";
+        }
+
+        var outOfScopeBlocked = scope != "ESCAPED";
+        var stopped = await host.StopAsync(session);
+        var deniedAfterStop = (await _agents.ExecuteAsync(session, new AgentRequest(AgentAction.Navigate, "https://youtu.be/other"), default)).Message;
+
+        var result = new
+        {
+            pass = outOfScopeBlocked && stopped && deniedAfterStop.StartsWith("session_"),
+            grantedDomains = session.Manifest.AllowDomains,
+            navigateAccepted = nav.Ok,
+            landedOn = landed,
+            scope,
+            outOfScopeRedirectBlocked = outOfScopeBlocked,
+            stopReleasedPages = stopped,
+            livePagesAfterStop = _agents.LiveAgentPages(session),
+            requestAfterStop = deniedAfterStop,
+            audit = session.Audit.Select(a => $"{(a.Allowed ? "ok" : "no")} {a.Action} {a.Target} — {a.Reason}").ToList(),
+        };
+        var file = Path.Combine(DataDir, "benchmarks", $"agent-check-{DateTime.Now:yyyyMMdd-HHmmss}.json");
+        await File.WriteAllTextAsync(file, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
     }
 
     /// <summary>

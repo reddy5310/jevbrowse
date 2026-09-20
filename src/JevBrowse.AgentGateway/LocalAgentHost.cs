@@ -55,11 +55,24 @@ public sealed class LocalAgentHost : IDisposable
         return (s, clamped.Adjustments);
     }
 
-    /// <summary>Closes sessions past their expiry even when the agent never calls again.</summary>
+    /// <summary>Closes sessions past their expiry, and retries any whose pages did not release, even when the agent never calls again.</summary>
     public Task<int> SweepExpiredAsync(CancellationToken ct = default)
     {
         List<AgentSession> snapshot; lock (_sessions) snapshot = [.. _sessions.Values];
         return _gateway is AgentGateway gw ? gw.SweepExpiredAsync(snapshot, ct) : Task.FromResult(0);
+    }
+
+    /// <summary>Revoke one session now. Returns true only when its renderers were actually released.</summary>
+    public async Task<bool> StopAsync(AgentSession s, CancellationToken ct = default) =>
+        _gateway is AgentGateway gw ? await gw.StopAsync(s, ct) : false;
+
+    /// <summary>Revoke every open session (the panel's "Stop all", and shutdown).</summary>
+    public async Task<int> StopAllAsync(CancellationToken ct = default)
+    {
+        List<AgentSession> snapshot; lock (_sessions) snapshot = [.. _sessions.Values];
+        int n = 0;
+        foreach (var s in snapshot.Where(x => !x.CleanedUp)) { await StopAsync(s, ct); n++; }
+        return n;
     }
 
     public string Token { get; }
@@ -80,6 +93,7 @@ public sealed class LocalAgentHost : IDisposable
     public void Stop()
     {
         _sweeper?.Dispose();
+        try { StopAllAsync().GetAwaiter().GetResult(); } catch (Exception) { }   // turning the endpoint off revokes what it granted
         _cts?.Cancel();
         if (_listener.IsListening) _listener.Stop();
     }
@@ -134,7 +148,7 @@ public sealed class LocalAgentHost : IDisposable
                         return;
                     }
                     if (parts.Length == 3 && parts[2] == "audit" && req.HttpMethod == "GET") { await Write(res, 200, s.Audit); return; }
-                    if (parts.Length == 2 && req.HttpMethod == "DELETE") { await _gateway.CloseAsync(s, ct); await Write(res, 200, new { closed = true }); return; }
+                    if (parts.Length == 2 && req.HttpMethod == "DELETE") { await _gateway.CloseAsync(s, ct); await Write(res, 200, new { closed = s.Closed, pagesReleased = s.CleanedUp }); return; }
                 }
             }
             await Write(res, 404, new { error = "not found" });

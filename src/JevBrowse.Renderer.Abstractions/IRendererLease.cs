@@ -26,8 +26,11 @@ public interface IRendererLease
     Task<bool> TrySuspendAsync();
     void Resume();
 
-    /// <summary>Capture the semantic checkpoint of the live page. Must never read secret inputs.</summary>
-    Task<Checkpoint> CaptureCheckpointAsync(string thumbnailDir, CancellationToken ct);
+    /// <summary>
+    /// Capture the semantic checkpoint of the live page. Must never read secret inputs, and must not throw: it
+    /// reports what it managed to get so the caller can decide whether that is enough to dispose the renderer.
+    /// </summary>
+    Task<CaptureResult> CaptureCheckpointAsync(string thumbnailDir, CancellationToken ct);
     /// <summary>Apply scroll position etc. once the page the lease is loading has finished.</summary>
     void ApplyCheckpoint(Checkpoint checkpoint);
     /// <summary>Readable main text with boilerplate reduced (§8). Caller must clear Trust OS IndexContent first.</summary>
@@ -67,5 +70,13 @@ public interface IRendererLeaseManager
     /// agents) never share cookies.
     /// </summary>
     Task<IRendererLease> AcquireAsync(ResourceId id, Uri initialUrl, RenderIntent intent, IdentityContainer container, ContextId isolationKey, CancellationToken ct);
+
+    /// <summary>
+    /// Register a navigation policy for a resource BEFORE it has a renderer. The manager applies it to the lease at
+    /// creation, so it governs the very first navigation and any redirect inside it; attaching a guard to a lease
+    /// after acquisition leaves that first load unchecked. Applies to every later lease for the same resource
+    /// (restores) until cleared with null.
+    /// </summary>
+    void SetNavigationPolicy(ResourceId id, Func<Uri, bool>? guard);
     Task ReleaseAsync(ResourceId id, ReleaseDisposition disposition, CancellationToken ct);
 }

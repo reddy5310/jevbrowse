@@ -1,7 +1,15 @@
 namespace JevBrowse.Domain;
 
-/// <summary>Table A.10. Higher = more sensitive. Persistence and AI defaults get stricter as the class rises.</summary>
-public enum DataClass { Public, Authenticated, Sensitive, Secret, Ephemeral }
+/// <summary>
+/// Table A.10. Higher = more sensitive. Persistence and AI defaults get stricter as the class rises.
+/// <para>
+/// <see cref="Unknown"/> is the default for a page we have no positive evidence about: it is NOT a claim that the
+/// page is public. PUBLIC must be earned (recognisable public URL, or the page showing no sign-in affordances).
+/// Numeric order matters — the policy matrix and every Math.Max combination depend on it, and stored user
+/// overrides are migrated when it changes (BrowserDb v8).
+/// </para>
+/// </summary>
+public enum DataClass { Public = 0, Unknown = 1, Authenticated = 2, Sensitive = 3, Secret = 4, Ephemeral = 5 }
 
 /// <summary>§10.1 identity containers. Each maps to its own WebView2 user-data folder (cookies/storage/permissions).</summary>
 public enum IdentityContainer { Personal, Work, Dev, Disposable, Private }
@@ -37,4 +45,9 @@ public enum PageSignals
     PasswordField = 1 << 0,   // a password input exists on the page
     PaymentField = 1 << 1,    // autocomplete=cc-number etc.
     Authenticated = 1 << 2,   // heuristics: logout link / account menu; conservative
+    /// <summary>
+    /// Positive evidence that the page is public: no password/payment input and no sign-out affordance. Weak on its
+    /// own, which is why it only ever moves a page from UNKNOWN to PUBLIC and never overrides stronger evidence.
+    /// </summary>
+    PublicEvidence = 1 << 3,
 }

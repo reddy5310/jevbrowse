@@ -33,8 +33,9 @@ public class DataClassifierTests
     {
         // an "authenticated" signal must not downgrade a banking URL
         Assert.Equal(DataClass.Sensitive, C.Classify(new Uri("https://netbanking.hdfcbank.com/"), IdentityContainer.Personal, PageSignals.Authenticated));
-        // and an unrecognised URL becomes AUTHENTICATED as soon as the page shows it is logged in (private repo, dashboard)
-        Assert.Equal(DataClass.Public, C.Classify(new Uri("https://github.com/company/project"), IdentityContainer.Personal, PageSignals.None));
+        // an unrecognised URL is NOT ASSESSED until something says otherwise, and becomes AUTHENTICATED as soon as
+        // the page shows it is logged in (private repo, dashboard)
+        Assert.Equal(DataClass.Unknown, C.Classify(new Uri("https://github.com/company/project"), IdentityContainer.Personal, PageSignals.None));
         Assert.Equal(DataClass.Authenticated, C.Classify(new Uri("https://github.com/company/project"), IdentityContainer.Personal, PageSignals.Authenticated));
         // a password field beats a URL that looked public and a login signal
         Assert.Equal(DataClass.Secret, C.Classify(new Uri("https://news.example.com/"), IdentityContainer.Personal, PageSignals.Authenticated | PageSignals.PasswordField));
@@ -47,6 +48,35 @@ public class DataClassifierTests
         Assert.Equal(DataClass.Public, c.Classify(new Uri("https://accounts.corp.test/login"), IdentityContainer.Personal, PageSignals.None));      // user's own site, their call
         Assert.Equal(DataClass.Secret, c.Classify(new Uri("https://accounts.corp.test/login"), IdentityContainer.Personal, PageSignals.PasswordField));
         Assert.Equal(DataClass.Secret, c.Classify(new Uri("https://accounts.corp.test/pay"), IdentityContainer.Personal, PageSignals.PaymentField));
+    }
+
+    [Fact]
+    public void Public_must_be_earned_and_is_never_assumed()
+    {
+        var unknown = new Uri("https://reports.somecompany.example/q3");   // matches no URL heuristic in either direction
+        // No evidence either way → Not assessed. Insufficient knowledge is not a claim of "public".
+        Assert.Equal(DataClass.Unknown, C.Classify(unknown, IdentityContainer.Personal, PageSignals.None));
+        // Positive evidence from the page (no password, no payment, no sign-out affordance) earns PUBLIC…
+        Assert.Equal(DataClass.Public, C.Classify(unknown, IdentityContainer.Personal, PageSignals.PublicEvidence));
+        // …but never over stronger evidence.
+        Assert.Equal(DataClass.Authenticated, C.Classify(unknown, IdentityContainer.Personal, PageSignals.PublicEvidence | PageSignals.Authenticated));
+        Assert.Equal(DataClass.Secret, C.Classify(unknown, IdentityContainer.Personal, PageSignals.PublicEvidence | PageSignals.PasswordField));
+        Assert.Equal(DataClass.Sensitive, C.Classify(new Uri("https://netbanking.hdfcbank.com/"), IdentityContainer.Personal, PageSignals.PublicEvidence));
+        // A structurally public site does not have to wait for the page to report in.
+        Assert.Equal(DataClass.Public, C.Classify(new Uri("https://en.wikipedia.org/wiki/Cat"), IdentityContainer.Personal, PageSignals.None));
+    }
+
+    [Fact]
+    public void Not_assessed_keeps_the_page_on_the_device()
+    {
+        var p = new DefaultTrustPolicy();
+        var ctx = new ResourceContext(new Uri("https://reports.somecompany.example/"), DataClass.Unknown, IdentityContainer.Personal);
+        Assert.True(p.Evaluate(ctx, DataOperation.PersistTabRow).Allowed);
+        Assert.True(p.Evaluate(ctx, DataOperation.PersistCheckpoint).Allowed);
+        Assert.True(p.Evaluate(ctx, DataOperation.PersistThumbnail).Allowed);
+        Assert.False(p.Evaluate(ctx, DataOperation.IndexContent).Allowed);     // no searchable corpus without evidence
+        Assert.False(p.Evaluate(ctx, DataOperation.SendToCloudAI).Allowed);    // nothing leaves the device
+        Assert.True(p.Evaluate(ctx, DataOperation.ExposeToAgent).Allowed);     // the agent's domain grant is the control
     }
 
     [Fact]

@@ -22,7 +22,7 @@ public class AdvisoryClassTests : IDisposable
     {
         var t = _k.Open(new Uri("https://intranet.corp.test/reports"));
         await _k.ActivateAsync(t.Id);
-        Assert.Equal(DataClass.Public, _k.ClassOf(t));
+        Assert.Equal(DataClass.Unknown, _k.ClassOf(t));   // unrecognised: not assessed, not assumed public
 
         Assert.True(_k.RaiseClass(t.Id, DataClass.Authenticated));
         Assert.Equal(DataClass.Authenticated, _k.ClassOf(t));
@@ -34,7 +34,7 @@ public class AdvisoryClassTests : IDisposable
 
         _leases[t.Id].RaiseSignals(PageSignals.None);
         _leases[t.Id].RaiseNavigation(new Uri("https://intranet.corp.test/other"), "Other");
-        Assert.Equal(DataClass.Public, _k.ClassOf(t));                 // advisory was for the previous page
+        Assert.Equal(DataClass.Unknown, _k.ClassOf(t));                // advisory was for the previous page
     }
 
     [Fact]

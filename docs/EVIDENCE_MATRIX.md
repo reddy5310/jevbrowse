@@ -7,7 +7,7 @@ Every claim JevBrowse makes, and the strongest evidence behind it today. Levels,
 - **Real engine**: a benchmark/check drives actual WebView2 renderers and inspects real disk/DB state (`--privacy-check`, `--restore-bench`, …).
 - **Release-validated**: verified on the packaged, signed build on more than one machine. **Nothing is at this level yet** (builds are unsigned and tested on one machine).
 
-Last updated 2026-09-20 after the independent review. 216 unit tests.
+Last updated 2026-09-20 after the second independent review (ADR 0017). 231 unit tests.
 
 | Claim | Level | Evidence | Known gap |
 |---|---|---|---|
@@ -20,10 +20,15 @@ Last updated 2026-09-20 after the independent review. 216 unit tests.
 | A stricter class removes what the looser class stored | Unit | `Stricter_class_purges_thumbnail_checkpoint…`, `Tightening_a_pages_class_removes_it_from_the_index` | Not yet driven end-to-end in a real renderer |
 | Identity boundaries are real (moving across identities creates a new tab; agents never touch personal identities) | Unit | `Moving_across_identities…`, `A_session_can_never_name_its_way_into_an_existing_identity…` | Cookie separation between profiles relies on WebView2 user-data folders (engine guarantee, not re-tested by us) |
 | Permission grants are temporary and scoped to container + exact origin | Unit (key + policy) | `PermissionKeyTests` | `SavesInProfile=false` is set in the WebView2 adapter but not covered by an automated real-engine test |
-| Page classification combines evidence by the stricter result | Unit | `Independent_evidence_combines_by_the_stricter_result` | **Unrecognised URLs with no signals are still PUBLIC** (see Known limitations) |
+| Page classification combines evidence by the stricter result | Unit | `Independent_evidence_combines_by_the_stricter_result` | — |
+| **PUBLIC is earned, not assumed; "Not assessed" is honest** | Unit + real engine | `Public_must_be_earned_and_is_never_assumed`, `Not_assessed_keeps_the_page_on_the_device`, `A_page_we_cannot_assess_is_not_indexed…`; badge verified in a clean profile | Positive evidence is a heuristic (no sign-out affordance + real content); a logged-in app with neither would still read as PUBLIC |
+| **Restore outcomes are distinguished and shown** | Unit | `CaptureResult` outcomes; automatic demotion stops on TimedOut/Cancelled/Failed; partial capture reported and not dressed up | The 12 s restore timeout and failure choices are not yet covered by an automated UI test |
 | AI is off; background AI needs its own switch; nothing secret leaves | Unit | 21 Brain tests: kill switch, class gates, automatic-off, size cap, redaction of state *and* question text | Redaction is regex-based; `Redactor` recall on real pages is unmeasured |
 | Cloud-call audit is accurate | Unit | task, class, automatic/explicit recorded; `CloudCallsByClass` counts typed Jev calls | UI shows the log; no export |
-| Agents can only narrow a user-approved grant | Unit | `AgentCeiling` clamp tests; host fails closed without a ceiling; per-session approval | Domain enforcement on every navigation is unit-tested with a fake guard; **real-engine redirect enforcement is not exercised** |
+| Agents can only narrow a user-approved grant | Unit | `AgentCeiling` clamp tests; host fails closed without a ceiling; per-session approval | — |
+| **An allowed URL cannot redirect an agent out of scope** | **Real engine** | `--agent-check`: real `youtu.be → www.youtube.com` 301 cancelled on the first load; policy registered before the renderer exists | One redirect shape; frame-level navigations not separately exercised |
+| **Stop/expiry revoke and release, even protected pages** | Unit + real engine | `--agent-check` (0 live after Stop, `session_closed` after); `No_path_leaves_a_session_closed_with_live_pages` | — |
+| Agent limits hold under concurrency | Unit | 8 concurrent navigations vs a 2-page limit; 20 concurrent requests vs a 5-action budget; in-flight request when Stop lands | Fake renderer latency, not WebView2 timing |
 | Agent live-page quota is a hard limit | Unit | `Live_page_quota_is_a_hard_limit…` | CPU/network quotas do not exist |
 | Shield blocks ads/trackers on real sites | Real engine | `--shield-check` (goodreturns/cricbuzz/CNN), 110k rules, ~90 µs p95 | Debug build; long/adversarial URL cost unmeasured |
 | Shield "disable for site" removes every layer | Unit + manual | per-renderer script ownership; disabled list baked into site modules | Needs a real-engine check that a disabled site really loads unmodified |
@@ -35,6 +40,6 @@ Last updated 2026-09-20 after the independent review. 216 unit tests.
 | Signed, updatable release | **Designed** | portable zip only | No code signing, no MSIX, no security-update path |
 
 ## Known limitations (deliberate, documented)
-- **No `Unknown` data class yet.** A page with no recognizable URL words and no signals is PUBLIC and may be indexed. Mitigations shipped: the page reports "logged in" (sign-out link/form) and password/payment fields; stricter evidence purges what was stored; automatic AI applies only to PUBLIC. The remaining gap (an authenticated app with no sign-out link and a neutral URL) needs a positive-evidence model: tracked in ROADMAP.
+- **Positive evidence for PUBLIC is still a heuristic.** A page earns PUBLIC from a structurally public host or from reporting no password/payment input, no sign-out affordance, and real content. An authenticated app with none of those signals would still read as PUBLIC. Everything else is now **Not assessed** and is kept on-device only.
 - **Product scope.** The architecture serves general users, developers, researchers and agents at once. The dependable first release is *durable workspaces with predictable memory-efficient tab restoration*; everything else is opt-in.
 - **Not implemented:** bookmark import/export, extensions, password manager, sync, accessibility audit (keyboard-only and screen-reader passes are unverified), high-contrast theme testing.

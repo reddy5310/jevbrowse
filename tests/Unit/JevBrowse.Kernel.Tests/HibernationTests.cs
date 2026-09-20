@@ -52,7 +52,7 @@ public class HibernationTests : IDisposable
         _leases.FailNextCapture = true;
         var auto = await _k.VirtualizeAsync(a.Id, Cause.Scheduler);
         Assert.False(auto.Allowed);
-        Assert.Equal("checkpoint_failed: renderer kept", auto.Reason);
+        Assert.Equal("capture_failed: renderer kept", auto.Reason);
         Assert.Equal(ResourceState.Hot, a.State);
         Assert.Equal(1, _k.LiveCount);                      // the unfinished page was NOT thrown away by a scheduler
 
@@ -62,6 +62,51 @@ public class HibernationTests : IDisposable
         Assert.Equal(ResourceState.Virtual, a.State);
         Assert.Null(_k.GetCheckpoint(a.Id));
         Assert.Single(new TabRepository(_db).LoadAll());    // durable row intact
+    }
+
+    [Theory]
+    [InlineData(CaptureOutcome.TimedOut)]
+    [InlineData(CaptureOutcome.Cancelled)]
+    public async Task An_automatic_demotion_stops_when_we_cannot_tell_whether_the_page_was_preserved(CaptureOutcome outcome)
+    {
+        var a = await OpenAndActivate("a.test");
+        _leases[a.Id].NextCaptureOutcome = outcome;
+
+        var r = await _k.VirtualizeAsync(a.Id, Cause.Scheduler);
+
+        Assert.False(r.Allowed);
+        Assert.Equal($"capture_{outcome.ToString().ToLowerInvariant()}: renderer kept", r.Reason);
+        Assert.Equal(1, _k.LiveCount);
+        Assert.Equal(outcome, _k.LastCapture(a.Id)!.Outcome);
+    }
+
+    [Fact]
+    public async Task A_partial_capture_is_kept_but_reported_so_the_user_is_not_promised_their_place()
+    {
+        var a = await OpenAndActivate("a.test");
+        _leases[a.Id].ScrollY = 900;
+        _leases[a.Id].NextCaptureOutcome = CaptureOutcome.Partial;
+
+        Assert.True((await _k.VirtualizeAsync(a.Id, Cause.Scheduler)).Allowed);   // the address is still worth keeping
+
+        var last = _k.LastCapture(a.Id)!;
+        Assert.Equal(CaptureOutcome.Partial, last.Outcome);
+        Assert.Contains("did not report its position", last.Detail);
+        Assert.Equal(0, _k.GetCheckpoint(a.Id)!.ScrollY);                        // and we do not pretend we have it
+    }
+
+    [Fact]
+    public async Task Policy_refusing_to_persist_is_a_decision_not_a_capture_failure()
+    {
+        var priv = _k.CreateWorkspace("Private", IdentityContainer.Private);
+        await _k.SwitchWorkspaceAsync(priv.Id);
+        var t = _k.Open(new Uri("https://a.test/x"));
+        await _k.ActivateAsync(t.Id);
+
+        Assert.True((await _k.VirtualizeAsync(t.Id, Cause.Scheduler)).Allowed);   // must not be blocked like a failure
+        Assert.Null(_k.GetCheckpoint(t.Id));
+        Assert.Equal(CaptureOutcome.Captured, _k.LastCapture(t.Id)!.Outcome);
+        Assert.Contains("nothing about this page is persisted", _k.LastCapture(t.Id)!.Detail);
     }
 
     [Fact]

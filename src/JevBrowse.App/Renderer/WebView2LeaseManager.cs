@@ -60,6 +60,14 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
         return env;
     }
 
+    private readonly Dictionary<ResourceId, Func<Uri, bool>> _navPolicies = [];
+
+    public void SetNavigationPolicy(ResourceId id, Func<Uri, bool>? guard)
+    {
+        if (guard is null) _navPolicies.Remove(id); else _navPolicies[id] = guard;
+        if (_live.TryGetValue(id, out var live)) live.NavigationGuard = guard;   // also bind an already-live renderer
+    }
+
     public bool TryGet(ResourceId id, out IRendererLease lease)
     {
         var ok = _live.TryGetValue(id, out var l);
@@ -75,6 +83,8 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
         await view.EnsureCoreWebView2Async(env);
         if (OnCoreCreated is not null) await OnCoreCreated(view.CoreWebView2, id, container, isolationKey, initialUrl);
         var lease = await WebView2Lease.CreateAsync(id, view, _thumbnailDir);
+        // In force before the first Navigate below, so an allowed URL that redirects out of scope is stopped.
+        if (_navPolicies.TryGetValue(id, out var policy)) lease.NavigationGuard = policy;
         _live[id] = lease;
         if (initialUrl.Scheme == "jev" && LocalPage is not null && LocalPage(initialUrl) is { } html) view.CoreWebView2.NavigateToString(html);
         else view.CoreWebView2.Navigate(initialUrl.ToString());
@@ -127,10 +137,16 @@ public sealed class WebView2Lease : IRendererLease
           document.addEventListener('input', mark, true);
           document.addEventListener('change', mark, true);
           const scan = () => {
-            if (document.querySelector('input[type="password"]')) post('jev:secret-field');
-            if (document.querySelector('input[autocomplete^="cc-"]')) post('jev:payment-field');
+            const pw = !!document.querySelector('input[type="password"]');
+            const cc = !!document.querySelector('input[autocomplete^="cc-"]');
             // "Logged in" evidence, structure only: a sign-out link or form. Raises the class (less persistence, no AI).
-            if (document.querySelector('a[href*="logout" i], a[href*="signout" i], a[href*="sign_out" i], a[href*="sign-out" i], a[href*="log-out" i], form[action*="logout" i], form[action*="signout" i]')) post('jev:authenticated');
+            const out = !!document.querySelector('a[href*="logout" i], a[href*="signout" i], a[href*="sign_out" i], a[href*="sign-out" i], a[href*="log-out" i], form[action*="logout" i], form[action*="signout" i]');
+            if (pw) post('jev:secret-field');
+            if (cc) post('jev:payment-field');
+            if (out) post('jev:authenticated');
+            // Positive evidence the page is public. Only reported once the document has real content, so an empty
+            // shell cannot earn PUBLIC before its app has rendered.
+            if (!pw && !cc && !out && document.body && (document.body.innerText || '').trim().length > 200) post('jev:public-evidence');
           };
           if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', scan); else scan();
           new MutationObserver(() => scan()).observe(document.documentElement, { childList: true, subtree: true });
@@ -187,7 +203,8 @@ public sealed class WebView2Lease : IRendererLease
                 case "jev:dirty-form": lease.SetDetected(ProtectionFlags.DirtyForm, true); break;
                 case "jev:secret-field": lease.SetSignals(lease._signals | PageSignals.PasswordField); break;
                 case "jev:payment-field": lease.SetSignals(lease._signals | PageSignals.PaymentField); break;
-                case "jev:authenticated": lease.SetSignals(lease._signals | PageSignals.Authenticated); break;
+                case "jev:authenticated": lease.SetSignals((lease._signals | PageSignals.Authenticated) & ~PageSignals.PublicEvidence); break;
+                case "jev:public-evidence": if (!lease._signals.HasFlag(PageSignals.Authenticated)) lease.SetSignals(lease._signals | PageSignals.PublicEvidence); break;
             }
         };
         await core.AddScriptToExecuteOnDocumentCreatedAsync(PageScript);
@@ -246,10 +263,14 @@ public sealed class WebView2Lease : IRendererLease
 
     public void Resume() => View.CoreWebView2?.Resume();
 
-    public async Task<Checkpoint> CaptureCheckpointAsync(string thumbnailDir, CancellationToken ct)
+    public async Task<CaptureResult> CaptureCheckpointAsync(string thumbnailDir, CancellationToken ct)
     {
         var core = View.CoreWebView2;
+        if (core is null) return new(null, CaptureOutcome.Failed, "the renderer is gone");
+
         double sx = 0, sy = 0; string? favicon = null;
+        var gaps = new List<string>();
+        var outcome = CaptureOutcome.Captured;
         try
         {
             var script = core.ExecuteScriptAsync("JSON.stringify({x:window.scrollX,y:window.scrollY,f:(document.querySelector('link[rel~=\"icon\"]')||{}).href||null})").AsTask();
@@ -260,15 +281,30 @@ public sealed class WebView2Lease : IRendererLease
                 sy = doc.RootElement.GetProperty("y").GetDouble();
                 favicon = doc.RootElement.TryGetProperty("f", out var f) && f.ValueKind == JsonValueKind.String ? f.GetString() : null;
             }
+            else
+            {
+                // The page did not answer. It may be busy or blocked; either way we did not learn where the user was.
+                outcome = CaptureOutcome.TimedOut;
+                gaps.Add("the page did not report its position in time");
+            }
         }
-        catch (Exception) { /* page may be mid-navigation; scroll is best-effort */ }
+        catch (OperationCanceledException) { return new(null, CaptureOutcome.Cancelled, "cancelled"); }
+        catch (Exception ex) { outcome = CaptureOutcome.Partial; gaps.Add("position unavailable: " + ex.GetType().Name); }
 
         // Thumbnail: use the one taken on deactivation; if the view is still visible, take a fresh one now.
         if (AllowThumbnails && IsVisible) _pendingThumbnail = CaptureThumbnailAsync();
-        if (_pendingThumbnail is { } pending) await Task.WhenAny(pending, Task.Delay(CaptureTimeout, ct));
+        if (_pendingThumbnail is { } pending)
+        {
+            try { if (await Task.WhenAny(pending, Task.Delay(CaptureTimeout, ct)) != pending) gaps.Add("no preview image"); }
+            catch (OperationCanceledException) { return new(null, CaptureOutcome.Cancelled, "cancelled"); }
+        }
+        if (AllowThumbnails && _lastThumbnail is null && !gaps.Contains("no preview image")) gaps.Add("no preview image");
 
+        if (ct.IsCancellationRequested) return new(null, CaptureOutcome.Cancelled, "cancelled");
         var url = Uri.TryCreate(core.Source, UriKind.Absolute, out var u) ? u : new Uri("about:blank");
-        return new Checkpoint(ResourceId, url, core.DocumentTitle, sx, sy, favicon, AllowThumbnails ? _lastThumbnail : null, DateTimeOffset.UtcNow);
+        var cp = new Checkpoint(ResourceId, url, core.DocumentTitle, sx, sy, favicon, AllowThumbnails ? _lastThumbnail : null, DateTimeOffset.UtcNow);
+        if (outcome == CaptureOutcome.Captured && gaps.Count > 0) outcome = CaptureOutcome.Partial;
+        return new(cp, outcome, gaps.Count == 0 ? "address, position and preview" : string.Join("; ", gaps));
     }
 
     // Readability-lite: prefer <article>/<main>/role=main, else the densest text container; strip nav/aside/footer/

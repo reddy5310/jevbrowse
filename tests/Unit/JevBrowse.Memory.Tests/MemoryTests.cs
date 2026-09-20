@@ -213,11 +213,26 @@ public class MemoryIndexerTests : IDisposable
     [Fact]
     public async Task Tightening_a_pages_class_removes_it_from_the_index()
     {
-        var t = await Open("https://intranet.corp.test/report");
+        var t = await Open("https://en.wikipedia.org/wiki/Web_browser");
         Assert.True(await _indexer.IndexAsync(t.Id));
         Assert.Equal(1, _memory.Stats().Docs);
 
         _leases[t.Id].RaiseSignals(PageSignals.Authenticated);    // it was a logged-in page after all
         Assert.Equal(0, _memory.Stats().Docs);
+    }
+
+    [Fact]
+    public async Task A_page_we_cannot_assess_is_not_indexed_until_it_shows_it_is_public()
+    {
+        var t = await Open("https://reports.somecompany.example/q3");
+        string? reason = null; _indexer.Decided += (_, r) => reason = r;
+
+        Assert.False(await _indexer.IndexAsync(t.Id));             // Not assessed → stays off the index
+        Assert.Equal(0, _memory.Stats().Docs);
+        Assert.Contains("not assessed", reason);
+
+        _leases[t.Id].RaiseSignals(PageSignals.PublicEvidence);    // the page reports no sign-in affordances
+        Assert.True(await _indexer.IndexAsync(t.Id));
+        Assert.Equal(1, _memory.Stats().Docs);
     }
 }

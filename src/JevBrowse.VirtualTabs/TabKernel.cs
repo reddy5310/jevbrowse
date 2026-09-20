@@ -38,6 +38,7 @@ public sealed class TabKernel
     private readonly DataClassifier _classifier;
     private readonly Dictionary<ResourceId, PageSignals> _signals = [];
     private readonly Dictionary<ResourceId, DataClass> _advisory = [];
+    private readonly Dictionary<ResourceId, CaptureResult> _lastCapture = [];
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     public TabKernel(IRendererLeaseManager leases, TabRepository repo, CheckpointRepository checkpoints, string thumbnailDir,
@@ -288,6 +289,12 @@ public sealed class TabKernel
 
     public Checkpoint? GetCheckpoint(ResourceId id) => _checkpoints.Get(id);
 
+    /// <summary>
+    /// What we managed to preserve the last time this tab was put to sleep, so the UI can promise the user's place
+    /// back only when we actually kept it.
+    /// </summary>
+    public CaptureResult? LastCapture(ResourceId id) => _lastCapture.GetValueOrDefault(id);
+
     /// <summary>The last automated decision that touched a tab, for "explain why" (§11.1).</summary>
     public ScheduledAction? LastDecision(ResourceId id) => _lastDecision.GetValueOrDefault(id);
 
@@ -344,11 +351,17 @@ public sealed class TabKernel
             if (checkpoint is not null && checkpoint.Url != tab.Url) checkpoint = null;
             var sw = Stopwatch.StartNew();
             _restoreTimers[id] = sw;
+            // Say we are bringing it back before the wait begins, and say whether the place we saved is coming with it.
+            Changed?.Invoke(new("restoring", id, checkpoint is null ? "no saved position" : "with saved position"));
             var ws = _workspaceList.FirstOrDefault(w => w.Id == tab.WorkspaceId);
             lease = await _leases.AcquireAsync(id, tab.Url, RenderIntent.Foreground, ContainerOf(tab), tab.WorkspaceId, ct);
             lease.AllowThumbnails = May(tab, DataOperation.PersistThumbnail).Allowed;
             lease.NavigationChanged += n =>
             {
+                // about:blank is never a destination the user chose. Locally rendered pages (jev://) report it
+                // because the content was pushed into the renderer rather than fetched, and treating that as a
+                // navigation would overwrite the tab's real address and discard its checkpoint.
+                if (n.Url.Scheme == "about") return;
                 if (n.Url != tab.Url)
                 {
                     // A real navigation: the old page's advisory, checkpoint and thumbnail no longer describe this tab.
@@ -391,16 +404,23 @@ public sealed class TabKernel
         Changed?.Invoke(new("activated", id, $"live={LiveCount}"));
     }
 
-    /// <summary>Capture a checkpoint and keep only what Trust OS allows. Null means "nothing may be persisted".</summary>
-    private async Task<(Checkpoint? Cp, bool Failed)> CaptureAllowedAsync(VirtualTab tab, IRendererLease lease, CancellationToken ct)
+    /// <summary>
+    /// Capture a checkpoint and keep only what Trust OS allows. The outcome is preserved so callers can tell
+    /// "nothing may be persisted" (policy) apart from "we could not preserve the page" (failure/timeout).
+    /// </summary>
+    private async Task<CaptureResult> CaptureAllowedAsync(VirtualTab tab, IRendererLease lease, CancellationToken ct)
     {
-        Checkpoint? cp;
-        try { cp = await lease.CaptureCheckpointAsync(_thumbnailDir, ct); }
-        catch (Exception ex) { Changed?.Invoke(new("checkpoint-failed", tab.Id, ex.Message)); return (null, true); }
+        CaptureResult r;
+        try { r = await lease.CaptureCheckpointAsync(_thumbnailDir, ct); }
+        catch (OperationCanceledException) { return new(null, CaptureOutcome.Cancelled, "cancelled"); }
+        catch (Exception ex) { r = new(null, CaptureOutcome.Failed, ex.Message); }
 
-        if (!May(tab, DataOperation.PersistCheckpoint).Allowed) { DeleteThumb(cp.ThumbnailPath); return (null, false); }
+        if (!r.IsUsable) { Changed?.Invoke(new("checkpoint-failed", tab.Id, $"{r.Outcome}: {r.Detail}")); return r; }
+
+        var cp = r.Checkpoint!;
+        if (!May(tab, DataOperation.PersistCheckpoint).Allowed) { DeleteThumb(cp.ThumbnailPath); return r with { Checkpoint = null, Detail = "policy: nothing about this page is persisted" }; }
         if (cp.ThumbnailPath is not null && !May(tab, DataOperation.PersistThumbnail).Allowed) { DeleteThumb(cp.ThumbnailPath); cp = cp with { ThumbnailPath = null }; }
-        return (cp, false);
+        return r with { Checkpoint = cp };
     }
 
     /// <summary>
@@ -432,9 +452,13 @@ public sealed class TabKernel
         Checkpoint? cp = null;
         if (_leases.TryGet(id, out var lease))
         {
-            var (captured, failed) = await CaptureAllowedAsync(tab, lease, ct);
-            if (failed && cause != Cause.User) return new(false, tab.State, "checkpoint_failed: renderer kept");
-            cp = captured;
+            var capture = await CaptureAllowedAsync(tab, lease, ct);
+            _lastCapture[id] = capture;
+            // An automatic demotion may only proceed when the page was actually preserved. A policy decision not to
+            // persist ("Captured", nothing kept) is fine; not knowing whether we preserved it is not.
+            if (cause != Cause.User && capture.Outcome is CaptureOutcome.Failed or CaptureOutcome.TimedOut or CaptureOutcome.Cancelled)
+                return new(false, tab.State, $"capture_{capture.Outcome.ToString().ToLowerInvariant()}: renderer kept");
+            cp = capture.Checkpoint;
         }
 
         // The tab may have been closed or virtualized by a policy path while we awaited the capture.
@@ -481,9 +505,10 @@ public sealed class TabKernel
             foreach (var tab in _tabs.Where(t => t.State.HasLiveRenderer()).ToList())
             {
                 if (!_leases.TryGet(tab.Id, out var lease)) continue;
-                var (cp, failed) = await CaptureAllowedAsync(tab, lease, ct);
-                if (failed || cp is null || !May(tab, DataOperation.PersistTabRow).Allowed) continue;
-                _checkpoints.Upsert(cp);
+                var capture = await CaptureAllowedAsync(tab, lease, ct);
+                _lastCapture[tab.Id] = capture;
+                if (capture.Checkpoint is null || !May(tab, DataOperation.PersistTabRow).Allowed) continue;
+                _checkpoints.Upsert(capture.Checkpoint);
                 Persist(tab);
                 n++;
             }

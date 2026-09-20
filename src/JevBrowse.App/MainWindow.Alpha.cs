@@ -52,7 +52,7 @@ public sealed partial class MainWindow
                  ?? _kernel.CreateWorkspace("Private", IdentityContainer.Private);
         await _kernel.SwitchWorkspaceAsync(ws.Id);
         RebuildWorkspaces();
-        VirtualPlaceholder.Visibility = _kernel.Active is null ? Visibility.Visible : Visibility.Collapsed;
+        UpdateIdlePanel();
     }
 
     private void OnProductModeChanged(object s, SelectionChangedEventArgs e)

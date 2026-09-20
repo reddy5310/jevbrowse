@@ -151,7 +151,26 @@
             <Border Grid.Row="2" CornerRadius="16" BorderBrush="{StaticResource JevLineBrush}" BorderThickness="1" Background="#000000" Shadow="{StaticResource JevShadow}" Translation="0,0,16">
                 <Grid>
                     <Grid x:Name="WebHost" CornerRadius="16">
-                        <TextBlock x:Name="VirtualPlaceholder" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.5" Text="No live renderer. Select a tab, or press Ctrl+K."/>
+                        <!-- Shown while a sleeping tab comes back, and when nothing is selected. Never implies the
+                             live page is present: the preview is labelled as a saved image. -->
+                        <StackPanel x:Name="RestorePanel" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12" MaxWidth="460" Padding="24">
+                            <Border x:Name="PreviewFrame" Visibility="Collapsed" CornerRadius="10" BorderThickness="1" BorderBrush="{StaticResource JevLineBrush}" HorizontalAlignment="Center">
+                                <Grid>
+                                    <Image x:Name="PreviewImage" MaxHeight="240" Stretch="Uniform"/>
+                                    <Border Background="#B0000000" VerticalAlignment="Bottom" Padding="8,4">
+                                        <TextBlock Text="Previous view — a saved image, not the live page" FontSize="11" Foreground="White"/>
+                                    </Border>
+                                </Grid>
+                            </Border>
+                            <TextBlock x:Name="RestoreTitle" HorizontalAlignment="Center" TextAlignment="Center" FontSize="15" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                            <TextBlock x:Name="RestoreStatus" HorizontalAlignment="Center" TextAlignment="Center" FontSize="12.5" Opacity="0.7" TextWrapping="Wrap"/>
+                            <ProgressBar x:Name="RestoreProgress" IsIndeterminate="True" Width="200" Visibility="Collapsed"/>
+                            <StackPanel x:Name="RestoreActions" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center" Visibility="Collapsed">
+                                <Button Content="Try again" Click="OnRestoreRetry" Style="{StaticResource JevToolButton}"/>
+                                <Button Content="Open the address" Click="OnRestoreOpenAddress" Style="{StaticResource JevToolButton}"/>
+                                <Button Content="Keep this tab active" Click="OnRestoreKeepActive" Style="{StaticResource JevToolButton}"/>
+                            </StackPanel>
+                        </StackPanel>
                     </Grid>
                     <Border x:Name="ProdBorder" CornerRadius="16" BorderBrush="#E0FF3B30" BorderThickness="4" IsHitTestVisible="False" Visibility="Collapsed"/>
                     <Border x:Name="EnvBadge" Background="#E0FF3B30" CornerRadius="0,0,10,0" Padding="10,3" HorizontalAlignment="Left" VerticalAlignment="Top" IsHitTestVisible="False" Visibility="Collapsed">

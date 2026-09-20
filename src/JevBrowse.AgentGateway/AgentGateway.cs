@@ -27,7 +27,7 @@ public sealed record AuditEntry(DateTimeOffset At, string Action, string Target,
 public sealed record AgentRequest(AgentAction Action, string? Url = null, string? Selector = null, string? Text = null);
 public sealed record AgentResponse(bool Ok, string Message, PageMap? Page = null, string? ScreenshotPath = null);
 
-public sealed class AgentSession
+public sealed class AgentSession : IDisposable
 {
     public string Id { get; } = Guid.NewGuid().ToString("N")[..12];
     public required AgentManifest Manifest { get; init; }
@@ -36,9 +36,21 @@ public sealed class AgentSession
     public required ContextId WorkspaceId { get; init; }
     public int ActionsUsed { get; internal set; }
     public bool Closed { get; internal set; }
+    /// <summary>Cleanup has actually run. Distinct from <see cref="Closed"/>: a session can be refused (closed) before its pages are released.</summary>
+    public bool CleanedUp { get; internal set; }
     public List<AuditEntry> Audit { get; } = [];
     public List<ResourceId> Pages { get; } = [];
     public ResourceId? Current { get; internal set; }
+
+    /// <summary>
+    /// Serializes this session's requests so check→reserve→activate is atomic. Without it two concurrent requests
+    /// both pass the page/action check before either acquires a renderer (the host dispatches handlers concurrently).
+    /// </summary>
+    internal SemaphoreSlim Gate { get; } = new(1, 1);
+    /// <summary>Cancelled by Stop/expiry so work already in flight aborts instead of finishing after revocation.</summary>
+    internal CancellationTokenSource Revoked { get; } = new();
+
+    public void Dispose() { Gate.Dispose(); Revoked.Dispose(); }
 }
 
 public interface IAgentGateway
@@ -90,13 +102,17 @@ public sealed partial class AgentGateway : IAgentGateway
         return Task.FromResult(s);
     }
 
-    /// <summary>Close every session that has run past its expiry: pages are virtualized even if the agent never calls again.</summary>
+    /// <summary>
+    /// Clean up every session that is past its expiry OR was closed without its pages being released. Keyed on
+    /// CleanedUp, not Closed: a request that hit the expiry check marks the session closed, and keying on Closed
+    /// would make the sweeper skip exactly the sessions that still hold renderers.
+    /// </summary>
     public async Task<int> SweepExpiredAsync(IEnumerable<AgentSession> sessions, CancellationToken ct)
     {
         int n = 0;
-        foreach (var s in sessions.Where(s => !s.Closed && _clock() > s.ExpiresAt).ToList())
+        foreach (var s in sessions.Where(s => !s.CleanedUp && (s.Closed || _clock() > s.ExpiresAt)).ToList())
         {
-            Record(s, "expire", s.Manifest.Agent, true, "session time elapsed: closing pages");
+            Record(s, "expire", s.Manifest.Agent, true, "session over: releasing pages");
             await CloseAsync(s, ct);
             n++;
         }
@@ -105,12 +121,34 @@ public sealed partial class AgentGateway : IAgentGateway
 
     public async Task<AgentResponse> ExecuteAsync(AgentSession s, AgentRequest r, CancellationToken ct)
     {
+        // Terminal state is answered before queueing, so a revoked session gives its precise reason rather than
+        // whatever the cancelled gate wait would have said.
+        if (s.Closed) { Record(s, r.Action.ToString(), r.Url ?? r.Selector ?? "", false, "session_closed"); return new(false, "session_closed"); }
+
+        // One request at a time per session: the capacity and budget checks below only mean something if no other
+        // request can slip between the check and the renderer it reserves.
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, s.Revoked.Token);
+        AgentResponse Revoked() => new(false, s.Closed ? "session_closed" : "session_revoked");
+        try { await s.Gate.WaitAsync(linked.Token); }
+        catch (OperationCanceledException) { return Revoked(); }
+        try { return await ExecuteCoreAsync(s, r, linked.Token); }
+        catch (OperationCanceledException) { return Revoked(); }
+        finally { s.Gate.Release(); }
+    }
+
+    private async Task<AgentResponse> ExecuteCoreAsync(AgentSession s, AgentRequest r, CancellationToken ct)
+    {
         var target = r.Url ?? r.Selector ?? "";
         AgentResponse Deny(string why) { Record(s, r.Action.ToString(), target, false, why); return new(false, why); }
 
-        // ---- scope: session, quota, action grant ----
+        // ---- scope: session, quota, action grant (re-checked here: the gate above may have been held a while) ----
         if (s.Closed) return Deny("session_closed");
-        if (_clock() > s.ExpiresAt) { s.Closed = true; return Deny("session_expired"); }
+        if (_clock() > s.ExpiresAt)
+        {
+            // Expiry must RELEASE, not merely refuse: otherwise the pages stay live until the process exits.
+            await CloseAsync(s, CancellationToken.None);
+            return Deny("session_expired");
+        }
         if (s.ActionsUsed >= s.Manifest.MaxActions) return Deny("action_quota_exhausted");
         if (!s.Manifest.Actions.Contains(r.Action)) return Deny($"action_not_granted:{r.Action}");
         s.ActionsUsed++;
@@ -128,8 +166,10 @@ public sealed partial class AgentGateway : IAgentGateway
                 tab = _kernel.Open(url);
                 s.Pages.Add(tab.Id);
             }
+            // Policy is registered BEFORE the renderer exists, so it is in force for the very first navigation and
+            // any redirect inside it. Attaching it afterwards left that first load unguarded.
+            Guard(tab.Id, s);
             await ActivateAndWaitAsync(tab.Id, ct);
-            if (_leases.TryGet(tab.Id, out var navLease)) Guard(navLease, s);
             s.Current = tab.Id;
             Record(s, "navigate", url.ToString(), true, $"live={LiveAgentPages(s)}/{s.Manifest.MaxLivePages}");
             return new(true, "navigated");
@@ -147,11 +187,12 @@ public sealed partial class AgentGateway : IAgentGateway
         if (!_leases.TryGet(cur, out var lease))
         {
             if (!await EnsureQuotaAsync(s, ct)) return Deny("live_page_quota_unsatisfiable");
+            Guard(cur, s);                       // before the restore acquires a renderer, for the same reason
             await ActivateAndWaitAsync(cur, ct);
             _leases.TryGet(cur, out lease);
         }
         if (lease is null) return Deny("renderer_unavailable");
-        Guard(lease, s);
+        Guard(cur, s);
         // The restore above awaited: the page may have navigated or been reclassified while we waited. Re-check.
         current = _kernel.Tabs.FirstOrDefault(t => t.Id == cur) ?? current;
         if (!DomainAllowed(s.Manifest, current.Url.Host)) return Deny($"domain_not_allowed:{current.Url.Host}");
@@ -192,27 +233,56 @@ public sealed partial class AgentGateway : IAgentGateway
             case AgentAction.Screenshot:
             {
                 var dir = Path.Combine(_screenshotDir, s.Id);
-                var cp = await lease.CaptureCheckpointAsync(dir, ct);
-                Record(s, "screenshot", current.Url.ToString(), cp.ThumbnailPath is not null, cp.ThumbnailPath ?? "no image");
-                return new(cp.ThumbnailPath is not null, cp.ThumbnailPath ?? "no image", null, cp.ThumbnailPath);
+                var shot = await lease.CaptureCheckpointAsync(dir, ct);
+                var path = shot.Checkpoint?.ThumbnailPath;
+                Record(s, "screenshot", current.Url.ToString(), path is not null, path ?? $"no image ({shot.Outcome}: {shot.Detail})");
+                return new(path is not null, path ?? $"no image: {shot.Detail}", null, path);
             }
             default: return Deny("unknown_action");
         }
     }
 
+    /// <summary>
+    /// End a session for good: revoke first (so in-flight work aborts and the guard starts refusing), then release
+    /// every page. Release uses <see cref="Cause.User"/> because a page-level protection flag must not let an agent's
+    /// renderer outlive the authority that created it; these are agent-owned pages in a throwaway workspace.
+    /// Idempotent, and safe to call while a request holds the gate.
+    /// </summary>
     public async Task CloseAsync(AgentSession s, CancellationToken ct)
     {
-        foreach (var id in s.Pages.Where(id => _kernel.Tabs.Any(t => t.Id == id)))
-            await _kernel.VirtualizeAsync(id, Cause.Scheduler, ct);
         s.Closed = true;
-        Record(s, "close", s.Manifest.Agent, true, $"{s.ActionsUsed} actions, {s.Pages.Count} pages");
+        if (!s.Revoked.IsCancellationRequested) { try { await s.Revoked.CancelAsync(); } catch (ObjectDisposedException) { } }
+        if (s.CleanedUp) return;
+
+        var stuck = new List<ResourceId>();
+        foreach (var id in s.Pages.Where(id => _kernel.Tabs.Any(t => t.Id == id)).ToList())
+        {
+            _leases.SetNavigationPolicy(id, _ => false);     // nothing this page attempts from here on is in scope
+            var r = await _kernel.VirtualizeAsync(id, Cause.User, CancellationToken.None);
+            if (!r.Allowed && _kernel.Tabs.Any(t => t.Id == id && t.State.HasLiveRenderer())) stuck.Add(id);
+        }
+        s.CleanedUp = stuck.Count == 0;
+        Record(s, "close", s.Manifest.Agent, s.CleanedUp,
+            s.CleanedUp ? $"{s.ActionsUsed} actions, {s.Pages.Count} pages, all renderers released"
+                        : $"{stuck.Count} page(s) could not be released; retrying on the next sweep");
+    }
+
+    /// <summary>User-initiated revocation. Same path as expiry; the UI reports "Stopped" only when this reports true.</summary>
+    public async Task<bool> StopAsync(AgentSession s, CancellationToken ct)
+    {
+        Record(s, "stop", s.Manifest.Agent, true, "revoked by the user");
+        await CloseAsync(s, ct);
+        return s.CleanedUp;
     }
 
     public int LiveAgentPages(AgentSession s) => _kernel.Tabs.Count(t => s.Pages.Contains(t.Id) && t.State.HasLiveRenderer());
 
-    /// <summary>Every navigation these pages attempt, from any cause, must stay inside the session's allowed domains.</summary>
-    private void Guard(IRendererLease lease, AgentSession s) =>
-        lease.NavigationGuard = u => !s.Closed && _clock() <= s.ExpiresAt && DomainAllowed(s.Manifest, u.Host);
+    /// <summary>
+    /// Every navigation these pages attempt, from any cause, must stay inside the session's allowed domains. Registered
+    /// against the RESOURCE, not a lease, so it is applied by the lease manager at creation — before the first navigation.
+    /// </summary>
+    private void Guard(ResourceId id, AgentSession s) =>
+        _leases.SetNavigationPolicy(id, u => !s.Closed && !s.Revoked.IsCancellationRequested && _clock() <= s.ExpiresAt && DomainAllowed(s.Manifest, u.Host));
 
     /// <summary>
     /// Lazy by design (§12): never more than MaxLivePages of the agent's pages hold a renderer. Returns false when the

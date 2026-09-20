@@ -15,6 +15,17 @@ public sealed class FakeLeaseManager : IRendererLeaseManager
     public bool FailNextCapture { get; set; }
     public IReadOnlyCollection<ResourceId> LiveResources => _live.Keys;
 
+    private readonly Dictionary<ResourceId, Func<Uri, bool>> _navPolicies = [];
+
+    public void SetNavigationPolicy(ResourceId id, Func<Uri, bool>? guard)
+    {
+        if (guard is null) _navPolicies.Remove(id); else _navPolicies[id] = guard;
+        if (_live.TryGetValue(id, out var live)) live.NavigationGuard = guard;
+    }
+
+    /// <summary>What the renderer would do with the very first navigation, using only the pre-registered policy.</summary>
+    public bool WouldAllowInitialNavigation(ResourceId id, Uri url) => !_navPolicies.TryGetValue(id, out var p) || p(url);
+
     public bool TryGet(ResourceId id, out IRendererLease lease)
     {
         var ok = _live.TryGetValue(id, out var l);
@@ -38,6 +49,7 @@ public sealed class FakeLeaseManager : IRendererLeaseManager
         Containers[id] = container;
         IsolationKeys[id] = isolationKey;
         var l = new FakeLease(id, url, this);
+        if (_navPolicies.TryGetValue(id, out var policy)) l.NavigationGuard = policy;   // before the first navigation
         _live[id] = l;
         return l;
     }
@@ -78,13 +90,23 @@ public sealed class FakeLease(ResourceId id, Uri url, FakeLeaseManager owner) : 
     public void Resume() => IsSuspended = false;
 
     public string? ThumbnailToWrite { get; set; }
+    /// <summary>Forces the next capture to report this outcome instead of succeeding.</summary>
+    public CaptureOutcome? NextCaptureOutcome { get; set; }
 
-    public Task<Checkpoint> CaptureCheckpointAsync(string dir, CancellationToken ct)
+    public Task<CaptureResult> CaptureCheckpointAsync(string dir, CancellationToken ct)
     {
-        if (owner.FailNextCapture) { owner.FailNextCapture = false; throw new InvalidOperationException("renderer gone"); }
+        if (owner.FailNextCapture) { owner.FailNextCapture = false; return Task.FromResult(new CaptureResult(null, CaptureOutcome.Failed, "renderer gone")); }
+        if (NextCaptureOutcome is { } forced and not CaptureOutcome.Partial)
+        {
+            NextCaptureOutcome = null;
+            return Task.FromResult(new CaptureResult(null, forced, forced.ToString()));
+        }
         string? thumb = null;
         if (AllowThumbnails && ThumbnailToWrite is not null) { thumb = Path.Combine(dir, ThumbnailToWrite); Directory.CreateDirectory(dir); File.WriteAllBytes(thumb, [1, 2, 3]); }
-        return Task.FromResult(new Checkpoint(id, Url, "t", 0, ScrollY, null, thumb, DateTimeOffset.UnixEpoch));
+        var partial = NextCaptureOutcome == CaptureOutcome.Partial;
+        NextCaptureOutcome = null;
+        var cp = new Checkpoint(id, Url, "t", 0, partial ? 0 : ScrollY, null, thumb, DateTimeOffset.UnixEpoch);
+        return Task.FromResult(new CaptureResult(cp, partial ? CaptureOutcome.Partial : CaptureOutcome.Captured, partial ? "the page did not report its position in time" : "address, position and preview"));
     }
 
     public void ApplyCheckpoint(Checkpoint cp) { Applied = cp; ScrollY = cp.ScrollY; }
