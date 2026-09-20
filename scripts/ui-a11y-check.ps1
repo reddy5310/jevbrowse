@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Launches the real app and checks what a screen reader and a keyboard user actually get.
 
@@ -59,7 +59,13 @@ public static class A11yWin {
 
 # ---- a fresh, uniquely named directory that did not exist a moment ago, directly under the fixed root ----
 try {
+    # 'D:' alone means "the current directory on D:", which is wherever the caller happens to be; only a full path is a root.
+    if ($Root -notmatch '^[A-Za-z]:[\\/]') { throw "Refusing test root '$Root': it must be a full path such as D:\Browser\_ui-check." }
     $rootFull = [IO.Path]::GetFullPath($Root).TrimEnd('\')
+    $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..')).TrimEnd('\')
+    if ($rootFull -eq $repoRoot -or $repoRoot.StartsWith($rootFull + '\', [StringComparison]::OrdinalIgnoreCase) -or $rootFull.StartsWith($repoRoot + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing test root '$rootFull': it is, contains or sits inside the repository, and test output must never be mixed into source."
+    }
     if ($rootFull.Length -lt 8 -or $rootFull -match '^[A-Za-z]:$') { throw "Refusing test root '$rootFull': it is a drive root or too short to be a scratch directory." }
     New-Item -ItemType Directory -Force $rootFull | Out-Null
     $runName = 'run-{0}-{1}' -f (Get-Date -Format 'yyyyMMdd-HHmmss'), ([guid]::NewGuid().ToString('N').Substring(0, 8))
