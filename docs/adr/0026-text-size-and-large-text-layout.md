@@ -58,3 +58,18 @@ values are now range-checked before the registry is touched, and a run that test
 Screen captures used the UI Automation rectangle, which includes the invisible 8 px resize borders, so each image included a thin
 strip of whatever was behind the window (in one case a sliver of another window). The gate's `-Shots` and the new scripts now capture
 the DWM visible frame (verified: 1406x792, exactly the window). Earlier captures under `_ui-check` from before this fix have the strip.
+
+## Script reliability fixes (from an independent review)
+
+- **A silent child run could count as a pass.** Both scripts parsed the gate's JSON but judged success by exit code alone, so exit 0 with
+  no or unreadable output stayed PASS. A gate run now passes only if it exits 0 **and** its report parses, says PASS, and says its keyboard
+  and panel checks completed; anything else is ERROR (tested for exit 0 with no report, with an incomplete panel check and with a non-PASS verdict).
+- **A rerun could overwrite the recovery record.** A record marked `active` (an earlier run that never confirmed its restore) now blocks a
+  new run, which refuses and points to `-Restore`; the record is only marked `restored` once the restore is read back. Tested: seeded
+  active records were refused and left untouched, settings unchanged. Then, by accident, this was also exercised for real: see below.
+- **`-Configuration` was not forwarded to the gate.** It is now, and the build is resolved *before* any record is written or setting changed
+  (tested with a configuration that does not exist: no record, no change).
+- While testing I ran a script against `-Configuration release`, expecting it to fail for a missing build; a release build existed, so it
+  really ran and set Text size to 125%. I stopped it and restored the setting from its own recovery record (`-Restore`, confirmed unset
+  again). That was a badly chosen control, not a script fault, and it is recorded here because a Windows setting was live for a few minutes.
+

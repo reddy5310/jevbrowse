@@ -62,15 +62,27 @@ if ($Restore) {
     Write-Setting $(if ($o.existed) { [int]$o.value } else { $null })
     $now = Read-Setting
     $ok = if ($o.existed) { $now -eq [int]$o.value } else { $null -eq $now }
+    if ($ok) { ([ordered]@{ state = 'restored'; existed = $o.existed; value = $o.value; recordedAt = $o.recordedAt; restoredAt = (Get-Date).ToString('s') }) | ConvertTo-Json | Set-Content $marker -Encoding utf8 }
     [ordered]@{ verdict = $(if ($ok) { 'RESTORED' } else { 'ERROR' }); original = $o; nowInRegistry = $now } | ConvertTo-Json
     exit $(if ($ok) { 0 } else { 3 })
 }
 
-$original = Read-Setting
-[ordered]@{ existed = ($null -ne $original); value = $original; recordedAt = (Get-Date).ToString('s') } | ConvertTo-Json | Set-Content $marker -Encoding utf8
-
+# Resolve the build first: a missing build must stop the run BEFORE any record is written or any setting is touched.
 $exe = Resolve-Path (Join-Path $PSScriptRoot "..\artifacts\bin\JevBrowse.App\${Configuration}_win-x64\JevBrowse.App.exe")
 $gate = Join-Path $PSScriptRoot 'ui-a11y-check.ps1'
+
+# An earlier run that never confirmed its restore leaves its record marked active. Its "original" is the truth; the value in the
+# registry now may be that run's temporary one. So a new run refuses to start, and never overwrites the record.
+if (Test-Path $marker) {
+    $prev = Get-Content $marker -Raw | ConvertFrom-Json
+    if ($prev.state -eq 'active') {
+        [ordered]@{ verdict = 'ERROR'; error = "An earlier run did not finish restoring the Windows Text size (recorded at $($prev.recordedAt); original: $(if ($prev.existed) { $prev.value } else { 'not set' })). Run this script with -Restore first." } | ConvertTo-Json
+        exit 3
+    }
+}
+$original = Read-Setting
+[ordered]@{ state = 'active'; existed = ($null -ne $original); value = $original; recordedAt = (Get-Date).ToString('s') } | ConvertTo-Json | Set-Content $marker -Encoding utf8
+
 $results = New-Object System.Collections.Generic.List[object]
 $restored = $false; $err = $null
 
@@ -80,6 +92,19 @@ function Get-FrameRect([IntPtr]$h, $fallback) {
     $fr = New-Object TextSizeWin+RECT
     if ([TextSizeWin]::DwmGetWindowAttribute($h, 9, [ref]$fr, 16) -eq 0 -and ($fr.R - $fr.L) -gt 0) { return [pscustomobject]@{ X = $fr.L; Y = $fr.T; W = ($fr.R - $fr.L); H = ($fr.B - $fr.T) } }
     [pscustomobject]@{ X = [int]$fallback.X; Y = [int]$fallback.Y; W = [int]$fallback.Width; H = [int]$fallback.Height }
+}
+
+# A gate run counts as a pass only if it says so: exit 0 AND a report that parses, says PASS, and says its keyboard and panel checks
+# COMPLETED. Exit 0 with no or unreadable output (a run that died quietly) is an ERROR, never a pass.
+function Judge-Gate($code, $j) {
+    if ($code -eq 1) { return 'FAIL' }
+    if ($code -eq 2) { return 'INCONCLUSIVE' }
+    if ($code -eq 0 -and $null -ne $j -and $j.verdict -eq 'PASS' -and $j.pass -eq $true -and $j.panelCheck -eq 'complete' -and $j.tabTraversal -eq 'complete') { return 'PASS' }
+    return 'ERROR'
+}
+function Merge-Verdict([string]$current, [string]$new) {
+    $rank = @{ PASS = 0; INCONCLUSIVE = 1; FAIL = 2; ERROR = 3 }
+    if ($rank[$new] -gt $rank[$current]) { $new } else { $current }
 }
 
 function Get-Tree([int]$rootPid) {
@@ -173,10 +198,11 @@ try {
             foreach ($sb in 'open', 'hidden') {
                 # The gate sets its own start page and theme; ours must not leak into it (it once did, and the gate then looked for a tab that was not there).
                 Remove-Item Env:\JEVBROWSE_START_URL, Env:\JEVBROWSE_THEME, Env:\JEVBROWSE_DATA_DIR -ErrorAction SilentlyContinue
-                $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $gate -Width $w -Sidebar $sb -Root (Join-Path $rootFull "ts-gate-$f-$w-$sb") 2>&1 | Out-String
+                $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $gate -Configuration $Configuration -Width $w -Sidebar $sb -Root (Join-Path $rootFull "ts-gate-$f-$w-$sb") 2>&1 | Out-String
                 $code = $LASTEXITCODE; $j = try { $out | ConvertFrom-Json } catch { $null }
-                $entry.gate += [ordered]@{ width = $w; sidebar = $sb; exit = $code; verdict = $j.verdict; panelCheck = $j.panelCheck; failures = @($j.failures); error = $j.error }
-                if ($code -eq 1) { $entry.verdict = 'FAIL' } elseif ($code -ne 0 -and $entry.verdict -eq 'PASS') { $entry.verdict = 'INCONCLUSIVE' }
+                $judged = Judge-Gate $code $j
+                $entry.gate += [ordered]@{ width = $w; sidebar = $sb; exit = $code; verdict = $j.verdict; judged = $judged; panelCheck = $j.panelCheck; failures = @($j.failures); error = $(if ($judged -eq 'ERROR' -and $null -eq $j) { 'the gate produced no readable report' } else { $j.error }) }
+                $entry.verdict = Merge-Verdict $entry.verdict $judged
             }
         }
         $results.Add($entry)
@@ -185,6 +211,7 @@ try {
 catch { $err = $_.Exception.Message + ' at line ' + $_.InvocationInfo.ScriptLineNumber }
 finally {
     try { Write-Setting $original; $now = Read-Setting; $restored = if ($null -eq $original) { $null -eq $now } else { $now -eq $original } } catch { $restored = $false }
+    if ($restored) { ([ordered]@{ state = 'restored'; existed = ($null -ne $original); value = $original; recordedAt = (Get-Date).ToString('s') }) | ConvertTo-Json | Set-Content $marker -Encoding utf8 }
 }
 $vs = @($results | ForEach-Object { $_.verdict })
 $verdict = if ($err -or -not $restored -or ($vs -contains 'ERROR')) { 'ERROR' } elseif ($vs -contains 'FAIL') { 'FAIL' } elseif ($vs.Count -eq 0 -or $vs -contains 'INCONCLUSIVE' -or $vs.Count -lt $Factors.Count) { 'INCONCLUSIVE' } else { 'PASS' }

@@ -60,15 +60,27 @@ if ($Restore) {
     Write-Setting $(if ($o.existed) { [int]$o.value } else { $null })
     $now = Read-Setting
     $ok = if ($o.existed) { $now -eq [int]$o.value } else { $null -eq $now }
+    if ($ok) { ([ordered]@{ state = 'restored'; existed = $o.existed; value = $o.value; recordedAt = $o.recordedAt; restoredAt = (Get-Date).ToString('s') }) | ConvertTo-Json | Set-Content $marker -Encoding utf8 }
     [ordered]@{ verdict = $(if ($ok) { 'RESTORED' } else { 'ERROR' }); original = $o; nowInRegistry = $now } | ConvertTo-Json
     exit $(if ($ok) { 0 } else { 3 })
 }
 
-$original = Read-Setting
-[ordered]@{ existed = ($null -ne $original); value = $original; recordedAt = (Get-Date).ToString('s') } | ConvertTo-Json | Set-Content $marker -Encoding utf8
-
+# Resolve the build first: a missing build must stop the run BEFORE any record is written or any setting is touched.
 $exe = Resolve-Path (Join-Path $PSScriptRoot "..\artifacts\bin\JevBrowse.App\${Configuration}_win-x64\JevBrowse.App.exe")
 $gate = Join-Path $PSScriptRoot 'ui-a11y-check.ps1'
+
+# An earlier run that never confirmed its restore leaves its record marked active. Its "original" is the truth; the value in the
+# registry now may be that run's temporary one. So a new run refuses to start, and never overwrites the record.
+if (Test-Path $marker) {
+    $prev = Get-Content $marker -Raw | ConvertFrom-Json
+    if ($prev.state -eq 'active') {
+        [ordered]@{ verdict = 'ERROR'; error = "An earlier run did not finish restoring Windows Transparency effects (recorded at $($prev.recordedAt); original: $(if ($prev.existed) { $prev.value } else { 'not set' })). Run this script with -Restore first." } | ConvertTo-Json
+        exit 3
+    }
+}
+$original = Read-Setting
+[ordered]@{ state = 'active'; existed = ($null -ne $original); value = $original; recordedAt = (Get-Date).ToString('s') } | ConvertTo-Json | Set-Content $marker -Encoding utf8
+
 
 # The visible frame of a window (DWMWA_EXTENDED_FRAME_BOUNDS). UI Automation's rectangle also covers the invisible resize borders, so a
 # capture of it includes a strip of whatever is behind the window; a capture must be of the window and nothing else.
@@ -76,6 +88,19 @@ function Get-FrameRect([IntPtr]$h, $fallback) {
     $fr = New-Object TransWin+RECT
     if ([TransWin]::DwmGetWindowAttribute($h, 9, [ref]$fr, 16) -eq 0 -and ($fr.R - $fr.L) -gt 0) { return [pscustomobject]@{ X = $fr.L; Y = $fr.T; W = ($fr.R - $fr.L); H = ($fr.B - $fr.T) } }
     [pscustomobject]@{ X = [int]$fallback.X; Y = [int]$fallback.Y; W = [int]$fallback.Width; H = [int]$fallback.Height }
+}
+
+# A gate run counts as a pass only if it says so: exit 0 AND a report that parses, says PASS, and says its keyboard and panel checks
+# COMPLETED. Exit 0 with no or unreadable output (a run that died quietly) is an ERROR, never a pass.
+function Judge-Gate($code, $j) {
+    if ($code -eq 1) { return 'FAIL' }
+    if ($code -eq 2) { return 'INCONCLUSIVE' }
+    if ($code -eq 0 -and $null -ne $j -and $j.verdict -eq 'PASS' -and $j.pass -eq $true -and $j.panelCheck -eq 'complete' -and $j.tabTraversal -eq 'complete') { return 'PASS' }
+    return 'ERROR'
+}
+function Merge-Verdict([string]$current, [string]$new) {
+    $rank = @{ PASS = 0; INCONCLUSIVE = 1; FAIL = 2; ERROR = 3 }
+    if ($rank[$new] -gt $rank[$current]) { $new } else { $current }
 }
 
 function Get-Tree([int]$rootPid) {
@@ -156,19 +181,21 @@ try {
             elseif ($c.contrast -lt 4.5) { $entry.verdict = 'FAIL'; $entry.notes += "$theme title text contrast $($c.contrast):1 is below 4.5:1" }
         }
         Remove-Item Env:\JEVBROWSE_START_URL, Env:\JEVBROWSE_THEME, Env:\JEVBROWSE_DATA_DIR -ErrorAction SilentlyContinue   # the gate sets its own
-        $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $gate -Width 1422 -Sidebar open -Root (Join-Path $rootFull "tr-gate-$on") 2>&1 | Out-String
+        $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $gate -Configuration $Configuration -Width 1422 -Sidebar open -Root (Join-Path $rootFull "tr-gate-$on") 2>&1 | Out-String
         $code = $LASTEXITCODE; $j = try { $out | ConvertFrom-Json } catch { $null }
-        $entry.gate = [ordered]@{ exit = $code; verdict = $j.verdict; panelCheck = $j.panelCheck; failures = @($j.failures) }
-        if ($code -eq 1) { $entry.verdict = 'FAIL' } elseif ($code -ne 0 -and $entry.verdict -eq 'PASS') { $entry.verdict = 'INCONCLUSIVE' }
+        $judged = Judge-Gate $code $j
+        $entry.gate = [ordered]@{ exit = $code; verdict = $j.verdict; judged = $judged; panelCheck = $j.panelCheck; failures = @($j.failures); error = $(if ($judged -eq 'ERROR' -and $null -eq $j) { 'the gate produced no readable report' } else { $j.error }) }
+        $entry.verdict = Merge-Verdict $entry.verdict $judged
         $states.Add($entry)
     }
 }
 catch { $err = $_.Exception.Message + ' at line ' + $_.InvocationInfo.ScriptLineNumber }
 finally {
     try { Write-Setting $original; $now = Read-Setting; $restored = if ($null -eq $original) { $null -eq $now } else { $now -eq $original } } catch { $restored = $false }
+    if ($restored) { ([ordered]@{ state = 'restored'; existed = ($null -ne $original); value = $original; recordedAt = (Get-Date).ToString('s') }) | ConvertTo-Json | Set-Content $marker -Encoding utf8 }
 }
 $vs = @($states | ForEach-Object { $_.verdict })
-$verdict = if ($err -or -not $restored) { 'ERROR' } elseif ($vs -contains 'FAIL') { 'FAIL' } elseif ($vs.Count -lt 2 -or $vs -contains 'INCONCLUSIVE') { 'INCONCLUSIVE' } else { 'PASS' }
+$verdict = if ($err -or -not $restored) { 'ERROR' } elseif ($vs -contains 'ERROR') { 'ERROR' } elseif ($vs -contains 'FAIL') { 'FAIL' } elseif ($vs.Count -lt 2 -or $vs -contains 'INCONCLUSIVE') { 'INCONCLUSIVE' } else { 'PASS' }
 $script:exitCode = switch ($verdict) { 'PASS' { 0 } 'FAIL' { 1 } 'INCONCLUSIVE' { 2 } default { 3 } }
 $report = [ordered]@{ verdict = $verdict; originalTransparency = $(if ($null -eq $original) { 'not set (Windows default)' } else { "$original" }); originalRestoredAndConfirmed = $restored; error = $err; states = $states }
 $report | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $rootFull 'transparency-report.json') -Encoding utf8
