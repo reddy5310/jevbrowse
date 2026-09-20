@@ -17,7 +17,14 @@ namespace JevBrowse.App.Trust;
 /// </summary>
 public sealed class PermissionAdapter
 {
-    public enum Choice { AllowOnce, AllowForHour, AllowAlways, Block }
+    public enum Choice
+    {
+        AllowOnce, AllowForHour, AllowAlways,
+        /// <summary>Deny and remember: the site is blocked until the user says otherwise.</summary>
+        Block,
+        /// <summary>Deny this request and remember nothing. Used when we could not ask, and by unattended checks.</summary>
+        BlockOnce,
+    }
 
     private readonly SitePermissionsRepository _repo;
     private readonly Func<string, PermissionKind, Task<Choice>> _prompt;
@@ -68,7 +75,11 @@ public sealed class PermissionAdapter
                 if (verdict == PermissionVerdict.Ask)
                 {
                     var label = $"{origin.Scheme}://{origin.Host}{(origin.IsDefaultPort ? "" : ":" + origin.Port)} ({container})";
-                    var choice = await _prompt(label, kind);
+                    // Failing to ASK must fail closed. A prompt that throws must deny this one request, not take the app down and
+                    // not leave the page's request hanging.
+                    Choice choice;
+                    try { choice = await _prompt(label, kind); }
+                    catch (Exception) { choice = Choice.BlockOnce; }
                     var now = _clock();
                     switch (choice)
                     {
@@ -77,7 +88,7 @@ public sealed class PermissionAdapter
                         case Choice.Block: Store(container, key, kind, false, null); break;
                         // AllowOnce stores nothing: the next request asks again.
                     }
-                    verdict = choice == Choice.Block ? PermissionVerdict.Deny : PermissionVerdict.Allow;
+                    verdict = choice is Choice.Block or Choice.BlockOnce ? PermissionVerdict.Deny : PermissionVerdict.Allow;
                 }
                 e.State = verdict == PermissionVerdict.Allow ? CoreWebView2PermissionState.Allow : CoreWebView2PermissionState.Deny;
             }

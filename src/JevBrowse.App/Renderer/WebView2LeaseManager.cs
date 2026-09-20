@@ -267,7 +267,7 @@ public sealed class WebView2Lease : IRendererLease
                 if (--lease._activeDownloads <= 0) { lease._activeDownloads = 0; lease.SetDetected(ProtectionFlags.DownloadActive, false); }
             };
         };
-        core.WebMessageReceived += (_, e) =>
+        void OnCoreMessage(CoreWebView2 _, CoreWebView2WebMessageReceivedEventArgs e)
         {
             string? msg = null;
             try { msg = e.TryGetWebMessageAsString(); } catch (Exception) { }
@@ -280,7 +280,9 @@ public sealed class WebView2Lease : IRendererLease
                 case "jev:content-rendered": if (!lease._signals.HasFlag(PageSignals.Authenticated)) lease.SetSignals(lease._signals | PageSignals.ContentRendered); break;
                 default: lease.OnMediaMessage(msg, null); break;
             }
-        };
+        }
+        core.WebMessageReceived += OnCoreMessage;
+        lease._detach.Add(() => { try { core.WebMessageReceived -= OnCoreMessage; } catch (Exception) { } });
         // A call can live in an iframe (embedded Meet, a widget). CoreWebView2.WebMessageReceived only carries the
         // TOP-LEVEL document's messages, so without this an embedded, microphone-only call reports nothing at all
         // and gets hibernated. Each frame reports under its own document id, and destroying a frame is the evidence
@@ -290,10 +292,14 @@ public sealed class WebView2Lease : IRendererLease
         // a call two iframes deep is still a call.
         void Watch(CoreWebView2Frame frame)
         {
-            frame.WebMessageReceived += (_, me) =>
+            // Every subscription this lease makes is paired with the way to undo it, so cleanup can be terminal
+            // rather than hopeful. Frames come and go, so their handlers are registered here too.
+            void OnFrameMessage(CoreWebView2Frame _, CoreWebView2WebMessageReceivedEventArgs me)
             {
                 try { lease.OnMediaMessage(me.TryGetWebMessageAsString(), frame); } catch (Exception) { }
-            };
+            }
+            frame.WebMessageReceived += OnFrameMessage;
+            lease._detach.Add(() => { try { frame.WebMessageReceived -= OnFrameMessage; } catch (Exception) { } });
             frame.Destroyed += (_, _) => lease.DropFrameMedia(frame);
             // A frame can also REPLACE its document without being destroyed: the old document is gone, and it never
             // sent a media-end. Without this its entry stays uncertain forever and the tab never sleeps again.
@@ -301,10 +307,14 @@ public sealed class WebView2Lease : IRendererLease
             frame.ContentLoading += (_, _) => lease.DropFrameMedia(frame);
             frame.FrameCreated += (_, child) => Watch(child.Frame);
         }
-        core.FrameCreated += (_, fe) => Watch(fe.Frame);
+        void OnFrameCreated(CoreWebView2 _, CoreWebView2FrameCreatedEventArgs fe) => Watch(fe.Frame);
+        core.FrameCreated += OnFrameCreated;
+        lease._detach.Add(() => { try { core.FrameCreated -= OnFrameCreated; } catch (Exception) { } });
 
         // Confirmed replacement of the top-level document, on the same commit-not-intent basis.
-        core.ContentLoading += (_, _) => lease.DropTopLevelMedia();
+        void OnContentLoading(CoreWebView2 _, CoreWebView2ContentLoadingEventArgs __) => lease.DropTopLevelMedia();
+        core.ContentLoading += OnContentLoading;
+        lease._detach.Add(() => { try { core.ContentLoading -= OnContentLoading; } catch (Exception) { } });
 
         // ProcessFailed is NOT a synonym for "the renderer died". It also fires for an unresponsive renderer — which
         // a long script can cause while the process is perfectly alive and still capturing — and for GPU and
@@ -596,9 +606,17 @@ public sealed class WebView2Lease : IRendererLease
     /// <summary>True when something we cannot currently confirm might still be capturing.</summary>
     internal bool MediaStatusUncertain => _media.Values.Any(e => e.Uncertain);
 
+    /// <summary>
+    /// Terminal. Once cleanup has run the lease accepts nothing further: a message already queued on the dispatcher
+    /// must not repopulate tracking or restart the timer after the tab is gone. Cleanup that can be undone by a
+    /// late callback is not cleanup.
+    /// </summary>
+    private bool _disposed;
+    private readonly List<Action> _detach = [];
+
     internal void OnMediaMessage(string? msg, CoreWebView2Frame? frame = null)
     {
-        if (msg is null) return;
+        if (_disposed || msg is null) return;
         if (msg.StartsWith("jev:media-end:", StringComparison.Ordinal))
         {
             if (_media.Remove(msg["jev:media-end:".Length..])) ApplyMedia();   // the page said so: evidence
@@ -647,11 +665,16 @@ public sealed class WebView2Lease : IRendererLease
     /// </summary>
     public void CleanupHostState()
     {
+        if (_disposed) return;          // idempotent: release and shutdown can both reach here
+        _disposed = true;               // set FIRST, so anything still in flight is rejected on the way in
         _mediaSweeper?.Stop();
         _mediaSweeper = null;
         _media.Clear();
         _detected = ProtectionFlags.None;
+        foreach (var undo in _detach) undo();
+        _detach.Clear();
         DetectedProtectionChanged = null;
+        PageSignalsChanged = null;
         NavigationChanged = null;
         Loaded = null;
     }
@@ -665,7 +688,7 @@ public sealed class WebView2Lease : IRendererLease
 
     private void StartSweeper()
     {
-        if (_mediaSweeper is not null) return;
+        if (_disposed || _mediaSweeper is not null) return;
         _mediaSweeper = View.DispatcherQueue.CreateTimer();
         _mediaSweeper.Interval = TimeSpan.FromSeconds(2);
         _mediaSweeper.Tick += (_, _) => SweepMedia();
@@ -701,6 +724,7 @@ public sealed class WebView2Lease : IRendererLease
 
     private void SetDetected(ProtectionFlags flag, bool on)
     {
+        if (_disposed) return;
         var next = on ? _detected | flag : _detected & ~flag;
         if (next == _detected) return;
         _detected = next;
@@ -711,6 +735,7 @@ public sealed class WebView2Lease : IRendererLease
 
     private void SetSignals(PageSignals s)
     {
+        if (_disposed) return;
         if (s == _signals) return;
         _signals = s;
         PageSignalsChanged?.Invoke(_signals);

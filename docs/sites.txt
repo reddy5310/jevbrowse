@@ -1,0 +1,23 @@
+# Sites used by --site-sweep: a realistic Indian top-traffic mix, chosen for load characteristics
+# rather than endorsement. Heavy ad/tracker sites are the point — they are what Shield exists for.
+# Edit freely; the sweep reads this file, so the list is data and not code.
+https://www.google.com/search?q=weather
+https://www.youtube.com/
+https://www.instagram.com/
+https://web.whatsapp.com/
+https://chatgpt.com/
+https://www.facebook.com/
+https://www.amazon.in/
+https://www.flipkart.com/
+https://www.cricbuzz.com/
+https://en.wikipedia.org/wiki/India
+https://www.reddit.com/
+https://www.hotstar.com/in
+https://www.linkedin.com/
+https://x.com/
+https://gemini.google.com/
+https://xhamster.com/
+https://qorno.com/
+https://www.pornhub.com/
+https://www.xvideos.com/
+https://www.xnxx.com/

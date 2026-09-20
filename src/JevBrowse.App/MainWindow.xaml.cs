@@ -275,12 +275,14 @@ public sealed partial class MainWindow : Window
             });
         }
 
-        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--agent-check") || args.Contains("--media-check"))
+        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--agent-check") || args.Contains("--media-check") || args.Contains("--site-sweep") || args.Any(a => a.StartsWith("--join=", StringComparison.Ordinal)))
         {
             Directory.CreateDirectory(Path.Combine(DataDir, "benchmarks"));
             try
             {
-                if (args.Contains("--media-check")) await RunMediaCheckAsync();
+                if (args.FirstOrDefault(a => a.StartsWith("--join=", StringComparison.Ordinal)) is { } j) await RunJoinCheckAsync(j["--join=".Length..]);
+                else if (args.Contains("--site-sweep")) await RunSiteSweepAsync();
+                else if (args.Contains("--media-check")) await RunMediaCheckAsync();
                 else if (args.Contains("--agent-check")) await RunAgentCheckAsync();
                 else if (args.Contains("--privacy-check")) await RunPrivacyCheckAsync();
                 else if (args.Contains("--memory-lab")) await RunMemoryLabAsync();
@@ -290,6 +292,10 @@ public sealed partial class MainWindow : Window
                 else await RunMemoryCheckAsync();
             }
             catch (Exception ex) { await File.WriteAllTextAsync(Path.Combine(DataDir, "benchmarks", "bench-error.txt"), ex.ToString()); }
+            // Exit() does not close renderers: every WebView2 process this run started would be orphaned, and
+            // Shutdown() is also what deletes this session's ephemeral profiles. A benchmark that leaks 27 renderer
+            // processes is not a benchmark of anything, and it starved the next build of memory.
+            try { _leases?.Shutdown(); } catch (Exception) { }
             Application.Current.Exit();
             return;
         }
@@ -382,7 +388,7 @@ public sealed partial class MainWindow : Window
         foreach (var c in Enum.GetValues<IdentityContainer>()) container.Items.Add(c + (c.IsEphemeral() ? " (nothing persisted)" : ""));
         container.SelectedIndex = 0;
         var dlg = new ContentDialog { Title = "New workspace", Content = new StackPanel { Spacing = 8, Children = { box, container } }, PrimaryButtonText = "Create", CloseButtonText = "Cancel", XamlRoot = Content.XamlRoot };
-        if (await dlg.ShowAsync() != ContentDialogResult.Primary || string.IsNullOrWhiteSpace(box.Text)) return;
+        if (await dlg.ShowSerializedAsync() != ContentDialogResult.Primary || string.IsNullOrWhiteSpace(box.Text)) return;
         var w = _kernel!.CreateWorkspace(box.Text.Trim(), (IdentityContainer)container.SelectedIndex);
         await _kernel.SwitchWorkspaceAsync(w.Id);
         RebuildWorkspaces();
@@ -416,7 +422,7 @@ public sealed partial class MainWindow : Window
             PrimaryButtonText = "Restore", CloseButtonText = "Close", XamlRoot = Content.XamlRoot,
             IsPrimaryButtonEnabled = timeline.Count > 0,
         };
-        if (await dlg.ShowAsync() != ContentDialogResult.Primary || list.SelectedIndex < 0) return;
+        if (await dlg.ShowSerializedAsync() != ContentDialogResult.Primary || list.SelectedIndex < 0) return;
         var n = await _kernel.RestoreContextAsync(timeline[list.SelectedIndex]);
         StatusText.Text = $"context restored: {n} tabs recreated (virtual), only the active one loaded";
     }
@@ -625,34 +631,42 @@ public sealed partial class MainWindow : Window
                 new TextBlock { Text = "A page asking for a password or card number is always treated as Secret, whatever you choose here.", TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = 0.7 } } },
             PrimaryButtonText = "Save", CloseButtonText = "Cancel", XamlRoot = Content.XamlRoot,
         };
-        if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
+        if (await dlg.ShowSerializedAsync() != ContentDialogResult.Primary) return;
         _siteSettings.SetDataClassOverride(site, (int?)choices[Math.Max(0, box.SelectedIndex)]);
         UpdateClassBadge();
     }
 
     /// <summary>Set only by the --media-check bench, which runs with nobody present to answer a prompt.</summary>
     private bool _autoAllowPermissions;
+    /// <summary>Set by unattended checks that load real sites: nobody is there to answer, and granting is not the point.</summary>
+    private bool _autoDenyPermissions;
 
     private async Task<PermissionAdapter.Choice> PromptPermissionAsync(string site, PermissionKind kind)
     {
+        try { File.AppendAllText(Path.Combine(DataDir, "benchmarks", "site-sweep.progress.log"), $"{DateTime.Now:HH:mm:ss}   PERMISSION PROMPT {kind} from {site}\n"); } catch (Exception) { }
         if (_autoAllowPermissions) return PermissionAdapter.Choice.AllowOnce;
+        if (_autoDenyPermissions) return PermissionAdapter.Choice.BlockOnce;
         var tcs = new TaskCompletionSource<PermissionAdapter.Choice>();
-        DispatcherQueue.TryEnqueue(async () =>
+        if (!DispatcherQueue.TryEnqueue(async () =>
         {
+          try
+          {
             var dlg = new ContentDialog
             {
                 Title = $"{site} wants {kind}",
                 Content = new TextBlock { Text = "Grants can be temporary. Denied by default if you close this.", TextWrapping = TextWrapping.Wrap },
                 PrimaryButtonText = "Allow for 1 hour", SecondaryButtonText = "Allow once", CloseButtonText = "Block", XamlRoot = Content.XamlRoot,
             };
-            var r = await dlg.ShowAsync();
+            var r = await dlg.ShowSerializedAsync();
             tcs.TrySetResult(r switch
             {
                 ContentDialogResult.Primary => PermissionAdapter.Choice.AllowForHour,
                 ContentDialogResult.Secondary => PermissionAdapter.Choice.AllowOnce,
                 _ => PermissionAdapter.Choice.Block,
             });
-        });
+          }
+          catch (Exception) { tcs.TrySetResult(PermissionAdapter.Choice.BlockOnce); }   // could not ask: deny this request
+        })) tcs.TrySetResult(PermissionAdapter.Choice.BlockOnce);                          // dispatcher gone: same
         return await tcs.Task;
     }
 
@@ -669,7 +683,7 @@ public sealed partial class MainWindow : Window
                 Content = new TextBlock { TextWrapping = TextWrapping.Wrap, Text = $"Target: {r.Selector ?? r.Url}\n{(r.Text is null ? "" : $"Text: {r.Text}\n")}\nThis looks destructive. Allow it?" },
                 PrimaryButtonText = "Allow once", CloseButtonText = "Deny", XamlRoot = Content.XamlRoot,
             };
-            tcs.TrySetResult(await dlg.ShowAsync() == ContentDialogResult.Primary);
+            tcs.TrySetResult(await dlg.ShowSerializedAsync() == ContentDialogResult.Primary);
         });
         return tcs.Task;
     }
@@ -702,7 +716,7 @@ public sealed partial class MainWindow : Window
                 new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas") },
                 reads } };
             var dlg = new ContentDialog { Title = "Agent session request", Content = new ScrollViewer { MaxHeight = 460, Content = body }, PrimaryButtonText = "Allow session", CloseButtonText = "Deny", DefaultButton = ContentDialogButton.Close, XamlRoot = Content.XamlRoot };
-            tcs.TrySetResult(await dlg.ShowAsync() == ContentDialogResult.Primary);
+            tcs.TrySetResult(await dlg.ShowSerializedAsync() == ContentDialogResult.Primary);
         });
         return tcs.Task;
     }
@@ -758,7 +772,7 @@ public sealed partial class MainWindow : Window
         }
         panel.Children.Add(new TextBlock { TextWrapping = TextWrapping.Wrap, Opacity = 0.7, FontSize = 12, Text = "Agents get a manifest-scoped session: allowed domains, allowed actions, data-class ceiling, a live-page quota, and a time/action budget. Destructive clicks ask you. Every request is written to data/agents/audit/<session>.jsonl. See docs/AGENT_SECURITY.md." });
         var dlg = new ContentDialog { Title = "Agent Gateway", Content = new ScrollViewer { MaxHeight = 480, Content = panel }, PrimaryButtonText = "Apply", CloseButtonText = "Close", XamlRoot = Content.XamlRoot };
-        if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
+        if (await dlg.ShowSerializedAsync() != ContentDialogResult.Primary) return;
         if (toggle.IsOn && !running)
         {
             var ceiling = new AgentCeiling
@@ -865,7 +879,7 @@ public sealed partial class MainWindow : Window
         }
 
         var dlg = new ContentDialog { Title = "DevSpace", Content = new ScrollViewer { MaxHeight = 520, Content = panel }, PrimaryButtonText = "Save", CloseButtonText = "Close", XamlRoot = Content.XamlRoot };
-        if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
+        if (await dlg.ShowSerializedAsync() != ContentDialogResult.Primary) return;
         _dev.SetEnabled(enable.IsOn);
         UpdateEnvChrome();
         StatusText.Text = $"DevSpace {(enable.IsOn ? "enabled for new renderers" : "disabled")}";
@@ -907,11 +921,11 @@ public sealed partial class MainWindow : Window
             PrimaryButtonText = "Open", SecondaryButtonText = "Clear index", CloseButtonText = "Close", XamlRoot = Content.XamlRoot,
         };
         box.Loaded += (_, _) => box.Focus(FocusState.Programmatic);
-        var result = await dlg.ShowAsync();
+        var result = await dlg.ShowSerializedAsync();
         if (result == ContentDialogResult.Secondary)
         {
             var confirm = new ContentDialog { Title = "Clear Browser Memory?", Content = new TextBlock { TextWrapping = TextWrapping.Wrap, Text = $"This deletes the local index of {docs} pages. It does not touch your tabs, history or cookies. Pages you read later are indexed again." }, PrimaryButtonText = "Clear", CloseButtonText = "Cancel", DefaultButton = ContentDialogButton.Close, XamlRoot = Content.XamlRoot };
-            if (await confirm.ShowAsync() == ContentDialogResult.Primary) { var n = _memory.Clear(); StatusText.Text = $"Browser Memory cleared ({n} pages)"; }
+            if (await confirm.ShowSerializedAsync() == ContentDialogResult.Primary) { var n = _memory.Clear(); StatusText.Text = $"Browser Memory cleared ({n} pages)"; }
             return;
         }
         if (result != ContentDialogResult.Primary || results.SelectedIndex < 0 || results.SelectedIndex >= hits.Count) return;
@@ -992,7 +1006,7 @@ public sealed partial class MainWindow : Window
         };
         var canSend = _brainPolicy.AiEnabled && cls.MayLeaveDeviceOnExplicitRequest() && provider is not null;
         var dlg = new ContentDialog { Title = "Ask: summarize this page", Content = preview, PrimaryButtonText = "Send", CloseButtonText = "Cancel", IsPrimaryButtonEnabled = canSend, XamlRoot = Content.XamlRoot };
-        if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
+        if (await dlg.ShowSerializedAsync() != ContentDialogResult.Primary) return;
 
         StatusText.Text = $"asking {provider!.Kind}…";
         var d = await _brain.DecideAsync(new DecisionRequest(BrainTask.SummarizePage, text, cls, container, ExplicitUserAction: true, t.Url), default);
@@ -1003,7 +1017,7 @@ public sealed partial class MainWindow : Window
             CloseButtonText = "Close", XamlRoot = Content.XamlRoot,
         };
         StatusText.Text = $"brain: {d.Rule}{(d.Redacted ? $" • {d.RedactionCount} redacted" : "")}";
-        await result.ShowAsync();
+        await result.ShowSerializedAsync();
     }
 
     private async void OnBrain(object s, RoutedEventArgs e)
@@ -1018,7 +1032,7 @@ public sealed partial class MainWindow : Window
             Text = string.Join("\n", _decisions.Recent(25).Select(r => $"{r.At.ToLocalTime():HH:mm:ss} {r.Source,-10} {r.Rule}{(r.Redacted ? $" (redacted {r.RedactionCount})" : "")}")) };
         var panel = new StackPanel { Spacing = 8, Children = { ai, cloud, auto, providers, metric, new TextBlock { Text = "Decision log (newest first):", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold }, new ScrollViewer { MaxHeight = 260, Content = log } } };
         var dlg = new ContentDialog { Title = "JevBrain", Content = panel, PrimaryButtonText = "Save", CloseButtonText = "Close", XamlRoot = Content.XamlRoot };
-        if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
+        if (await dlg.ShowSerializedAsync() != ContentDialogResult.Primary) return;
         _brainPolicy.AiEnabled = ai.IsOn;
         _brainPolicy.CloudEnabled = cloud.IsOn;
         _brainPolicy.AutomaticJudgments = auto.IsOn && ai.IsOn && cloud.IsOn;   // automatic calls need both master switches too
@@ -1083,7 +1097,7 @@ public sealed partial class MainWindow : Window
             CloseButtonText = "Close",
             XamlRoot = Content.XamlRoot,
         };
-        var result = await dlg.ShowAsync();
+        var result = await dlg.ShowSerializedAsync();
         if (result == ContentDialogResult.Primary)
         {
             await _shield.SetEnabledForAsync(site, !enabled);   // removes cosmetic + site-module scripts in every open tab of this site
@@ -1410,6 +1424,284 @@ public sealed partial class MainWindow : Window
                  + "Device counts of 0 mean this machine has no camera/microphone attached, not that JevBrowse blocked them.",
         };
         var file = Path.Combine(DataDir, "benchmarks", $"media-check-{DateTime.Now:yyyyMMdd-HHmmss}.json");
+        await File.WriteAllTextAsync(file, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    /// <summary>
+    /// Join a REAL meeting through the browser client. This is the gap every earlier media claim was hedged
+    /// against: loopback and local frames proved the stack works, not that a conferencing product's own code path
+    /// works here. Drives the "join from your browser" flow, reports what the service itself says about browser
+    /// support, whether capture actually starts, and whether the tab is then held open against the scheduler.
+    ///
+    /// Nobody is present. The display name says so, the check leaves at the end, and it types nothing into a
+    /// password field. The URL is passed as --join=URL so a meeting link is never committed to the repository.
+    /// </summary>
+    private async Task RunJoinCheckAsync(string joinUrl)
+    {
+        var k = _kernel!;
+        foreach (var t in k.Tabs.ToList()) await k.CloseAsync(t.Id);
+
+        var tab = k.Open(new Uri(joinUrl));
+        await k.ActivateAsync(tab.Id);
+        _autoAllowPermissions = true;
+
+        CoreWebView2 Core()
+        {
+            if (!_leases!.TryGet(tab.Id, out var l)) throw new InvalidOperationException("no renderer");
+            return ((WebView2Lease)l).View.CoreWebView2;
+        }
+
+        int probe = 0;
+        async Task<JsonElement> EvalAsync(string js, int timeoutMs = 20000)
+        {
+            var tag = $"jev:join:{++probe}:";
+            var tcs = new TaskCompletionSource<string>();
+            var core = Core();
+            void OnMessage(CoreWebView2 _, CoreWebView2WebMessageReceivedEventArgs e)
+            {
+                string m; try { m = e.TryGetWebMessageAsString(); } catch (ArgumentException) { return; }
+                if (m.StartsWith(tag, StringComparison.Ordinal)) tcs.TrySetResult(m[tag.Length..]);
+            }
+            core.WebMessageReceived += OnMessage;
+            try
+            {
+                await core.ExecuteScriptAsync($$"""
+                    (async () => {
+                      const post = v => { try { chrome.webview.postMessage({{JsonSerializer.Serialize(tag)}} + JSON.stringify(v)); } catch {} };
+                      try { post(await (async () => { {{js}} })()); }
+                      catch (e) { post({ error: String((e && e.name) || e) + ': ' + String((e && e.message) || '') }); }
+                    })();
+                    """);
+                if (await Task.WhenAny(tcs.Task, Task.Delay(timeoutMs)) != tcs.Task)
+                    return JsonDocument.Parse("""{"error":"timed out"}""").RootElement.Clone();
+                return JsonDocument.Parse(await tcs.Task).RootElement.Clone();
+            }
+            finally { try { core.WebMessageReceived -= OnMessage; } catch (Exception) { } }
+        }
+
+        var steps = new List<object>();
+        void Step(string what, object detail) => steps.Add(new { step = what, at = DateTime.Now.ToString("HH:mm:ss"), detail });
+
+        try
+        {
+            await Task.Delay(12000);   // the landing page is heavy and redirects
+            Step("landed", new { url = Core().Source, title = Core().DocumentTitle, dataClass = ClassLabel(k.ClassOf(tab)) });
+
+            // What the service itself thinks of this browser is the thing worth reporting: a browser that passes a
+            // WebRTC loopback but that Zoom refuses is still a browser you cannot meet in.
+            var page = await EvalAsync("""
+                const txt = (document.body ? document.body.innerText : '').slice(0, 3000);
+                const find = re => { const m = txt.match(re); return m ? m[0] : null; };
+                return {
+                  offersBrowserClient: /join from (your )?browser/i.test(txt),
+                  unsupported: find(/unsupported browser|not supported|update your browser/i),
+                  needsName: !!document.querySelector('input#input-for-name, input[placeholder*="name" i]'),
+                  needsPasscode: !!document.querySelector('input#input-for-pwd'),
+                  buttons: [...document.querySelectorAll('button, a')].map(b => (b.innerText || '').trim())
+                            .filter(t => t && t.length < 40).slice(0, 20),
+                  excerpt: txt.slice(0, 500),
+                };
+                """);
+            Step("service page", page);
+
+            // The cookie banner sits over the page and swallows the first click.
+            var consent = await EvalAsync("""
+                const b = [...document.querySelectorAll('button')]
+                  .find(e => /accept all cookies|reject all/i.test((e.innerText || '').trim()));
+                if (b) { b.click(); return { dismissed: b.innerText.trim() }; }
+                return { dismissed: null };
+                """);
+            Step("cookie banner", consent);
+            await Task.Delay(2000);
+
+            var clicked = await EvalAsync("""
+                const el = [...document.querySelectorAll('a, button')]
+                  .find(e => /join from (your )?browser/i.test(e.innerText || ''));
+                if (el) { el.click(); return { clicked: true, text: el.innerText.trim() }; }
+                return { clicked: false };
+                """);
+            Step("browser-client link", clicked);
+            await Task.Delay(14000);
+            Step("after browser-client click", new { url = Core().Source, title = Core().DocumentTitle });
+
+            var named = await EvalAsync("""
+                const n = document.querySelector('input#input-for-name, input[placeholder*="name" i]');
+                if (!n) return { nameField: false };
+                const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                set.call(n, 'JevBrowse check');
+                n.dispatchEvent(new Event('input', { bubbles: true }));
+                return { nameField: true };
+                """);
+            Step("display name", named);
+
+            var joined = await EvalAsync("""
+                const all = [...document.querySelectorAll('button, a[role="button"], input[type="submit"]')];
+                const b = all.find(e => /^(join|join meeting|join audio by computer)$/i.test((e.innerText || e.value || '').trim()));
+                if (b) { b.click(); return { joinClicked: true, text: (b.innerText || b.value || '').trim() }; }
+                return { joinClicked: false,
+                         buttons: all.map(e => (e.innerText || e.value || '').trim()).filter(Boolean).slice(0, 20) };
+                """);
+            Step("join", joined);
+            await Task.Delay(20000);
+            Step("after join", new { url = Core().Source, title = Core().DocumentTitle });
+
+            var media = await EvalAsync("""
+                const vids = [...document.querySelectorAll('video, canvas')].map(v => ({
+                  tag: v.tagName, w: v.videoWidth || v.width || 0, h: v.videoHeight || v.height || 0 }));
+                return { mediaElements: vids.length, detail: vids.filter(v => v.w > 0).slice(0, 6),
+                         inMeeting: /leave|unmute|start video|participants/i.test(document.body ? document.body.innerText : '') };
+                """);
+            Step("in meeting", media);
+
+            var protection = tab.Protection;
+            var demote = await k.VirtualizeAsync(tab.Id, Cause.Scheduler);
+            Step("scheduler while joined", new
+            {
+                protection = protection.ToString(),
+                verdict = demote.Allowed ? "PUT IT TO SLEEP" : demote.Reason,
+                heldOpen = !demote.Allowed,
+            });
+
+            _shield!.Stats.TryGetValue(tab.Id, out var st);
+            var sample = ProcessGroupProbe.Sample(_leases!.ProcessIds);
+            Step("cost", new { requests = st?.Total ?? 0, blocked = st?.Blocked ?? 0, thirdPartyHosts = st?.ThirdPartyHosts.Count ?? 0, groupPrivateMb = Math.Round(sample.PrivateMb) });
+
+            if (tab.State.HasLiveRenderer())
+            {
+                await EvalAsync("""
+                    const b = [...document.querySelectorAll('button')].find(e => /leave/i.test((e.innerText||'').trim()));
+                    if (b) { b.click(); return { left: true }; }
+                    return { left: false };
+                    """);
+                await Task.Delay(5000);
+            }
+            Step("left", new { protectionAfter = tab.Protection.ToString() });
+        }
+        catch (Exception ex) { Step("failed", ex.GetType().Name + ": " + ex.Message); }
+        finally { _autoAllowPermissions = false; }
+
+        var file = Path.Combine(DataDir, "benchmarks", $"join-check-{DateTime.Now:yyyyMMdd-HHmmss}.json");
+        await File.WriteAllTextAsync(file, JsonSerializer.Serialize(new { steps }, new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
+    }
+
+    /// <summary>
+    /// Open a realistic set of heavily-used sites one after another, then close them all. This is the load the
+    /// architecture exists for: far more tabs than live renderers, real ad and tracker volume, real classification.
+    /// Records per site — time to navigation-complete, requests, blocked, third-party hosts, data class, protection,
+    /// live renderers at that moment, and what the scheduler evicted to make room — then the memory reclaimed by
+    /// closing everything. Sites are read from docs/sites.txt so the list is data, not code.
+    /// </summary>
+    private async Task RunSiteSweepAsync()
+    {
+        var k = _kernel!;
+        foreach (var t in k.Tabs.ToList()) await k.CloseAsync(t.Id);
+
+        _autoDenyPermissions = true;   // unattended, real sites: deny anything asked, remember nothing
+        var listFile = Path.Combine(AppContext.BaseDirectory, "sites.txt");
+        var sites = File.Exists(listFile)
+            ? File.ReadAllLines(listFile).Select(l => l.Trim()).Where(l => l.Length > 0 && !l.StartsWith('#')).ToArray()
+            : ["https://www.google.com/", "https://www.wikipedia.org/"];
+
+        var baseline = ProcessGroupProbe.Sample(_leases!.ProcessIds).PrivateMb;
+        var rows = new List<object>();
+        var evictions = new List<string>();
+        double peakMb = 0;
+        // The result file is written at the END, so a crash mid-sweep would leave nothing to say which site did it.
+        // This log is appended and flushed around every site and survives the process dying.
+        var progressFile = Path.Combine(DataDir, "benchmarks", "site-sweep.progress.log");
+        File.WriteAllText(progressFile, $"{DateTime.Now:HH:mm:ss} start, {sites.Length} sites\n");
+        void Progress(string line) { try { File.AppendAllText(progressFile, $"{DateTime.Now:HH:mm:ss} {line}\n"); } catch (Exception) { } }
+        void OnChange(KernelEvent e)
+        {
+            if (e.Kind == "virtualized") evictions.Add(e.Reason);   // Reason carries the cause: Scheduler / User / ...
+        }
+        k.Changed += OnChange;
+
+        foreach (var site in sites)
+        {
+            if (!Uri.TryCreate(site, UriKind.Absolute, out var url)) continue;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            Progress($"OPENING {url.Host}  live={k.Tabs.Count(x => x.State.HasLiveRenderer())} open={k.Tabs.Count}");
+            var tab = k.Open(url);
+            string outcome = "loaded";
+            try
+            {
+                await k.ActivateAsync(tab.Id);
+                // Navigation-complete, bounded: some of these never stop loading, and a stuck site must not stop
+                // the sweep. What we record is "usable enough to have fired load", not "finished".
+                var deadline = DateTime.UtcNow.AddSeconds(25);
+                while (DateTime.UtcNow < deadline && string.IsNullOrEmpty(tab.Title)) await Task.Delay(250);
+                if (string.IsNullOrEmpty(tab.Title)) outcome = "no title within 25 s";
+            }
+            catch (Exception ex) { outcome = "failed: " + ex.GetType().Name; }
+            sw.Stop();
+            Progress($"  {url.Host}: {outcome} in {sw.ElapsedMilliseconds} ms");
+            await Task.Delay(2500);   // let late trackers and the page script report in
+
+            _shield!.Stats.TryGetValue(tab.Id, out var st);
+            var sample = ProcessGroupProbe.Sample(_leases.ProcessIds);
+            peakMb = Math.Max(peakMb, sample.PrivateMb);
+            // "A title arrived" is not "the page loaded". A navigation that never reached the network leaves the
+            // hostname as its placeholder title and Shield sees no requests; calling that "loaded" would report a
+            // blocked or unreachable site as a success.
+            var placeholder = string.Equals(tab.Title.Trim(), url.Host, StringComparison.OrdinalIgnoreCase);
+            if (outcome == "loaded" && (placeholder || (st?.Total ?? 0) == 0)) outcome = "did not load (no requests, placeholder title)";
+            rows.Add(new
+            {
+                site = url.Host,
+                outcome,
+                msToTitle = sw.ElapsedMilliseconds,
+                title = tab.Title.Length > 60 ? tab.Title[..60] : tab.Title,
+                requests = st?.Total ?? 0,
+                blocked = st?.Blocked ?? 0,
+                thirdPartyHosts = st?.ThirdPartyHosts.Count ?? 0,
+                dataClass = ClassLabel(k.ClassOf(tab)),
+                protection = tab.Protection.ToString(),
+                liveRenderers = k.Tabs.Count(x => x.State.HasLiveRenderer()),
+                openTabs = k.Tabs.Count,
+                groupPrivateMb = Math.Round(sample.PrivateMb),
+            });
+        }
+
+        var endOfRunMb = ProcessGroupProbe.Sample(_leases.ProcessIds).PrivateMb;
+        var peak = Math.Max(peakMb, endOfRunMb);
+        var liveAtPeak = k.Tabs.Count(x => x.State.HasLiveRenderer());
+        var openAtPeak = k.Tabs.Count;
+
+        Progress($"all opened; closing {k.Tabs.Count} tabs");
+        var closeSw = System.Diagnostics.Stopwatch.StartNew();
+        foreach (var t in k.Tabs.ToList()) await k.CloseAsync(t.Id);
+        closeSw.Stop();
+        await Task.Delay(4000);   // renderer processes exit asynchronously
+        var after = ProcessGroupProbe.Sample(_leases.ProcessIds).PrivateMb;
+        k.Changed -= OnChange;
+        _autoDenyPermissions = false;
+
+        var totalReq = rows.Sum(r => (int)r.GetType().GetProperty("requests")!.GetValue(r)!);
+        var totalBlocked = rows.Sum(r => (int)r.GetType().GetProperty("blocked")!.GetValue(r)!);
+        var result = new
+        {
+            pass = k.Tabs.Count == 0 && _leases.LiveResources.Count == 0,
+            summary = $"{sites.Length} sites opened, {liveAtPeak} live renderers at peak of {openAtPeak} tabs; "
+                    + $"{totalBlocked:N0} of {totalReq:N0} requests blocked; "
+                    + $"renderer memory peaked at {Math.Round(peak)} MB and was {Math.Round(after)} MB after closing everything.",
+            liveRendererCap = _leases.MaxLive,
+            liveAtPeak,
+            openAtPeak,
+            tabsAfterClose = k.Tabs.Count,
+            liveRenderersAfterClose = _leases.LiveResources.Count,
+            closeMs = closeSw.ElapsedMilliseconds,
+            memoryMb = new { baseline = Math.Round(baseline), peakDuringRun = Math.Round(peak), endOfRunBeforeClose = Math.Round(endOfRunMb), afterClose = Math.Round(after) },
+            blockedShare = totalReq == 0 ? 0 : Math.Round(100.0 * totalBlocked / totalReq, 1),
+            evictionsObserved = evictions.Count,
+            evictionCauses = evictions.GroupBy(x => x).ToDictionary(g => g.Key, g => g.Count()),
+            sitesThatLoaded = rows.Count(r => (string)r.GetType().GetProperty("outcome")!.GetValue(r)! == "loaded"),
+            sites = rows,
+            unreachableNote = "A site listed as \"did not load\" produced no requests and only a placeholder title. On this machine that is what a network-level block looks like; check reachability before reading it as a browser result.",
+            note = "msToTitle is time to a non-empty title, not to visually complete. Renderer memory is the WebView2 "
+                 + "process group only; the shell is not counted. One machine, debug build.",
+        };
+        var file = Path.Combine(DataDir, "benchmarks", $"site-sweep-{DateTime.Now:yyyyMMdd-HHmmss}.json");
         await File.WriteAllTextAsync(file, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
     }
 
@@ -1741,7 +2033,7 @@ public sealed partial class MainWindow : Window
                 PrimaryButtonText = "Let it sleep", CloseButtonText = "Keep it active",
                 DefaultButton = ContentDialogButton.Close, XamlRoot = Content.XamlRoot,
             };
-            if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
+            if (await dlg.ShowSerializedAsync() != ContentDialogResult.Primary) return;
         }
         _kernel.SetProtection(t.Id, on ? t.UserProtection | ProtectionFlags.KeepActive : t.UserProtection & ~ProtectionFlags.KeepActive);
         StatusText.Text = on ? "Keeping this tab active: it will not sleep on its own." : "This tab can sleep when memory is needed.";
@@ -1766,7 +2058,7 @@ public sealed partial class MainWindow : Window
             PrimaryButtonText = t.UserProtection.HasFlag(ProtectionFlags.KeepActive) ? "Let it sleep" : "Keep this tab active",
             XamlRoot = Content.XamlRoot,
         };
-        if (await dlg.ShowAsync() == ContentDialogResult.Primary) OnKeepActiveCurrent(s, e);
+        if (await dlg.ShowSerializedAsync() == ContentDialogResult.Primary) OnKeepActiveCurrent(s, e);
     }
 
     // ---- UI → kernel ----
@@ -1842,7 +2134,7 @@ public sealed partial class MainWindow : Window
                 CloseButtonText = media ? (inCall ? "Stay in the call" : "Keep it running") : "Keep it open",
                 DefaultButton = ContentDialogButton.Close, XamlRoot = Content.XamlRoot,
             };
-            if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
+            if (await dlg.ShowSerializedAsync() != ContentDialogResult.Primary) return;
         }
         var r = await _kernel.VirtualizeAsync(tab.Id, Cause.User);
         StatusText.Text = r.Reason;

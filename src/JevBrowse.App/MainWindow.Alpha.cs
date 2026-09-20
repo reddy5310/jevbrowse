@@ -139,7 +139,7 @@ public sealed partial class MainWindow
         var dlg = new ContentDialog { Title = "Command palette", Content = new StackPanel { Spacing = 8, Children = { box, list } }, PrimaryButtonText = "Run", CloseButtonText = "Close", XamlRoot = Content.XamlRoot, DefaultButton = ContentDialogButton.Primary };
         box.Loaded += (_, _) => box.Focus(FocusState.Programmatic);
         box.KeyDown += (_, k) => { if (k.Key == Windows.System.VirtualKey.Down && list.SelectedIndex < list.Items.Count - 1) { list.SelectedIndex++; k.Handled = true; } else if (k.Key == Windows.System.VirtualKey.Up && list.SelectedIndex > 0) { list.SelectedIndex--; k.Handled = true; } };
-        if (await dlg.ShowAsync() != ContentDialogResult.Primary || list.SelectedIndex < 0 || list.SelectedIndex >= shown.Count) return;
+        if (await dlg.ShowSerializedAsync() != ContentDialogResult.Primary || list.SelectedIndex < 0 || list.SelectedIndex >= shown.Count) return;
         try { await shown[list.SelectedIndex].Run(); }
         catch (Exception ex) { StatusText.Text = "command failed: " + ex.Message; }
     }
@@ -200,7 +200,7 @@ public sealed partial class MainWindow
         var share = live.Count == 0 ? 0 : sample.PrivateMb / live.Count;
         foreach (var t in live.OrderBy(t => t.State)) lines.Add($"  ~{share:F0} MB  {t.State,-9} {(string.IsNullOrEmpty(t.Title) ? t.Url.Host : t.Title)}");
         var dlg = new ContentDialog { Title = "Memory", Content = new ScrollViewer { MaxHeight = 420, Content = new TextBlock { Text = string.Join("\n", lines), FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap } }, CloseButtonText = "Close", XamlRoot = Content.XamlRoot };
-        await dlg.ShowAsync();
+        await dlg.ShowSerializedAsync();
     }
 
     private Task BlockNotificationsAsync()
@@ -228,7 +228,7 @@ public sealed partial class MainWindow
         _shield.Stats.TryGetValue(t.Id, out var st);
         var hosts = st?.ThirdPartyHosts.OrderByDescending(kv => kv.Value).Select(kv => $"{kv.Value,4}  {kv.Key}").ToList() ?? [];
         var text = hosts.Count == 0 ? "No third-party requests seen on this page yet." : $"{hosts.Count} third-party hosts ({st!.ThirdParty} requests, {st.Blocked} blocked):\n\n" + string.Join("\n", hosts);
-        await new ContentDialog { Title = $"Third parties: {t.Url.Host}", Content = new ScrollViewer { MaxHeight = 420, Content = new TextBlock { Text = text, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap } }, CloseButtonText = "Close", XamlRoot = Content.XamlRoot }.ShowAsync();
+        await new ContentDialog { Title = $"Third parties: {t.Url.Host}", Content = new ScrollViewer { MaxHeight = 420, Content = new TextBlock { Text = text, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap } }, CloseButtonText = "Close", XamlRoot = Content.XamlRoot }.ShowSerializedAsync();
     }
 
     /// <summary>§26 last example. Opens a scoped session from docs/agents/claude-code.json (or the default) and shows the endpoint.</summary>
@@ -253,7 +253,7 @@ public sealed partial class MainWindow
         var text = $"Session {s.Id} for {manifest.Agent}: {string.Join(", ", s.Manifest.AllowDomains)} until {s.ExpiresAt.ToLocalTime():HH:mm}.\n\n" +
                    $"Base URL: http://127.0.0.1:{_agentHost.Port}/\nToken:    {_agentHost.Token}\n\n" +
                    $"Example:\ncurl -H \"Authorization: Bearer {_agentHost.Token}\" -X POST http://127.0.0.1:{_agentHost.Port}/sessions/{s.Id}/actions -d '{{\"action\":\"Navigate\",\"url\":\"https://github.com/reddy5310/jevbrowse\"}}'";
-        await new ContentDialog { Title = "Agent grant", Content = new TextBlock { Text = text, IsTextSelectionEnabled = true, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap }, CloseButtonText = "Close", XamlRoot = Content.XamlRoot }.ShowAsync();
+        await new ContentDialog { Title = "Agent grant", Content = new TextBlock { Text = text, IsTextSelectionEnabled = true, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap }, CloseButtonText = "Close", XamlRoot = Content.XamlRoot }.ShowSerializedAsync();
     }
 
     // ---- Session receipt (§15) ----
@@ -280,6 +280,6 @@ public sealed partial class MainWindow
             "",
             "Measured values come from the OS or the request pipeline. Estimates are labelled.",
         };
-        await new ContentDialog { Title = "Receipt", Content = new TextBlock { Text = string.Join("\n", lines), FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true }, CloseButtonText = "Close", XamlRoot = Content.XamlRoot }.ShowAsync();
+        await new ContentDialog { Title = "Receipt", Content = new TextBlock { Text = string.Join("\n", lines), FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true }, CloseButtonText = "Close", XamlRoot = Content.XamlRoot }.ShowSerializedAsync();
     }
 }
