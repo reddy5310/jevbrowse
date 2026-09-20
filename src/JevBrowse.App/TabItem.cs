@@ -17,16 +17,7 @@ public sealed class TabItem(VirtualTab tab) : INotifyPropertyChanged
     public string Subtitle => string.Join(" • ", new[] { StateWord, ProtectionWords, Tab.Url.Scheme == "jev" ? "local page" : Tab.Url.Host }.Where(s => s.Length > 0));
 
     /// <summary>What the tab is doing, in the words a person would use. Internal state names are for diagnostics.</summary>
-    private string StateWord => Tab.State switch
-    {
-        ResourceState.Hot => "open",
-        ResourceState.Warm => "open, in the background",
-        ResourceState.Cold => "idle",
-        ResourceState.Suspended => "dozing",
-        ResourceState.Virtual => "sleeping",
-        ResourceState.Archived => "archived",
-        _ => Tab.State.ToString().ToLowerInvariant(),
-    };
+    private string StateWord => TabStateWords.Of(Tab.State);
 
     /// <summary>Why this tab is special, in words: placement first, then the reasons it will not sleep on its own.</summary>
     private string ProtectionWords =>

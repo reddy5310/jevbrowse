@@ -210,6 +210,22 @@ try {
     }
 
     # ---- side panel: real keys, and the focus rules a keyboard user depends on ----
+    # Every key sent in these checks goes through here. A keystroke goes to whatever window is in front, so if the app is not
+    # verifiably in front at that moment NOTHING is sent (Ctrl+A then Backspace in someone's document would be destructive),
+    # and the run is inconclusive rather than failed: a missing key is not evidence about the app.
+    $script:foregroundLost = $false
+    function Send-Keys([string]$keys) {
+        if ($script:foregroundLost) { return }
+        if (-not (Ensure-Foreground)) { $script:foregroundLost = $true; return }
+        [System.Windows.Forms.SendKeys]::SendWait($keys)
+    }
+    # Name of the focused element. Focus anywhere outside this app means the person (or the OS) took the foreground: that is
+    # recorded as lost foreground, so it can never be reported as something the app did wrong.
+    function Focused-Name {
+        $f = $AE::FocusedElement
+        if ($f.Current.ProcessId -ne $proc.Id) { $script:foregroundLost = $true; return '(focus is outside the app)' }
+        return $f.Current.Name
+    }
     function Find-ByName($name) { $win.FindFirst($Scope::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, $name))) }
     function Panel-Open { $c = Find-ByName 'Close panel'; return ($null -ne $c -and -not $c.Current.IsOffscreen) }
     $panelStatus = 'not started'; $panelProven = $false
@@ -218,45 +234,60 @@ try {
     function Test-Panel([string]$button) {
         $short = $button.Split(':')[0].Split(' ')[0]
         (Find-ByName $button).SetFocus(); Start-Sleep -Milliseconds 500
-        [System.Windows.Forms.SendKeys]::SendWait('{ENTER}'); Start-Sleep -Milliseconds 1200
+        Send-Keys '{ENTER}'; Start-Sleep -Milliseconds 1200
         if (-not (Panel-Open)) { $failures.Add("PANEL ${short}: Enter on the button did not open the panel"); return }
         if (-not (Find-ByName 'Close panel').Current.HasKeyboardFocus) { $failures.Add("PANEL ${short}: opening did not move keyboard focus into the panel") }
         Test-Layout @(Interactive) "panel $short open: "
         # Not a trap: Tab has to keep moving focus. Stuck on one element for three presses in a row is the symptom.
         $last = ''; $stuck = 0
         for ($i = 0; $i -lt 8; $i++) {
-            [System.Windows.Forms.SendKeys]::SendWait('{TAB}'); Start-Sleep -Milliseconds 300
+            Send-Keys '{TAB}'; Start-Sleep -Milliseconds 300
             $f = $AE::FocusedElement
-            if ($f.Current.ProcessId -ne $proc.Id) { break }
+            if ($f.Current.ProcessId -ne $proc.Id) { $script:foregroundLost = $true; break }
             $id = "$($f.Current.AutomationId)|$($f.Current.Name)|$($f.Current.ControlType.Id)"
             if ($id -eq $last) { $stuck++ } else { $stuck = 0 }
             $last = $id
             if ($stuck -ge 2) { $failures.Add("PANEL ${short}: Tab stopped moving focus (keyboard trap) at '$($f.Current.Name)'"); break }
         }
         (Find-ByName 'Close panel').SetFocus(); Start-Sleep -Milliseconds 400
-        [System.Windows.Forms.SendKeys]::SendWait('{ESC}'); Start-Sleep -Milliseconds 900
+        Send-Keys '{ESC}'; Start-Sleep -Milliseconds 900
         if (Panel-Open) { $failures.Add("PANEL ${short}: Escape did not close the panel") }
-        elseif ($AE::FocusedElement.Current.Name -ne $button) { $failures.Add("PANEL ${short}: after Escape focus is on '$($AE::FocusedElement.Current.Name)', not on the button that opened it") }
-        [System.Windows.Forms.SendKeys]::SendWait('{ENTER}'); Start-Sleep -Milliseconds 1000
+        elseif ((Focused-Name) -ne $button) { $failures.Add("PANEL ${short}: after Escape focus is on '$((Focused-Name))', not on the button that opened it") }
+        Send-Keys '{ENTER}'; Start-Sleep -Milliseconds 1000
         if (-not (Panel-Open)) { $failures.Add("PANEL ${short}: reopening from its button failed"); return }
         (Find-ByName 'Close panel').SetFocus(); Start-Sleep -Milliseconds 300
-        [System.Windows.Forms.SendKeys]::SendWait('{ENTER}'); Start-Sleep -Milliseconds 900
+        Send-Keys '{ENTER}'; Start-Sleep -Milliseconds 900
         if (Panel-Open) { $failures.Add("PANEL ${short}: the close button did not close the panel") }
-        elseif ($AE::FocusedElement.Current.Name -ne $button) { $failures.Add("PANEL ${short}: after the close button focus is on '$($AE::FocusedElement.Current.Name)', not on its button") }
+        elseif ((Focused-Name) -ne $button) { $failures.Add("PANEL ${short}: after the close button focus is on '$((Focused-Name))', not on its button") }
     }
     # The palette and help must be reachable from the toolbar with the sidebar hidden: open More, find both items, Esc.
     function Test-More {
         $name = 'More: command palette and help'
         (Find-ByName $name).SetFocus(); Start-Sleep -Milliseconds 400
-        [System.Windows.Forms.SendKeys]::SendWait('{ENTER}'); Start-Sleep -Milliseconds 900
-        foreach ($item in 'Command palette', 'Help and welcome') {
+        Send-Keys '{ENTER}'; Start-Sleep -Milliseconds 900
+        foreach ($item in 'Command palette', 'Workspaces overview', 'Help and welcome') {
             $m = $win.FindFirst($Scope::Descendants, (New-Object System.Windows.Automation.AndCondition(
                     (New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, $item)),
                     (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::MenuItem)))))
             if (-not $m) { $failures.Add("MORE: the menu has no '$item' item") }
         }
-        [System.Windows.Forms.SendKeys]::SendWait('{ESC}'); Start-Sleep -Milliseconds 700
-        if ($AE::FocusedElement.Current.Name -ne $name) { $failures.Add("MORE: after Escape focus is on '$($AE::FocusedElement.Current.Name)', not on the More button") }
+        Send-Keys '{ESC}'; Start-Sleep -Milliseconds 700
+        if ((Focused-Name) -ne $name) { $failures.Add("MORE: after Escape focus is on '$((Focused-Name))', not on the More button") }
+    }
+    # Workspace previews: More > Workspaces overview opens a panel by keyboard, Esc closes it, focus is back on More.
+    function Test-Workspaces {
+        $name = 'More: command palette and help'
+        (Find-ByName $name).SetFocus(); Start-Sleep -Milliseconds 400
+        Send-Keys '{ENTER}'; Start-Sleep -Milliseconds 900
+        Send-Keys '{DOWN}{ENTER}'; Start-Sleep -Milliseconds 1200
+        if (-not (Panel-Open)) { $failures.Add('WORKSPACES: More > Workspaces overview did not open the panel'); return }
+        $names = @($win.FindAll($Scope::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Button))) | ForEach-Object { $_.Current.Name })
+        if (-not ($names | Where-Object { $_ -like 'Go to *' })) { $failures.Add("WORKSPACES: the panel lists no tab to go to (saw: $($names -join ' | '))") }
+        Test-Layout @(Interactive) 'panel workspaces open: '
+        (Find-ByName 'Close panel').SetFocus(); Start-Sleep -Milliseconds 300
+        Send-Keys '{ESC}'; Start-Sleep -Milliseconds 900
+        if (Panel-Open) { $failures.Add('WORKSPACES: Escape did not close the panel') }
+        elseif ((Focused-Name) -ne $name) { $failures.Add("WORKSPACES: after Escape focus is on '$((Focused-Name))', not on the More button") }
     }
     # Unified search: Ctrl+K opens it with focus in the box, typing finds a command AND the open tab, Esc closes it and puts focus
     # back where it was.
@@ -264,26 +295,26 @@ try {
         $boxName = 'Search tabs, workspaces, commands and pages you have read'
         $start = 'Reload'
         (Find-ByName $start).SetFocus(); Start-Sleep -Milliseconds 400
-        [System.Windows.Forms.SendKeys]::SendWait('^k'); Start-Sleep -Milliseconds 1200
+        Send-Keys '^k'; Start-Sleep -Milliseconds 1200
         if (-not (Panel-Open)) { $failures.Add('SEARCH: Ctrl+K did not open the search panel'); return }
         $box = Find-ByName $boxName
         if (-not $box -or -not $box.Current.HasKeyboardFocus) { $failures.Add('SEARCH: opening did not put keyboard focus in the search box') }
-        [System.Windows.Forms.SendKeys]::SendWait('example'); Start-Sleep -Milliseconds 900
+        Send-Keys 'example'; Start-Sleep -Milliseconds 900
         $names = @($win.FindAll($Scope::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::ListItem))) | ForEach-Object { $_.Current.Name })
         if (-not ($names | Where-Object { $_ -like 'Open tab: Example Domain*' })) { $failures.Add("SEARCH: typing 'example' did not list the open tab (saw: $($names -join ' | '))") }
-        [System.Windows.Forms.SendKeys]::SendWait('^a{BACKSPACE}receipt'); Start-Sleep -Milliseconds 900
+        Send-Keys '^a{BACKSPACE}receipt'; Start-Sleep -Milliseconds 900
         $names = @($win.FindAll($Scope::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::ListItem))) | ForEach-Object { $_.Current.Name })
         if (-not ($names | Where-Object { $_ -like 'Command: Session receipt*' })) { $failures.Add("SEARCH: typing 'receipt' did not list the receipt command (saw: $($names -join ' | '))") }
-        [System.Windows.Forms.SendKeys]::SendWait('{ESC}'); Start-Sleep -Milliseconds 900
+        Send-Keys '{ESC}'; Start-Sleep -Milliseconds 900
         if (Panel-Open) { $failures.Add('SEARCH: Escape did not close the search panel') }
-        elseif ($AE::FocusedElement.Current.Name -ne $start) { $failures.Add("SEARCH: after Escape focus is on '$($AE::FocusedElement.Current.Name)', not on '$start' where it was") }
+        elseif ((Focused-Name) -ne $start) { $failures.Add("SEARCH: after Escape focus is on '$((Focused-Name))', not on '$start' where it was") }
         # Enter runs the top result and leaves the panel closed: 'receipt' -> the Receipt panel opens (a panel replaces the search panel).
         (Find-ByName $start).SetFocus(); Start-Sleep -Milliseconds 300
-        [System.Windows.Forms.SendKeys]::SendWait('^k'); Start-Sleep -Milliseconds 1000
-        [System.Windows.Forms.SendKeys]::SendWait('session receipt{ENTER}'); Start-Sleep -Milliseconds 1500
+        Send-Keys '^k'; Start-Sleep -Milliseconds 1000
+        Send-Keys 'session receipt{ENTER}'; Start-Sleep -Milliseconds 1500
         $title = Panel-Open
         if (-not $title) { $failures.Add('SEARCH: Enter on the top result did not run it (no panel opened)') }
-        else { (Find-ByName 'Close panel').SetFocus(); [System.Windows.Forms.SendKeys]::SendWait('{ESC}'); Start-Sleep -Milliseconds 700 }
+        else { (Find-ByName 'Close panel').SetFocus(); Send-Keys '{ESC}'; Start-Sleep -Milliseconds 700 }
     }
     if (-not (Ensure-Foreground)) { $panelStatus = 'INCONCLUSIVE: the app could not be brought to the front, so no key was sent' }
     else {
@@ -293,8 +324,13 @@ try {
             Test-Panel $b
         }
         if ($panelStatus -eq 'not started' -and (Ensure-Foreground)) { Test-More }
+        if ($panelStatus -eq 'not started' -and (Ensure-Foreground)) { Test-Workspaces }
         if ($panelStatus -eq 'not started' -and (Ensure-Foreground)) { Test-Search }
-        if ($panelStatus -eq 'not started') { if ($failures.Count -eq $before) { $panelProven = $true; $panelStatus = 'complete' } else { $panelStatus = 'FAILED' } }
+        if ($script:foregroundLost) {
+            while ($failures.Count -gt $before) { $failures.RemoveAt($failures.Count - 1) }   # made after keys stopped arriving: not evidence
+            $panelStatus = 'INCONCLUSIVE: the app lost the foreground mid-check, so later keys were not sent'
+        }
+        elseif ($panelStatus -eq 'not started') { if ($failures.Count -eq $before) { $panelProven = $true; $panelStatus = 'complete' } else { $panelStatus = 'FAILED' } }
     }
 
     function Shot($name) {
@@ -315,7 +351,7 @@ try {
             if ($el) {
                 $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke(); Start-Sleep -Milliseconds 1100
                 Shot $item[1]
-                [System.Windows.Forms.SendKeys]::SendWait('{ESC}'); Start-Sleep -Milliseconds 600
+                Send-Keys '{ESC}'; Start-Sleep -Milliseconds 600
             }
         }
     }

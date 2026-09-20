@@ -17,7 +17,7 @@ public sealed partial class MainWindow
 
     private string? _panelId;
     private Func<(string Title, UIElement Body)?>? _panelBuild;
-    private Control? _panelReturnTo;
+    private Control? _panelReturnTo, _panelHome;
     private bool _panelLive = true;
     private Control? _panelFocus;   // a builder that has a better first control than the close button (the search box) names it here
 
@@ -39,8 +39,10 @@ public sealed partial class MainWindow
         if (!PanelOpen)
         {
             var focused = FocusManager.GetFocusedElement(Content.XamlRoot) as Control;
-            _panelReturnTo = focused is not null && focused != AddressBox && !IsInsidePanel(focused) ? focused : home;
+            // A menu item is gone the moment the menu closes; it is never a place to come back to.
+            _panelReturnTo = focused is not null and not MenuFlyoutItemBase && focused != AddressBox && !IsInsidePanel(focused) ? focused : home;
         }
+        _panelHome = home;
         _panelId = id;
         _panelBuild = build;
         _panelLive = live;   // a panel holding typed input must not be rebuilt under the person's hands
@@ -83,7 +85,8 @@ public sealed partial class MainWindow
         LayoutPanel();
         // Focus is only moved if it was in the panel. If the person had already clicked into the page, it stays there.
         if (!restoreFocus || !hadFocusInside) { _panelReturnTo = null; return; }
-        var target = _panelReturnTo is { IsLoaded: true, Visibility: Visibility.Visible, IsEnabled: true } r ? r : AddressBox;
+        static bool Usable(Control? c) => c is { IsLoaded: true, Visibility: Visibility.Visible, IsEnabled: true };
+        var target = Usable(_panelReturnTo) ? _panelReturnTo! : Usable(_panelHome) ? _panelHome! : AddressBox;
         _panelReturnTo = null;
         target.Focus(FocusState.Keyboard);
     }
