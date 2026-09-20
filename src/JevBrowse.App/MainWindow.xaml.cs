@@ -267,7 +267,8 @@ public sealed partial class MainWindow : Window
         var args = Environment.GetCommandLineArgs();
         _leases.LocalPage = u => u.Scheme == "jev" && u.Host == "welcome" ? WelcomePage.Html(_providers.Any(p => p.IsConfigured), _jev?.IsConfigured == true) : null;
 
-        if (args.Contains("--ui-shot"))
+        var uiDialog = args.FirstOrDefault(a => a.StartsWith("--ui-dialog=", StringComparison.Ordinal)) is { } ud0 ? ud0["--ui-dialog=".Length..] : null;
+        if (args.Contains("--ui-shot") || uiDialog is not null)
         {
             // Render the window itself (not the screen) after the welcome page and tips settle, for docs and review.
             // --ui-width=N resizes first, so narrow layouts can be looked at rather than reasoned about.
@@ -280,6 +281,23 @@ public sealed partial class MainWindow : Window
             _ = Task.Run(async () =>
             {
                 await Task.Delay(9000);
+                if (uiDialog is not null)
+                {
+                    // Show one decision dialog and leave it up, for scripts/text-size-check.ps1 to inspect and then close with the process.
+                    DispatcherQueue.TryEnqueue(async () =>
+                    {
+                        try
+                        {
+                            Directory.CreateDirectory(Path.Combine(DataDir, "benchmarks"));
+                            await File.WriteAllTextAsync(Path.Combine(DataDir, "benchmarks", "dialog-report.json"),
+                                System.Text.Json.JsonSerializer.Serialize(new { textScaleFactor = new Windows.UI.ViewManagement.UISettings().TextScaleFactor, dialog = uiDialog }));
+                            if (uiDialog == "permission") await PromptPermissionAsync("news.example.com", PermissionKind.Camera, "use your camera and microphone");
+                            else if (uiDialog == "workspace") OnNewWorkspace(this, new RoutedEventArgs());
+                        }
+                        catch (Exception) { /* evidence only */ }
+                    });
+                    return;
+                }
                 DispatcherQueue.TryEnqueue(async () =>
                 {
                     if (args.Contains("--ui-demo-agent") && _agents is not null)
@@ -304,6 +322,7 @@ public sealed partial class MainWindow : Window
                         Directory.CreateDirectory(Path.Combine(DataDir, "benchmarks"));
                         await File.WriteAllTextAsync(Path.Combine(DataDir, "benchmarks", "motion-report.json"), System.Text.Json.JsonSerializer.Serialize(new
                         {
+                            textScaleFactor = new Windows.UI.ViewManagement.UISettings().TextScaleFactor,
                             animationsEnabled = Motion.Enabled,
                             fadeCompleted = faded.Task.IsCompleted,
                             fadeMilliseconds = watch.ElapsedMilliseconds,
@@ -519,6 +538,7 @@ public sealed partial class MainWindow : Window
         PoolText.Text = $"{tabs} {(tabs == 1 ? "tab" : "tabs")} open, {_kernel.LiveCount} awake (up to {_leases.MaxLive})\n"
                       + $"Pages are using {s.PrivateMb:F0} MB of memory\n"
                       + $"Shield has blocked {blocked:N0} {(blocked == 1 ? "request" : "requests")} this session";
+        if (PoolText.MaxLines == 2) ToolTipService.SetToolTip(PoolText, PoolText.Text);   // held to two lines at large text sizes
     }
 
     // ---- Restore experience ----
@@ -665,7 +685,10 @@ public sealed partial class MainWindow : Window
         // On a row of its own the address bar needs the width, so the badge keeps the identity and drops the second
         // half; the full state stays in the accessible name and the tooltip, and the colour still says it.
         var full = $"{_kernel.ContainerOf(t).ToString().ToUpperInvariant()} • {ClassLabel(cls).ToUpperInvariant()}";
+        var fullChanged = _badgeFullText != full;
+        _badgeFullText = full;
         ClassBadgeText.Text = _addressWrapped ? _kernel.ContainerOf(t).ToString().ToUpperInvariant() : full;
+        if (fullChanged) DispatcherQueue.TryEnqueue(LayoutToolbar);
         ToolTipService.SetToolTip(ClassBadge, full);
         // What a screen reader says: the state, then what pressing does. The visible text is capitals and a bullet.
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(ClassBadge,

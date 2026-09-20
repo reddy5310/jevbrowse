@@ -224,39 +224,53 @@ public sealed partial class MainWindow
 
     private void OnFocusAddress(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); AddressBox.Focus(FocusState.Keyboard); AddressBox.SelectAll(); }
     private void OnNewTabAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); OnNewTab(s, new RoutedEventArgs()); }
-    // Below this the address bar would be squeezed under its useful width beside all five controls.
-    private const double ToolbarWrapWidth = 760;
-    // Below this the address bar itself needs a row: four buttons and the trust badge leave it less than a URL's worth.
-    private const double AddressWrapWidth = 560;
-    private bool _toolbarWrapped, _addressWrapped;
+    // What the toolbar decides is measured, never a fixed width: at a larger Windows text size every button is wider, so a
+    // threshold that was right at 100% clips at 150%. The decisions read the buttons' own desired widths.
+    private const double UrlRoom = 160;   // the least the address text may be given beside its badge
+    private bool _addressWrapped;
+    private string _badgeFullText = "PERSONAL";
+
+    private static double NaturalWidth(UIElement e)
+    {
+        if (e.Visibility == Visibility.Collapsed) return 0;
+        e.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+        return e.DesiredSize.Width;
+    }
+
+    private void OnToolbarSizeChanged(object s, SizeChangedEventArgs e) => LayoutToolbar();
 
     /// <summary>
-    /// Narrow windows put the trust and tab controls on their own row under the address bar, and narrower still (a 700 px
-    /// window with the sidebar open) give the address bar a full-width row of its own. Nothing is hidden or moved into
-    /// a menu: Explain, Receipt and Shield are exactly as reachable as when the window is wide.
-    /// The toolbar's own width comes from its container, not its content, so wrapping cannot make it oscillate.
+    /// Three rules, in order. The trust and tab controls sit beside the address bar only if everything fits at once; otherwise
+    /// they wrap onto rows of their own (a wrapping panel, so nothing is behind a scroll bar and nothing is squeezed). If even
+    /// the navigation buttons plus a readable address bar do not fit, the address bar gets a full row and its badge shortens to
+    /// the profile name (the full state stays in the accessible name and tooltip). Nothing is hidden or moved into a menu.
     /// </summary>
-    private void OnToolbarSizeChanged(object s, SizeChangedEventArgs e)
+    private void LayoutToolbar()
     {
-        var wrap = e.NewSize.Width < ToolbarWrapWidth;
-        var wrapAddress = e.NewSize.Width < AddressWrapWidth;
-        if (wrap == _toolbarWrapped && wrapAddress == _addressWrapped) return;
-        _toolbarWrapped = wrap;
-        _addressWrapped = wrapAddress;
-        // On its own row the pill spans the toolbar; a minimum on its old column would still make the grid wider than the window.
-        AddressColumn.MinWidth = wrapAddress ? 0 : 180;
-        Grid.SetRow(AddressPill, wrapAddress ? 1 : 0);
-        Grid.SetColumn(AddressPill, wrapAddress ? 0 : 4);
-        Grid.SetColumnSpan(AddressPill, wrapAddress ? 6 : 1);
-        Grid.SetRow(TrustScroll, wrap ? (wrapAddress ? 2 : 1) : 0);
-        Grid.SetColumn(TrustScroll, wrap ? 0 : 5);
-        Grid.SetColumnSpan(TrustScroll, wrap ? 6 : 1);
-        // Same buttons, same order, one more row: nothing behind a scroll bar at the narrowest width.
-        var from = wrapAddress ? TrustBar : TrustBarMore;
-        var to = wrapAddress ? TrustBarMore : TrustBar;
-        foreach (var b in new UIElement[] { TabMenuButton, ToolsButton })
-            if (from.Children.Remove(b)) to.Children.Add(b);
-        UpdateClassBadge();
+        var w = Toolbar.ActualWidth;
+        if (w <= 0) return;
+        var gap = Tokens.Space(6);
+        var nav = Toolbar.Children.OfType<Button>().Where(b => Grid.GetColumn(b) <= 3).ToList();
+        var navW = nav.Sum(NaturalWidth) + gap * nav.Count;
+        var badge = new TextBlock { Text = _badgeFullText, FontSize = 10.5, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold };
+        badge.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+        var pillExtras = Tokens.Inset("JevInsetBadge").Left + Tokens.Inset("JevInsetBadge").Right + Tokens.Inset("JevInsetSlim").Left + Tokens.Inset("JevInsetSlim").Right + Tokens.Space(8) + 4;
+        var addressW = badge.DesiredSize.Width + pillExtras + UrlRoom;
+        var trustW = NaturalWidth(TrustBar);
+
+        var addressInline = w >= navW + addressW;
+        var trustInline = addressInline && w >= navW + addressW + gap + trustW;
+        var changed = addressInline == _addressWrapped;   // _addressWrapped is the inverse of addressInline
+        _addressWrapped = !addressInline;
+
+        AddressColumn.MinWidth = 0;
+        Grid.SetRow(AddressPill, addressInline ? 0 : 1);
+        Grid.SetColumn(AddressPill, addressInline ? 4 : 0);
+        Grid.SetColumnSpan(AddressPill, addressInline ? 1 : 6);
+        Grid.SetRow(TrustBar, trustInline ? 0 : addressInline ? 1 : 2);
+        Grid.SetColumn(TrustBar, trustInline ? 5 : 0);
+        Grid.SetColumnSpan(TrustBar, trustInline ? 1 : 6);
+        if (changed) UpdateClassBadge();
     }
 
     // ---- Sidebar ----

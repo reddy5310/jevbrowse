@@ -49,12 +49,12 @@
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <StackPanel Padding="{StaticResource JevInsetSidebarHead}" Spacing="{StaticResource JevSpace8}">
-                    <StackPanel Orientation="Horizontal" Spacing="{StaticResource JevSpace6}">
+                    <local:WrapPanel Spacing="{StaticResource JevSpace6}" LineSpacing="{StaticResource JevSpace6}">
                         <Button Content="+ New" Click="OnNewTab" Style="{StaticResource JevToolButton}"/>
                         <Button Content="Sleep others" Click="OnHibernateAll" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Put every tab except this one to sleep to free memory. They wake when you open them."/>
                         <Button Content="&#xE71C;" FontFamily="Segoe MDL2 Assets" Click="OnPalette" AutomationProperties.Name="Command palette" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Command palette (Ctrl+K)"/>
                         <Button Content="&#xE897;" FontFamily="Segoe MDL2 Assets" Click="OnHelp" AutomationProperties.Name="Help and welcome" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Welcome / help (F1)"/>
-                    </StackPanel>
+                    </local:WrapPanel>
                     <ComboBox x:Name="ProductModeBox" AutomationProperties.Name="Product mode" HorizontalAlignment="Stretch" Style="{StaticResource JevCombo}" SelectionChanged="OnProductModeChanged" ToolTipService.ToolTip="Product mode: which features are shown"/>
                     <TextBlock x:Name="PrivateSessionText" TextWrapping="Wrap" Visibility="Collapsed" FontSize="12"/>
                     <Button x:Name="ReturnPrivateButton" Content="Return" Click="OnReturnFromPrivate" Visibility="Collapsed" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Leave the private session but keep it open"/>
@@ -121,7 +121,6 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
@@ -155,9 +154,7 @@
                 </Border>
                 <!-- The trust and tab controls travel as ONE group. Wide: right of the address bar. Narrow: a second row, so
                      Explain and Receipt stay directly reachable instead of disappearing into an overflow menu. -->
-                <ScrollViewer x:Name="TrustScroll" Grid.Column="5" HorizontalScrollBarVisibility="Auto" HorizontalScrollMode="Auto"
-                              VerticalScrollBarVisibility="Disabled" VerticalScrollMode="Disabled">
-                <StackPanel x:Name="TrustBar" Orientation="Horizontal" Spacing="{StaticResource JevSpace6}">
+                <local:WrapPanel x:Name="TrustBar" Grid.Column="5" Spacing="{StaticResource JevSpace6}" LineSpacing="{StaticResource JevSpace6}">
                     <Button x:Name="ShieldButton" Content="Shield" Click="OnShield" Style="{StaticResource JevToolButton}"
                             ToolTipService.ToolTip="What was blocked on this page, and a fix if the site is not working" AutomationProperties.Name="Shield: blocked requests and site repair"/>
                     <Button x:Name="ExplainButton" Content="Explain" Click="OnExplain" Style="{StaticResource JevToolButton}"
@@ -199,10 +196,7 @@
                             </MenuFlyout>
                         </Button.Flyout>
                     </Button>
-                </StackPanel>
-                </ScrollViewer>
-                <!-- Empty until the window is narrow enough that the two menu buttons would run off the row. -->
-                <StackPanel x:Name="TrustBarMore" Grid.Row="3" Grid.ColumnSpan="6" Orientation="Horizontal" Spacing="{StaticResource JevSpace6}"/>
+                </local:WrapPanel>
             </Grid>
             <!-- One side panel for information that used to interrupt in a dialog. It is not modal: the page stays alive beside it,
                  Tab moves through it like anything else, Esc or the close button dismisses it, and focus goes back to where it
@@ -226,7 +220,7 @@
                         <Button x:Name="SidePanelClose" Grid.Column="1" Content="&#xE711;" FontFamily="Segoe MDL2 Assets" Click="OnSidePanelClose"
                                 Style="{StaticResource JevToolButton}" AutomationProperties.Name="Close panel" ToolTipService.ToolTip="Close (Esc)"/>
                     </Grid>
-                    <ScrollViewer x:Name="SidePanelBody" Grid.Row="1" Padding="{StaticResource JevInsetSidebarFoot}" HorizontalScrollBarVisibility="Disabled" HorizontalScrollMode="Disabled"/>
+                    <ScrollViewer x:Name="SidePanelBody" AutomationProperties.AutomationId="SidePanelBody" Grid.Row="1" Padding="{StaticResource JevInsetSidebarFoot}" HorizontalScrollBarVisibility="Disabled" HorizontalScrollMode="Disabled"/>
                 </Grid>
             </Border>
             <Border local:Elevation.Level="Surface" x:Name="PageSurface" Grid.Row="1" CornerRadius="{StaticResource JevRadiusPanel}" BorderBrush="{ThemeResource JevBorderSubtleBrush}" BorderThickness="1" Background="{ThemeResource JevBackdropBrush}">

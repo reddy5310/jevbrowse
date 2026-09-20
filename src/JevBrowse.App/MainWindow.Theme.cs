@@ -1,4 +1,5 @@
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using Windows.UI.ViewManagement;
 
 namespace JevBrowse.App;
@@ -9,8 +10,43 @@ public sealed partial class MainWindow
     private readonly UISettings _uiSettings = new();
 
     /// <summary>Dark is the default; Light and "match Windows" are choices. JEVBROWSE_THEME overrides for tests.</summary>
+    private readonly List<(Microsoft.UI.Xaml.Controls.Button Button, double BaseSize)> _glyphButtons = [];
+
+    /// <summary>Finds the icon-only buttons (a symbol font, no words) so their size can be managed rather than left to grow without limit.</summary>
+    private void CollectGlyphButtons(DependencyObject node)
+    {
+        switch (node)
+        {
+            case Microsoft.UI.Xaml.Controls.Button b when b.FontFamily?.Source?.Contains("MDL2", StringComparison.OrdinalIgnoreCase) == true:
+                b.IsTextScaleFactorEnabled = false; _glyphButtons.Add((b, b.FontSize)); return;
+            case Microsoft.UI.Xaml.Controls.Panel p: foreach (var c in p.Children) CollectGlyphButtons(c); break;
+            case Microsoft.UI.Xaml.Controls.Border br when br.Child is not null: CollectGlyphButtons(br.Child); break;
+            case Microsoft.UI.Xaml.Controls.ScrollViewer sv when sv.Content is DependencyObject sc: CollectGlyphButtons(sc); break;
+            case Microsoft.UI.Xaml.Controls.ContentControl cc when cc.Content is DependencyObject cco: CollectGlyphButtons(cco); break;
+        }
+    }
+
+    /// <summary>
+    /// Windows "Text size" is for reading. Icons follow it, but only up to 150%: past that they would take the room the words
+    /// need, while at 100% they must not be left tiny beside enlarged text (they are click and touch targets). The words scale fully.
+    /// The sidebar's memory readout is secondary, so at large sizes it is held to two lines (the full text is in its tooltip)
+    /// rather than pushing the tab list, which is not secondary, out of the sidebar.
+    /// </summary>
+    private void ApplyTextScale()
+    {
+        double scale;
+        try { scale = _uiSettings.TextScaleFactor; } catch (Exception) { scale = 1; }
+        foreach (var (button, baseSize) in _glyphButtons) button.FontSize = baseSize * Math.Min(scale, 1.5);
+        var large = scale >= 1.4;
+        PoolText.MaxLines = large ? 2 : 0;
+        PoolText.TextTrimming = large ? TextTrimming.CharacterEllipsis : TextTrimming.None;
+        ToolTipService.SetToolTip(PoolText, large ? PoolText.Text : null);
+        LayoutToolbar();
+    }
+
     private void InitTheme()
     {
+        CollectGlyphButtons(Root);
         var chosen = UiPrefs.Load(DataDir).Theme;
         if (Enum.TryParse<ThemePreference>(Environment.GetEnvironmentVariable("JEVBROWSE_THEME"), true, out var forced)) chosen = forced;
         ApplyTheme(chosen, remember: false);
@@ -27,6 +63,9 @@ public sealed partial class MainWindow
         // Following Windows is a convenience, so if the subscription is refused the app still starts, on the theme it was given.
         try { _uiSettings.ColorValuesChanged += (_, _) => DispatcherQueue.TryEnqueue(() => ApplyTheme(_themePref, remember: false)); }
         catch (Exception) { }
+        // A change of Windows "Text size" while the app is open changes every button's width: lay the toolbar out again.
+        try { _uiSettings.TextScaleFactorChanged += (_, _) => DispatcherQueue.TryEnqueue(ApplyTextScale); } catch (Exception) { /* cannot tell: the size-changed path still covers the window */ }
+        ApplyTextScale();
     }
 
     /// <summary>
