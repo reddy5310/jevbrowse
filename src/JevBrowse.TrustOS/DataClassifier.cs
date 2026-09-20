@@ -18,10 +18,15 @@ public sealed class DataClassifier
     public DataClass Classify(Uri url, IdentityContainer container, PageSignals signals)
     {
         if (container.IsEphemeral()) return DataClass.Ephemeral;
-        var site = Site(url.Host);
-        var over = _userOverride(site);
-        var heuristic = FromSignals(signals) is { } s ? s : FromUrl(url);
-        if (over is { } o) return (DataClass)Math.Max((int)o, (int)heuristic == (int)DataClass.Secret ? (int)DataClass.Secret : (int)o);
+
+        // Independent evidence is combined by taking the STRICTER result: a "logged in" signal must never mask a
+        // banking URL, and a banking URL must never mask a password field.
+        var heuristic = (DataClass)Math.Max((int)FromUrl(url), (int)(FromSignals(signals) ?? DataClass.Public));
+
+        // An explicit user decision about a site outranks heuristics (their site, their call), but a page that is
+        // actually asking for a password or card number is SECRET whatever the user said.
+        if (_userOverride(Site(url.Host)) is { } over)
+            return signals.HasFlag(PageSignals.PasswordField) || signals.HasFlag(PageSignals.PaymentField) ? DataClass.Secret : over;
         return heuristic;
     }
 

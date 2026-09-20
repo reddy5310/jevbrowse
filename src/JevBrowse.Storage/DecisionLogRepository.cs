@@ -46,7 +46,8 @@ public sealed class DecisionLogRepository
     public IReadOnlyDictionary<string, int> CloudCallsByClass()
     {
         using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = "SELECT data_class, COUNT(*) FROM decision_log WHERE rule LIKE 'provider:%:cloud' GROUP BY data_class";
+        // Chat providers log "provider:<p>:cloud"; typed Jev judgements log "provider:jev:cloud:<task>". Both are cloud calls.
+        cmd.CommandText = "SELECT data_class, COUNT(*) FROM decision_log WHERE rule LIKE 'provider:%:cloud%' GROUP BY data_class";
         using var r = cmd.ExecuteReader();
         var d = new Dictionary<string, int>();
         while (r.Read()) d[r.GetString(0)] = r.GetInt32(1);

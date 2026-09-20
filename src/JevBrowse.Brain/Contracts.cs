@@ -32,7 +32,10 @@ public sealed record Decision(
     int RedactionCount,
     int InputChars,
     DateTimeOffset At,
-    string Version = "brain/1")
+    string Version = "brain/1",
+    string Task = "",
+    string DataClassName = "",
+    bool Automatic = false)
 {
     public bool WasDenied => Source == Provider.None;
 }

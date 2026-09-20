@@ -22,7 +22,30 @@ public sealed class FilterListStore
     ];
 
     private readonly string _root;
-    public FilterListStore(string root) => _root = root;
+
+    public FilterListStore(string root)
+    {
+        _root = root;
+        Recover();
+    }
+
+    /// <summary>
+    /// Activation is two directory renames (active→previous, staging→active), which is not atomic as a pair. A crash
+    /// between them leaves no `active` directory. On startup: if `active` is missing, restore the last known-good
+    /// `previous`; and always discard `staging`, which may be a half-written download and is never trusted.
+    /// </summary>
+    public bool Recover()
+    {
+        bool restored = false;
+        try
+        {
+            if (!Directory.Exists(ActiveDir) && Directory.Exists(PreviousDir)) { Directory.Move(PreviousDir, ActiveDir); restored = true; }
+            if (Directory.Exists(StagingDir)) Directory.Delete(StagingDir, recursive: true);
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+        return restored;
+    }
 
     public string ActiveDir => Path.Combine(_root, "active");
     public string PreviousDir => Path.Combine(_root, "previous");

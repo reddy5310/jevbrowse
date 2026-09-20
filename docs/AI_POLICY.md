@@ -11,6 +11,12 @@ JevBrain is a decision bus, not an assistant (§11). These rules are enforced in
 2. Inputs above the configured size are refused before any provider is chosen.
 3. Resource scheduling is decided by rules/local scoring; a provider is never consulted for it in V1.
 
+## Consent is per behaviour
+- **AI enabled + Cloud enabled** = you may *ask* (Ask, Explain error, Memory rerank). Each shows or logs exactly what is sent.
+- **Automatic judgments** (a separate switch, off by default) = Jev may be consulted *without a click*: page classification after load, ad-slot judgement. Sends only host, path, title, up to 8 headings and structural flags, for PUBLIC pages only. Turning AI on does **not** turn this on.
+- Every cloud-bound payload is redacted, including question text; option keys are opaque so names cannot leak through them.
+- The decision log records task, data class and whether the call was automatic or explicit.
+
 ## Cloud gate
 A cloud provider may be used only when **all** hold: AI on, Cloud on, and either Trust OS allows `SendToCloudAI` for the page's data class (PUBLIC by default) or the user explicitly invoked the action on an AUTHENTICATED page (Table A.8 "cloud only by explicit override"). SENSITIVE pages are local-only.
 

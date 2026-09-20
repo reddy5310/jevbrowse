@@ -33,6 +33,24 @@ public class BrowserMemoryTests : IDisposable
     }
 
     [Fact]
+    public void Text_relevance_outranks_recency_and_scores_are_positive()
+    {
+        var m = new BrowserMemory(_db, clock: () => _now);
+        var strongOld = ResourceId.New(); var weakNew = ResourceId.New();
+        _now = DateTimeOffset.UnixEpoch.AddDays(1);
+        m.Index(strongOld, new Uri("https://a.test/kernel"), "Kernel scheduler internals", ContextId.Default,
+            string.Join(' ', Enumerable.Repeat("The kernel scheduler decides which kernel thread runs; the scheduler quantum and scheduler queues matter.", 12)));
+        _now = DateTimeOffset.UnixEpoch.AddDays(30);   // much newer
+        m.Index(weakNew, new Uri("https://b.test/notes"), "Weekly notes", ContextId.Default,
+            string.Join(' ', Enumerable.Repeat("Assorted filler about lunch plans and travel", 30)) + " one mention of the kernel scheduler at the end.");
+
+        var hits = m.Search("kernel scheduler");
+        Assert.Equal(2, hits.Count);
+        Assert.All(hits, h => Assert.True(h.Score > 0));
+        Assert.Equal(strongOld, hits[0].Id);          // relevance decides; the recency boost is only a tiebreaker-sized nudge
+    }
+
+    [Fact]
     public void Prefix_and_diacritics_and_short_text_rules()
     {
         var m = new BrowserMemory(_db, clock: () => _now);
@@ -150,11 +168,56 @@ public class MemoryIndexerTests : IDisposable
     }
 
     [Fact]
-    public async Task Closing_a_tab_forgets_its_document()
+    public async Task Closing_a_tab_keeps_what_was_read_until_the_user_clears_it()
     {
         var t = await Open("https://en.wikipedia.org/wiki/Web_browser");
         await _indexer.IndexAsync(t.Id);
         await _k.CloseAsync(t.Id);
+        Assert.Equal(1, _memory.Stats().Docs);                    // "where was that article?" must survive closing the tab
+        Assert.Single(_memory.Search("browsers"));
+        Assert.Equal(1, _memory.Clear());
+        Assert.Equal(0, _memory.Stats().Docs);
+        Assert.True(_memory.DatabaseFileBytes() > 0);             // the real size is reported, not just the text bytes
+    }
+
+    [Fact]
+    public async Task Navigating_within_a_tab_adds_pages_instead_of_replacing_them()
+    {
+        var t = await Open("https://en.wikipedia.org/wiki/Alpha");
+        _leases[t.Id].ReadableText = string.Join(' ', Enumerable.Repeat("alpha particles and nuclear decay explained in detail", 20));
+        await _indexer.IndexAsync(t.Id);
+        _leases[t.Id].RaiseNavigation(new Uri("https://en.wikipedia.org/wiki/Beta"), "Beta");
+        _leases[t.Id].ReadableText = string.Join(' ', Enumerable.Repeat("beta testing and release engineering explained in detail", 20));
+        await _indexer.IndexAsync(t.Id);
+
+        Assert.Equal(2, _memory.Stats().Docs);
+        Assert.Single(_memory.Search("nuclear"));
+        Assert.Single(_memory.Search("release"));
+    }
+
+    [Fact]
+    public async Task A_page_that_changes_while_being_extracted_is_never_committed()
+    {
+        var t = await Open("https://en.wikipedia.org/wiki/Web_browser");
+        var lease = _leases[t.Id];
+        lease.ExtractDelay = TimeSpan.FromMilliseconds(20);
+
+        lease.DuringExtract = () => lease.RaiseNavigation(new Uri("https://en.wikipedia.org/wiki/Elsewhere"), "Elsewhere");   // the tab moved on
+        Assert.False(await _indexer.IndexAsync(t.Id));
+
+        lease.DuringExtract = () => lease.RaiseSignals(PageSignals.PasswordField);                                             // the page turned out to have a password field
+        Assert.False(await _indexer.IndexAsync(t.Id));
+        Assert.Equal(0, _memory.Stats().Docs);
+    }
+
+    [Fact]
+    public async Task Tightening_a_pages_class_removes_it_from_the_index()
+    {
+        var t = await Open("https://intranet.corp.test/report");
+        Assert.True(await _indexer.IndexAsync(t.Id));
+        Assert.Equal(1, _memory.Stats().Docs);
+
+        _leases[t.Id].RaiseSignals(PageSignals.Authenticated);    // it was a logged-in page after all
         Assert.Equal(0, _memory.Stats().Docs);
     }
 }

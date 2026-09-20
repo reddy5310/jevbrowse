@@ -19,6 +19,9 @@ AI agents never receive blanket access to the browser (§12, §27). They get a *
 }
 ```
 
+## Authority: the ceiling
+Holding the endpoint token is not authority. When you enable the local endpoint you approve a **ceiling** (domains, actions, time). An agent's `POST /sessions` is a *request*: it is clamped to the ceiling (domains outside it are dropped, actions intersected, budgets reduced, denied data classes merged, `destructive: allow` downgraded to `confirm`), you are shown the requested versus the granted manifest, and you approve each session. With no ceiling the endpoint refuses everything. Agents can only ever be given a throwaway identity (Disposable or Private) in a **fresh workspace and profile per session**; naming an existing workspace grants nothing, and two sessions never share cookies. Sessions are closed when they expire even if the agent never calls again.
+
 ## What is enforced, in order
 1. Session open, not expired, action budget left.
 2. Action is in the manifest.

@@ -21,8 +21,8 @@ Marginal cost per live page ≈ 150–240 MB; fixed browser/GPU/utility overhead
 
 | Metric | Value |
 |---|---|
-| restore p50 | 350 ms |
-| restore p95 | 1,236 ms |
+| restore p50 | 350 ms at Phase 2 → **≈520 ms today** (see the drift note at the end of this file) |
+| restore p95 | 1,236 ms at Phase 2 → **≈1,270 ms today** |
 | checkpoints written | 8/8 |
 | thumbnails written | 8/8 (~115 KB each) |
 | scroll position restored | 7/7 scrollable pages |
@@ -71,3 +71,28 @@ A PR that moves restore p95 or the 5-live private figure by more than 10% needs 
 | Never Gonna Give You Up | 0 s (no ads served) | 0 s, 0 pruned |
 
 Wall detection: one false positive from a hidden renderer, fixed by requiring visibility. No visible enforcement notice in any run. Ads are served non-deterministically; the claim we make is only what this table shows.
+
+### Privacy gate (real engine, `--privacy-check`, 2026-09-20)
+
+Real WebView2 renderers driven through a public control, a sensitive-URL tab (real bank login page → SECRET) and a Private-container session (two tabs, virtualize, workspace switch, permission block), then disk and database inspected.
+
+| Check | Result |
+|---|---|
+| Public control produced a thumbnail (so "none" elsewhere is meaningful) | yes |
+| Sensitive/secret page thumbnails / checkpoint rows | 0 / 0 |
+| Private thumbnails, tab rows, checkpoint rows, workspace rows, timeline entries, permission rows, index documents | 0, 0, 0, 0, 0, 0, 0 |
+| Ephemeral profile directories after restart | 0 (swept) |
+
+**PASS.** Before the fixes in ADR 0016 the first three private counts were non-zero by construction (thumbnails captured on deactivation; timeline recorded every workspace).
+
+### Restore latency drift (measured 2026-09-20, attribution run)
+
+The Phase 2 figure (p50 350 ms) predates Shield, cosmetic filtering, site modules and permission handling, all of which now run **before a page's first navigation**. Same benchmark, same machine, 8 pages, 2-3 runs each:
+
+| Build | p50 | p95 |
+|---|---|---|
+| Phase 2 (original baseline) | 350 ms | 1,236 ms |
+| Pre-review commit `bcefadc` | 526–552 ms | 1,250–1,269 ms |
+| After review fixes | 512–530 ms | 1,270–1,380 ms |
+
+The independent-review changes did **not** move restore latency: the pre-review and post-review builds agree within run-to-run spread. The ≈170 ms drift since Phase 2 comes from pre-navigation work; hypothesis, unverified: registering the ~1 MB per-host cosmetic stylesheet script and the site modules on every renderer acquisition. Tracked in ROADMAP as a performance item; the 10 % PR gate in this file applies from these numbers onward.

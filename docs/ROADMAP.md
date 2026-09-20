@@ -25,3 +25,13 @@
 - **Autonomous agent access to personal browser state.** Manifest-scoped sessions only (ADR 0012).
 - **Mandatory account, sync, rewards or AI.** Constitution rules 2 and 5.
 - **RAM-saving claims before reproducible benchmarks.** Baselines first (docs/performance).
+
+## Added after the independent review (ADR 0016)
+- **`Unknown` data class** with conservative persistence, plus a positive-evidence model for PUBLIC (today unrecognised, signal-free pages default to PUBLIC).
+- **Restore-latency work**: measure and reduce pre-navigation cost (cosmetic sheet registration, site modules) back toward the Phase 2 350 ms.
+- Real-engine checks for: agent redirect enforcement, Shield per-site disable, permission lifetime across restart (`SavesInProfile=false`), a stricter class purging inside a live renderer.
+- Whole-browser memory measurement (shell process + engine) on 8/16/32 GB machines, low-memory runs, background CPU.
+- Bookmark import/export and a migration path from Chrome/Edge/Firefox.
+- Accessibility pass: keyboard-only, screen reader, high contrast, scaling, narrow windows.
+- Signed MSIX and a security-update path; crash recovery journal.
+- Agent CPU/network quotas.

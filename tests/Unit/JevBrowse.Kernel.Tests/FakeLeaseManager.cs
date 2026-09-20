@@ -89,7 +89,14 @@ public sealed class FakeLease(ResourceId id, Uri url, FakeLeaseManager owner) : 
 
     public void ApplyCheckpoint(Checkpoint cp) { Applied = cp; ScrollY = cp.ScrollY; }
     public string? ReadableText { get; set; }
-    public Task<string?> ExtractReadableTextAsync(CancellationToken ct) => Task.FromResult(ReadableText);
+    /// <summary>Simulates a slow in-page extraction; <see cref="DuringExtract"/> runs while the caller is awaiting it.</summary>
+    public TimeSpan ExtractDelay { get; set; }
+    public Action? DuringExtract { get; set; }
+    public async Task<string?> ExtractReadableTextAsync(CancellationToken ct)
+    {
+        if (ExtractDelay > TimeSpan.Zero) { DuringExtract?.Invoke(); await Task.Delay(ExtractDelay, ct); }
+        return ReadableText;
+    }
 
     public Func<Uri, bool>? NavigationGuard { get; set; }
     /// <summary>Simulates the page/redirect/click attempting to navigate: returns whether the renderer would allow it.</summary>

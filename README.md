@@ -4,7 +4,7 @@
 
 An open-source, Windows-first browser built as a scheduler, memory system, privacy boundary and safe agent runtime, not just a tab container. Core invariant: **visible resource ≠ live renderer**. Hundreds of tabs can be open; only the working set holds a Chromium renderer.
 
-Status: **alpha**, 11 architecture phases implemented, 163 unit tests, every phase gated on a measured result. See `docs/BUILD_PLAN.md`.
+Status: **alpha**. The 12 architecture phases are implemented, 216 unit tests, plus real-engine checks (`--privacy-check`, `--restore-bench`, `--shield-check`, `--youtube-check`). An independent review found the privacy and lifecycle boundaries did not yet match the claims; they were fixed and re-verified (ADR 0016). What is proven, and at what level, is in [`docs/EVIDENCE_MATRIX.md`](docs/EVIDENCE_MATRIX.md); read it before trusting the browser with anything important. See `docs/BUILD_PLAN.md`.
 
 ## What it does today
 | Subsystem | Behaviour | Evidence |
@@ -27,7 +27,7 @@ Requires Windows 11, the WebView2 runtime (ships with Edge), and the .NET 10 SDK
 
 ```powershell
 . .\scripts\env.ps1                                   # keeps SDK, caches and data where you choose
-dotnet test                                           # 163 tests
+dotnet test                                           # 216 tests
 dotnet build src/JevBrowse.App -p:Platform=x64
 .\artifacts\bin\JevBrowse.App\debug_win-x64\JevBrowse.App.exe
 ```
@@ -35,7 +35,7 @@ dotnet build src/JevBrowse.App -p:Platform=x64
 Benchmarks: `JevBrowse.App.exe --memory-lab | --restore-bench | --shield-check | --memory-check` write JSON to `<data>/benchmarks`.
 Portable release: `.\scripts\release.ps1 -Version 0.1.0-alpha.1` (self-contained zip + SHA-256 + SBOM).
 
-Optional AI: set `OPENROUTER_API_KEY` (and `OPENROUTER_MODEL`) or `JEV_API_KEY` + `JEV_API_BASE` in your environment, then turn AI on in the Brain panel. Nothing is sent without a click.
+Optional AI: set `OPENROUTER_API_KEY` (and `OPENROUTER_MODEL`) or `JEV_API_KEY` in your environment, then turn AI on in the Brain panel. **Ask** and **Explain error** send only when you click, after showing what will be sent and what was redacted. Background use of Jev (page classification, ad-slot judgement) is a *separate* switch, off by default. Pages that are private, secret or sensitive are never sent.
 
 ## Keyboard
 `Ctrl+K` opens the command palette (§26): hibernate everything except current, search browser memory, restore a context, explain a decision, open in a disposable identity, grant Claude Code localhost + GitHub for 30 minutes, and more.

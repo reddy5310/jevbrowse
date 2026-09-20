@@ -129,6 +129,8 @@ public sealed class WebView2Lease : IRendererLease
           const scan = () => {
             if (document.querySelector('input[type="password"]')) post('jev:secret-field');
             if (document.querySelector('input[autocomplete^="cc-"]')) post('jev:payment-field');
+            // "Logged in" evidence, structure only: a sign-out link or form. Raises the class (less persistence, no AI).
+            if (document.querySelector('a[href*="logout" i], a[href*="signout" i], a[href*="sign_out" i], a[href*="sign-out" i], a[href*="log-out" i], form[action*="logout" i], form[action*="signout" i]')) post('jev:authenticated');
           };
           if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', scan); else scan();
           new MutationObserver(() => scan()).observe(document.documentElement, { childList: true, subtree: true });
@@ -185,6 +187,7 @@ public sealed class WebView2Lease : IRendererLease
                 case "jev:dirty-form": lease.SetDetected(ProtectionFlags.DirtyForm, true); break;
                 case "jev:secret-field": lease.SetSignals(lease._signals | PageSignals.PasswordField); break;
                 case "jev:payment-field": lease.SetSignals(lease._signals | PageSignals.PaymentField); break;
+                case "jev:authenticated": lease.SetSignals(lease._signals | PageSignals.Authenticated); break;
             }
         };
         await core.AddScriptToExecuteOnDocumentCreatedAsync(PageScript);

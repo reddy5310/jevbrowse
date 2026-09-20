@@ -29,6 +29,27 @@ public class DataClassifierTests
     }
 
     [Fact]
+    public void Independent_evidence_combines_by_the_stricter_result()
+    {
+        // an "authenticated" signal must not downgrade a banking URL
+        Assert.Equal(DataClass.Sensitive, C.Classify(new Uri("https://netbanking.hdfcbank.com/"), IdentityContainer.Personal, PageSignals.Authenticated));
+        // and an unrecognised URL becomes AUTHENTICATED as soon as the page shows it is logged in (private repo, dashboard)
+        Assert.Equal(DataClass.Public, C.Classify(new Uri("https://github.com/company/project"), IdentityContainer.Personal, PageSignals.None));
+        Assert.Equal(DataClass.Authenticated, C.Classify(new Uri("https://github.com/company/project"), IdentityContainer.Personal, PageSignals.Authenticated));
+        // a password field beats a URL that looked public and a login signal
+        Assert.Equal(DataClass.Secret, C.Classify(new Uri("https://news.example.com/"), IdentityContainer.Personal, PageSignals.Authenticated | PageSignals.PasswordField));
+    }
+
+    [Fact]
+    public void User_override_cannot_hide_a_password_field_but_does_outrank_url_heuristics()
+    {
+        var c = new DataClassifier(site => site == "corp.test" ? DataClass.Public : null);
+        Assert.Equal(DataClass.Public, c.Classify(new Uri("https://accounts.corp.test/login"), IdentityContainer.Personal, PageSignals.None));      // user's own site, their call
+        Assert.Equal(DataClass.Secret, c.Classify(new Uri("https://accounts.corp.test/login"), IdentityContainer.Personal, PageSignals.PasswordField));
+        Assert.Equal(DataClass.Secret, c.Classify(new Uri("https://accounts.corp.test/pay"), IdentityContainer.Personal, PageSignals.PaymentField));
+    }
+
+    [Fact]
     public void Ephemeral_container_wins_over_everything()
     {
         Assert.Equal(DataClass.Ephemeral, C.Classify(new Uri("https://en.wikipedia.org/"), IdentityContainer.Private, PageSignals.None));

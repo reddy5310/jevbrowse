@@ -38,7 +38,11 @@ public sealed class DevSpaceAdapter
         Resolver = new EnvironmentResolver(Projects);
     }
 
-    public void SetEnabled(bool on) => Enabled = on;
+    public void SetEnabled(bool on)
+    {
+        Enabled = on;
+        if (!on) Data.Clear();   // nothing collected while it was on lingers after it is off
+    }
 
     public async void Attach(CoreWebView2 core, ResourceId id)
     {
@@ -51,8 +55,11 @@ public sealed class DevSpaceAdapter
         }
         catch (Exception) { return; }
 
+        // Listeners cannot be detached from an existing renderer, so each one checks Enabled: turning DevSpace off
+        // (or leaving Developer mode) stops collection immediately, and data already held is dropped.
         core.GetDevToolsProtocolEventReceiver("Runtime.consoleAPICalled").DevToolsProtocolEventReceived += (_, e) =>
         {
+            if (!Enabled) return;
             try
             {
                 using var doc = JsonDocument.Parse(e.ParameterObjectAsJson);
@@ -65,6 +72,7 @@ public sealed class DevSpaceAdapter
         };
         core.GetDevToolsProtocolEventReceiver("Runtime.exceptionThrown").DevToolsProtocolEventReceived += (_, e) =>
         {
+            if (!Enabled) return;
             try
             {
                 using var doc = JsonDocument.Parse(e.ParameterObjectAsJson);
@@ -78,9 +86,10 @@ public sealed class DevSpaceAdapter
             catch (Exception) { }
         };
 
-        core.WebResourceRequested += (_, e) => data.Started[e.Request.Uri] = DateTimeOffset.UtcNow;
+        core.WebResourceRequested += (_, e) => { if (Enabled) data.Started[e.Request.Uri] = DateTimeOffset.UtcNow; };
         core.WebResourceResponseReceived += (_, e) =>
         {
+            if (!Enabled) return;
             if (!Uri.TryCreate(e.Request.Uri, UriKind.Absolute, out var url)) return;
             TimeSpan? dur = data.Started.TryRemove(e.Request.Uri, out var start) ? DateTimeOffset.UtcNow - start : null;
             data.Network.Enqueue(new NetEntry(DateTimeOffset.UtcNow, url, e.Request.Method, e.Response?.StatusCode ?? 0, dur, core.Source));

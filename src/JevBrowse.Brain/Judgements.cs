@@ -50,11 +50,22 @@ public static class Judgements
 
     public const string WorkspaceQ = "workspace";
 
-    /// <summary>Which of the user's workspaces this page belongs to. Names only; the user confirms any move.</summary>
+    /// <summary>
+    /// Which of the user's workspaces this page belongs to. Option KEYS are opaque ("w0", "w1"): keys are not
+    /// redacted, and a workspace can be named after a person or a plan. Names appear only in the descriptions, which
+    /// the router redacts. Map the answer back with <see cref="WorkspaceNameFor"/>. The user confirms any move.
+    /// </summary>
     public static IReadOnlyDictionary<string, Question> WorkspaceQuestion(IReadOnlyList<string> workspaceNames) => new Dictionary<string, Question>
     {
-        [WorkspaceQ] = new ChoiceQuestion("Which of the user's workspaces does this page most plausibly belong to?", workspaceNames.Distinct().ToDictionary(n => n, n => $"The workspace named '{n}'")),
+        [WorkspaceQ] = new ChoiceQuestion("Which of the user's workspaces does this page most plausibly belong to?",
+            workspaceNames.Distinct().Select((n, i) => (Key: $"w{i}", Desc: $"The workspace named '{n}'")).ToDictionary(x => x.Key, x => x.Desc)),
     };
+
+    public static string? WorkspaceNameFor(string choiceKey, IReadOnlyList<string> workspaceNames)
+    {
+        var names = workspaceNames.Distinct().ToList();
+        return choiceKey.Length > 1 && choiceKey[0] == 'w' && int.TryParse(choiceKey.AsSpan(1), out var i) && i >= 0 && i < names.Count ? names[i] : null;
+    }
 
     public static IReadOnlyDictionary<string, Question> RerankQuestions(IReadOnlyList<string> candidateTitles)
     {

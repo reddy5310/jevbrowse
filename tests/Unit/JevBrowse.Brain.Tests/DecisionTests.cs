@@ -57,9 +57,15 @@ public class DecisionTests
         Assert.Null(await r.JudgeAsync("t", "state", q, DataClass.Public, IdentityContainer.Personal, default));
         Assert.Equal("policy:cloud_disabled", log[^1].Rule);
         policy.CloudEnabled = true;
+        // AI + Cloud on is consent to explicit actions, NOT to background calls: automatic needs its own switch.
+        Assert.Null(await r.JudgeAsync("t", "state", q, DataClass.Public, IdentityContainer.Personal, default));
+        Assert.Equal("policy:automatic_judgments_off", log[^1].Rule);
+        policy.AutomaticJudgments = true;
         Assert.Null(await r.JudgeAsync("t", "state", q, DataClass.Secret, IdentityContainer.Personal, default));
         Assert.StartsWith("hard:", log[^1].Rule);
         Assert.Null(await r.JudgeAsync("t", "state", q, DataClass.Sensitive, IdentityContainer.Personal, default));
+        Assert.Equal("policy:cloud_not_permitted_for_class", log[^1].Rule);
+        Assert.Null(await r.JudgeAsync("t", "state", q, DataClass.Authenticated, IdentityContainer.Personal, default));   // Trust OS: automatic never sends AUTHENTICATED
         Assert.Equal("policy:cloud_not_permitted_for_class", log[^1].Rule);
         Assert.Null(await r.JudgeAsync("t", "state", q, DataClass.Public, IdentityContainer.Private, default));
         Assert.Empty(jev.Calls);
@@ -71,6 +77,55 @@ public class DecisionTests
         Assert.Equal(Provider.Jev, log[^1].Source);
         Assert.Contains("data_class=authenticated@0.90", log[^1].Output);
         Assert.True(log[^1].Redacted);
+        // the audit record says what was asked, about which class, and whether a human clicked
+        Assert.Equal("classify", log[^1].Task);
+        Assert.Equal("Public", log[^1].DataClassName);
+        Assert.True(log[^1].Automatic);
+    }
+
+    [Fact]
+    public async Task Explicit_requests_may_reach_authenticated_pages_but_never_above_and_size_is_capped()
+    {
+        var jev = new FakeDecisionProvider();
+        var log = new List<Decision>();
+        var policy = new BrainPolicy { AiEnabled = true, CloudEnabled = true, MaxInputChars = 200 };   // AutomaticJudgments stays OFF
+        var r = new BrainRouter(new DefaultTrustPolicy(), policy, [], log.Add, () => T0, jev);
+        var q = Judgements.PageQuestions();
+
+        Assert.NotNull(await r.JudgeAsync("rerank", "ok", q, DataClass.Authenticated, IdentityContainer.Personal, default, automatic: false));
+        Assert.False(log[^1].Automatic);
+        Assert.Null(await r.JudgeAsync("rerank", "ok", q, DataClass.Sensitive, IdentityContainer.Personal, default, automatic: false));
+        Assert.Equal("policy:cloud_not_permitted_for_class", log[^1].Rule);
+        Assert.Null(await r.JudgeAsync("rerank", new string('x', 500), q, DataClass.Public, IdentityContainer.Personal, default, automatic: false));
+        Assert.Equal("hard:input_too_large", log[^1].Rule);                                            // previously unenforced on this path
+        Assert.Single(jev.Calls);
+    }
+
+    [Fact]
+    public async Task Question_text_is_redacted_too_not_just_the_state()
+    {
+        var jev = new FakeDecisionProvider();
+        var policy = new BrainPolicy { AiEnabled = true, CloudEnabled = true };
+        var r = new BrainRouter(new DefaultTrustPolicy(), policy, [], null, () => T0, jev);
+        // a workspace named after a person's email, and a page-derived descriptor containing a card number
+        var q = Judgements.WorkspaceQuestion(["alice@example.com's trip", "Work"]);
+        var q2 = new Dictionary<string, Question> { ["e0"] = new NoulQuestion("Element 1: label=\"card 4111 1111 1111 1111\"") };
+
+        await r.JudgeAsync("workspace", "state", q, DataClass.Public, IdentityContainer.Personal, default, automatic: false);
+        await r.JudgeAsync("clutter", "state", q2, DataClass.Public, IdentityContainer.Personal, default, automatic: false);
+
+        var sent = string.Join("\n", jev.Calls.SelectMany(c => c.Questions.Values.Select(v => v switch
+        {
+            ChoiceQuestion c2 => c2.Instructions + string.Join(" ", c2.Options.Keys) + string.Join(" ", c2.Options.Values),
+            NoulQuestion n => n.Instructions,
+            _ => "",
+        })));
+        Assert.DoesNotContain("4111", sent);
+        Assert.DoesNotContain("alice@example.com", sent);           // keys are opaque and descriptions are scrubbed: the WHOLE payload is clean
+        Assert.Contains("REDACTED:email", sent);
+        Assert.Equal("Work", Judgements.WorkspaceNameFor("w1", ["alice@example.com's trip", "Work"]));   // and the answer still maps back
+        Assert.Null(Judgements.WorkspaceNameFor("w9", ["Work"]));
+        Assert.Null(Judgements.WorkspaceNameFor("Work", ["Work"]));                                      // a non-opaque key is not trusted
     }
 
     [Fact]

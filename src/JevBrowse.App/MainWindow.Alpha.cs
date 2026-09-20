@@ -37,7 +37,9 @@ public sealed partial class MainWindow
         Show(DevButton, mode == ProductMode.Developer);
         Show(AgentsButton, mode == ProductMode.Agent);
         Show(ReceiptButton, mode != ProductMode.Simple);
-        if (mode == ProductMode.Developer) _dev?.SetEnabled(true);
+        // Modes are capability switches, not just visibility: what a mode hides it must also stop doing.
+        if (_indexer is not null) _indexer.Enabled = mode is not (ProductMode.Simple or ProductMode.Private);
+        if (_dev is not null) _dev.SetEnabled(mode == ProductMode.Developer || Environment.GetEnvironmentVariable("JEVBROWSE_DEVSPACE") == "1");
         if (mode == ProductMode.Private) _ = EnsurePrivateWorkspaceAsync();
         UpdateEnvChrome();
     }
@@ -59,6 +61,56 @@ public sealed partial class MainWindow
         ApplyProductMode((ProductMode)ProductModeBox.SelectedIndex);
         StatusText.Text = $"mode: {_mode}";
     }
+
+    // ---- Conventional browser shortcuts ----
+
+    private readonly Stack<Uri> _closedTabs = new();
+
+    private static void Handle(KeyboardAcceleratorInvokedEventArgs e) => e.Handled = true;
+
+    private void OnFocusAddress(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); AddressBox.Focus(FocusState.Keyboard); AddressBox.SelectAll(); }
+    private void OnNewTabAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); OnNewTab(s, new RoutedEventArgs()); }
+    private void OnReloadAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); WithActiveLease(l => l.View.CoreWebView2?.Reload()); }
+
+    private async void OnCloseTabAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e)
+    {
+        Handle(e);
+        if (_kernel?.Active is not { } t) return;
+        // Remember it for Ctrl+Shift+T, except where the identity promises no trace (Private/Disposable).
+        if (!_kernel.ContainerOf(t).IsEphemeral() && t.Url.Scheme is "http" or "https") { _closedTabs.Push(t.Url); if (_closedTabs.Count > 20) { var keep = _closedTabs.Take(20).Reverse().ToList(); _closedTabs.Clear(); foreach (var u in keep) _closedTabs.Push(u); } }
+        await _kernel.CloseAsync(t.Id);
+        var next = _kernel.TabsIn(_kernel.ActiveWorkspace).LastOrDefault();
+        if (next is not null) await _kernel.ActivateAsync(next.Id);
+    }
+
+    private async void OnReopenClosedAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e)
+    {
+        Handle(e);
+        if (_kernel is null || !_closedTabs.TryPop(out var url)) { StatusText.Text = "no recently closed tab"; return; }
+        var t = _kernel.Open(url);
+        await _kernel.ActivateAsync(t.Id);
+    }
+
+    private async Task StepTabAsync(int delta)
+    {
+        if (_kernel is null) return;
+        var tabs = _kernel.TabsIn(_kernel.ActiveWorkspace).ToList();
+        if (tabs.Count < 2) return;
+        var i = Math.Max(0, tabs.FindIndex(t => t.Id == _kernel.Active?.Id));
+        await _kernel.ActivateAsync(tabs[(i + delta + tabs.Count) % tabs.Count].Id);
+    }
+
+    private async void OnNextTabAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); await StepTabAsync(+1); }
+    private async void OnPrevTabAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); await StepTabAsync(-1); }
+
+    private void Zoom(double delta, bool reset = false) => WithActiveLease(l =>
+    {
+        var v = l.View; v.Focus(FocusState.Programmatic);
+        _ = v.CoreWebView2?.ExecuteScriptAsync(reset ? "document.body.style.zoom='1'" : $"document.body.style.zoom=String(Math.max(.25, Math.min(5, (parseFloat(document.body.style.zoom||'1')) + ({delta.ToString(System.Globalization.CultureInfo.InvariantCulture)}))))");
+    });
+    private void OnZoomInAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); Zoom(0.1); }
+    private void OnZoomOutAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); Zoom(-0.1); }
+    private void OnZoomResetAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); Zoom(0, reset: true); }
 
     // ---- Command palette (§26) ----
 

@@ -7,6 +7,18 @@
         <Grid.KeyboardAccelerators>
             <KeyboardAccelerator Key="K" Modifiers="Control" Invoked="OnPaletteAccelerator"/>
             <KeyboardAccelerator Key="F1" Invoked="OnHelpAccelerator"/>
+            <!-- conventional browser shortcuts -->
+            <KeyboardAccelerator Key="L" Modifiers="Control" Invoked="OnFocusAddress"/>
+            <KeyboardAccelerator Key="T" Modifiers="Control" Invoked="OnNewTabAccelerator"/>
+            <KeyboardAccelerator Key="W" Modifiers="Control" Invoked="OnCloseTabAccelerator"/>
+            <KeyboardAccelerator Key="T" Modifiers="Control,Shift" Invoked="OnReopenClosedAccelerator"/>
+            <KeyboardAccelerator Key="R" Modifiers="Control" Invoked="OnReloadAccelerator"/>
+            <KeyboardAccelerator Key="F5" Invoked="OnReloadAccelerator"/>
+            <KeyboardAccelerator Key="Tab" Modifiers="Control" Invoked="OnNextTabAccelerator"/>
+            <KeyboardAccelerator Key="Tab" Modifiers="Control,Shift" Invoked="OnPrevTabAccelerator"/>
+            <KeyboardAccelerator Key="Add" Modifiers="Control" Invoked="OnZoomInAccelerator"/>
+            <KeyboardAccelerator Key="Subtract" Modifiers="Control" Invoked="OnZoomOutAccelerator"/>
+            <KeyboardAccelerator Key="Number0" Modifiers="Control" Invoked="OnZoomResetAccelerator"/>
         </Grid.KeyboardAccelerators>
         <Grid.RowDefinitions>
             <RowDefinition Height="36"/>

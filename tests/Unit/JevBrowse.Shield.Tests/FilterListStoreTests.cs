@@ -37,6 +37,27 @@ public class FilterListStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task A_crash_between_the_two_activation_renames_is_recovered_on_the_next_start()
+    {
+        var store = new FilterListStore(_root);
+        var src = new[] { new FilterListStore.ListSource("a", new Uri("https://lists.test/a.txt")) };
+        var good = new HttpClient(new FakeHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(GoodList(1500, "good-")) }));
+        Assert.True((await store.UpdateAsync(good, src)).Activated);
+
+        // Simulate the crash: active was renamed to previous, then the process died before staging → active,
+        // leaving a half-written staging directory behind.
+        Directory.Move(store.ActiveDir, store.PreviousDir);
+        Directory.CreateDirectory(store.StagingDir);
+        File.WriteAllText(Path.Combine(store.StagingDir, "a.txt"), "||half-written");
+        Assert.False(Directory.Exists(store.ActiveDir));
+
+        var restarted = new FilterListStore(_root);          // startup recovery
+        Assert.True(restarted.HasActiveLists);
+        Assert.Equal(1500, FilterEngine.Compile(restarted.ReadActiveLines()).RuleCount);   // the last known-good list
+        Assert.False(Directory.Exists(restarted.StagingDir)); // the untrusted partial download is gone
+    }
+
+    [Fact]
     public async Task Bad_download_never_touches_active()
     {
         var store = new FilterListStore(_root);

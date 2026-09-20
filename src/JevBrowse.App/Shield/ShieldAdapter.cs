@@ -6,11 +6,31 @@ using Microsoft.Web.WebView2.Core;
 
 namespace JevBrowse.App.Shield;
 
+/// <summary>
+/// Everything Shield knows about ONE renderer. Page counters describe the current document and reset on every
+/// top-level navigation (<see cref="NavId"/> identifies it); SessionBlocked is cumulative. Script registrations are
+/// owned here, per renderer, so one tab can never remove or overwrite another tab's scripts.
+/// </summary>
 public sealed class TabShieldStats
 {
     public int Total, Blocked, ThirdParty, CosmeticSelectors, Collapsed, SemanticCollapsed;
+    public int SessionBlocked;
     public int AdsPruned, AdsSkipped, WallSeen;
     public string? LastCollapseResult, LastSemantic;
+    /// <summary>Incremented on every top-level navigation; delayed work compares it to know it is still on the same document.</summary>
+    public int NavId;
+    /// <summary>The user pressed "show what Shield hid" for this document: no further hiding until the next navigation.</summary>
+    public int RestoredNavId = -1;
+    public CoreWebView2? Core;
+    public string? CosmeticScriptId, SiteModulesScriptId;
+
+    public void ResetPage()
+    {
+        Total = Blocked = ThirdParty = CosmeticSelectors = Collapsed = SemanticCollapsed = 0;
+        LastCollapseResult = LastSemantic = null;
+        while (Recent.TryDequeue(out _)) { }
+        ThirdPartyHosts.Clear();
+    }
     public List<string> SiteModules { get; } = [];
     public readonly DateTimeOffset StartedAt = DateTimeOffset.UtcNow;
     public readonly ConcurrentQueue<(string Host, string Rule)> Recent = new();
@@ -167,6 +187,9 @@ public sealed class ShieldAdapter
     }
 
     public ConcurrentDictionary<ResourceId, TabShieldStats> Stats { get; } = new();
+    private int _sessionBlockedTotal;
+    /// <summary>Blocked requests since the app started, across all tabs including ones since virtualized.</summary>
+    public int SessionBlockedTotal => Volatile.Read(ref _sessionBlockedTotal);
     /// <summary>A site's anti-adblock wall was detected on this tab; the window tells the user and offers the per-site switch.</summary>
     public event Action<ResourceId>? WallDetected;
     /// <summary>Optional semantic clutter pass (JevBrain). Null = off. Never on the request path; runs after load.</summary>
@@ -174,11 +197,48 @@ public sealed class ShieldAdapter
     public int RuleCount => _engine.RuleCount;
     public void SetEngine(FilterEngine engine) => _engine = engine;
 
-    public bool IsEnabledFor(string site) => !_disabledSites.Contains(site);
-    public void SetEnabledFor(string site, bool enabled)
+    public bool IsEnabledFor(string site) { lock (_disabledSites) return !_disabledSites.Contains(site); }
+
+    /// <summary>
+    /// Per-site switch. Disabling removes EVERY layer for that site in every open renderer (cosmetic sheet, site
+    /// modules) rather than only stopping new ones; the caller reloads the page so the document is clean.
+    /// </summary>
+    public async Task SetEnabledForAsync(string site, bool enabled)
     {
         lock (_disabledSites) { if (enabled) _disabledSites.Remove(site); else _disabledSites.Add(site); }
         _sites.SetShieldEnabled(site, enabled);
+        foreach (var stats in Stats.Values.ToList())
+        {
+            if (stats.Core is not { } core) continue;
+            try
+            {
+                await RegisterSiteModulesAsync(core, stats);
+                if (Uri.TryCreate(core.Source, UriKind.Absolute, out var u) && u.Scheme is "http" or "https") await RegisterCosmeticAsync(core, stats, u.Host);
+            }
+            catch (Exception) { /* renderer went away */ }
+        }
+    }
+
+    private List<string> DisabledSnapshot() { lock (_disabledSites) return [.. _disabledSites]; }
+
+    /// <summary>
+    /// One document-start script holding every site module, each gated on its host suffixes AND on the current
+    /// disabled-sites list (baked in at registration and re-registered whenever that list changes), so a disabled
+    /// site's modules never run even though they are registered before any navigation.
+    /// </summary>
+    private async Task RegisterSiteModulesAsync(CoreWebView2 core, TabShieldStats stats)
+    {
+        if (stats.SiteModulesScriptId is { } old) { try { core.RemoveScriptToExecuteOnDocumentCreated(old); } catch (Exception) { } stats.SiteModulesScriptId = null; }
+        var off = System.Text.Json.JsonSerializer.Serialize(DisabledSnapshot());
+        var sb = new System.Text.StringBuilder();
+        sb.Append("(() => { const OFF = ").Append(off).Append("; const host = location.host.toLowerCase();\n")
+          .Append("  const site = h => { const l = h.split('.'); return l.length <= 2 ? h : l.slice(-2).join('.'); };\n")
+          .Append("  if (OFF.some(s => host === s || host.endsWith('.' + s) || site(host) === s)) return;\n");
+        foreach (var m in SiteScripts.All)
+            sb.Append("  (() => { const h = host; if (!").Append(System.Text.Json.JsonSerializer.Serialize(m.HostSuffixes)).Append(".some(s => h === s || h.endsWith('.' + s))) return;\n")
+              .Append(m.Script).Append("\n  })();\n");
+        sb.Append("})();");
+        stats.SiteModulesScriptId = await core.AddScriptToExecuteOnDocumentCreatedAsync(sb.ToString());
     }
 
     // Post-load fallback: if a cross-host navigation raced the document-start registration, add the sheet now.
@@ -191,38 +251,56 @@ public sealed class ShieldAdapter
     public async Task AttachAsync(CoreWebView2 core, ResourceId id, Uri initialUrl)
     {
         var stats = Stats.GetOrAdd(id, _ => new TabShieldStats());
+        stats.Core = core;
 
-        // Site modules: registered once, before any navigation, self-gated on host inside the script.
-        foreach (var m in SiteScripts.All)
-        {
-            var gated = $$"""
-                (() => { const h = location.host.toLowerCase(); if (!{{System.Text.Json.JsonSerializer.Serialize(m.HostSuffixes)}}.some(s => h === s || h.endsWith('.' + s))) return;
-                {{m.Script}}
-                })();
-                """;
-            try { await core.AddScriptToExecuteOnDocumentCreatedAsync(gated); } catch (Exception) { }
-        }
+        // Site modules: registered once per renderer, before any navigation, gated inside the script on host + disabled list.
+        try { await RegisterSiteModulesAsync(core, stats); } catch (Exception) { }
         if (initialUrl.Scheme is "http" or "https")
         {
-            foreach (var m in SiteScripts.For(initialUrl.Host)) stats.SiteModules.Add($"{m.Name} v{m.Version}");
+            if (IsEnabledFor(NetworkRequest.SiteOf(initialUrl.Host))) foreach (var m in SiteScripts.For(initialUrl.Host)) stats.SiteModules.Add($"{m.Name} v{m.Version}");
             await RegisterCosmeticAsync(core, stats, initialUrl.Host);
         }
         Attach(core, id);
     }
 
-    private string? _cosmeticId;
+    /// <summary>
+    /// Registers (or, for a disabled site, REMOVES) this renderer's cosmetic stylesheet script. The previous
+    /// registration is always removed first; it is per-renderer state, not adapter state.
+    /// </summary>
     private async Task RegisterCosmeticAsync(CoreWebView2 core, TabShieldStats stats, string host)
     {
-        if (!IsEnabledFor(NetworkRequest.SiteOf(host))) return;
-        var css = CssFor(host);
-        if (css.Length == 0) return;
         try
         {
-            if (_cosmeticId is { } old) core.RemoveScriptToExecuteOnDocumentCreated(old);
-            _cosmeticId = await core.AddScriptToExecuteOnDocumentCreatedAsync(CosmeticScript.Replace("__CSS__", System.Text.Json.JsonSerializer.Serialize(css)));
+            if (stats.CosmeticScriptId is { } old) { core.RemoveScriptToExecuteOnDocumentCreated(old); stats.CosmeticScriptId = null; }
+            stats.CosmeticSelectors = 0;
+            if (!IsEnabledFor(NetworkRequest.SiteOf(host))) return;
+            var css = CssFor(host);
+            if (css.Length == 0) return;
+            stats.CosmeticScriptId = await core.AddScriptToExecuteOnDocumentCreatedAsync(CosmeticScript.Replace("__CSS__", System.Text.Json.JsonSerializer.Serialize(css)));
             stats.CosmeticSelectors = css.Count(c => c == '\n');
         }
         catch (Exception) { }
+    }
+
+    /// <summary>
+    /// "Show what Shield hid": undo for the current document. Restores every element the collapse layers hid (they are
+    /// tagged), removes the cosmetic sheet, and stops further hiding until the next navigation.
+    /// </summary>
+    public async Task<int> RestoreHiddenAsync(CoreWebView2 core, ResourceId id)
+    {
+        if (Stats.TryGetValue(id, out var st)) st.RestoredNavId = st.NavId;
+        try
+        {
+            var r = await core.ExecuteScriptAsync("""
+                (() => { let n = 0;
+                  document.querySelectorAll('[data-jev-collapsed]').forEach(e => { e.style.removeProperty('display'); delete e.dataset.jevCollapsed; n++; });
+                  document.querySelectorAll('[data-jev-cand]').forEach(e => { delete e.dataset.jevCand; });
+                  const s = document.getElementById('jev-shield-cosmetic'); if (s) { s.remove(); n++; }
+                  return n; })()
+                """);
+            return int.TryParse(r, out var v) ? v : 0;
+        }
+        catch (Exception) { return 0; }
     }
 
     public void Attach(CoreWebView2 core, ResourceId id)
@@ -242,31 +320,36 @@ public sealed class ShieldAdapter
             }
         };
 
-        // Cross-host navigation: swap the cosmetic sheet for the new host (best effort; the post-load fallback covers the race).
+        // Every top-level navigation starts a new document: new NavId, fresh page counters and block evidence, so old
+        // hosts and delayed work from the previous page can never be applied to this one.
         string lastHost = "";
         core.NavigationStarting += async (_, e) =>
         {
+            stats.NavId++;
+            stats.ResetPage();
             if (!Uri.TryCreate(e.Uri, UriKind.Absolute, out var u) || u.Scheme is not ("http" or "https") || u.Host == lastHost) return;
             lastHost = u.Host;
             stats.SiteModules.Clear();
-            foreach (var m in SiteScripts.For(u.Host)) stats.SiteModules.Add($"{m.Name} v{m.Version}");
-            await RegisterCosmeticAsync(core, stats, u.Host);
+            if (IsEnabledFor(NetworkRequest.SiteOf(u.Host))) foreach (var m in SiteScripts.For(u.Host)) stats.SiteModules.Add($"{m.Name} v{m.Version}");
+            await RegisterCosmeticAsync(core, stats, u.Host);   // cross-host: swap the sheet (best effort; the post-load fallback covers the race)
         };
         core.NavigationCompleted += async (_, _) =>
         {
             if (!Uri.TryCreate(core.Source, UriKind.Absolute, out var u) || !IsEnabledFor(NetworkRequest.SiteOf(u.Host))) return;
+            var nav = stats.NavId;
+            bool Current() => stats.NavId == nav && stats.RestoredNavId != nav && IsEnabledFor(NetworkRequest.SiteOf(u.Host))
+                              && Uri.TryCreate(core.Source, UriKind.Absolute, out var now) && now.Host == u.Host;   // still THIS document, still enabled, not undone
+
             var css = CssFor(u.Host);
-            if (css.Length == 0) return;
-            try { await core.ExecuteScriptAsync(EnsureCosmeticScript.Replace("__CSS__", System.Text.Json.JsonSerializer.Serialize(css))); } catch (Exception) { }
-        };
-        core.NavigationCompleted += async (_, _) =>
-        {
-            if (!Uri.TryCreate(core.Source, UriKind.Absolute, out var u) || !IsEnabledFor(NetworkRequest.SiteOf(u.Host))) return;
+            if (css.Length > 0 && Current()) { try { await core.ExecuteScriptAsync(EnsureCosmeticScript.Replace("__CSS__", System.Text.Json.JsonSerializer.Serialize(css))); } catch (Exception) { } }
+
             await Task.Delay(1500); // let late ad slots render before collapsing
+            if (!Current()) return;
             stats.Collapsed += await CollapseAsync(core, id);
             await Task.Delay(4000);
+            if (!Current()) return;
             stats.Collapsed += await CollapseAsync(core, id); // second pass for lazy-loaded slots
-            if (SemanticPass is not null && stats.Blocked > 0) { try { await SemanticPass(core, id); } catch (Exception) { } }
+            if (SemanticPass is not null && stats.Blocked > 0 && Current()) { try { await SemanticPass(core, id); } catch (Exception) { } }
         };
         core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All, CoreWebView2WebResourceRequestSourceKinds.All);
         core.WebResourceRequested += (_, e) =>
@@ -283,6 +366,8 @@ public sealed class ShieldAdapter
             var decision = _engine.Evaluate(req);
             if (decision.Verdict != Verdict.Block) return;
             stats.Blocked++;
+            stats.SessionBlocked++;
+            Interlocked.Increment(ref _sessionBlockedTotal);
             stats.Record(url.Host, decision.Rule ?? "");
             e.Response = core.Environment.CreateWebResourceResponse(null, 403, "Blocked by JevBrowse Shield", "Content-Type: text/plain");
         };

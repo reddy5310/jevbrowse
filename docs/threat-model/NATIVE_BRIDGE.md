@@ -11,6 +11,7 @@ One script is injected into every document (`WebView2Lease.PageScript`). It may 
 | `jev:dirty-form` | user typed into a non-password input | sets the DirtyForm protection flag (vetoes auto-hibernation) |
 | `jev:secret-field` | an `input[type=password]` exists | raises the tab's data class to SECRET (less persistence) |
 | `jev:payment-field` | an `input[autocomplete^=cc-]` exists | raises the tab's data class to SECRET |
+| `jev:authenticated` | a sign-out link/form exists (evidence the user is logged in) | raises the class to AUTHENTICATED: no content indexing, no automatic AI |
 
 Site modules (ADR 0015) may additionally post, and the host only *counts*:
 

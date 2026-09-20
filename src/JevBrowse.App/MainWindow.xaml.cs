@@ -158,7 +158,7 @@ public sealed partial class MainWindow : Window
         _providers = OpenAiCompatibleProvider.FromEnvironment();
         _jev = JevDecisionProvider.FromEnvironment();
         _brain = new BrainRouter(new DefaultTrustPolicy(), _brainPolicy, _providers,
-            d => _decisions.Append(d.At, "?", d.Source.ToString(), d.Rule, d.Model, "?", d.Redacted, d.RedactionCount, d.InputChars, d.Output, d.Version),
+            d => _decisions.Append(d.At, string.IsNullOrEmpty(d.Task) ? "?" : d.Task + (d.Automatic ? " (automatic)" : " (explicit)"), d.Source.ToString(), d.Rule, d.Model, string.IsNullOrEmpty(d.DataClassName) ? "?" : d.DataClassName, d.Redacted, d.RedactionCount, d.InputChars, d.Output, d.Version),
             decisions: _jev);
 
         var classifier = new DataClassifier(site => _siteSettings.DataClassOverride(site) is { } c ? (DataClass)c : null);
@@ -180,7 +180,7 @@ public sealed partial class MainWindow : Window
         _indexer.Decided += (_, why) => DispatcherQueue.TryEnqueue(() => StatusText.Text = "memory: " + why);
 
         // Dev/bench: JEVBROWSE_AI=1 starts with AI + Cloud on (the UI switches remain the user's control).
-        if (Environment.GetEnvironmentVariable("JEVBROWSE_AI") == "1") { _brainPolicy.AiEnabled = true; _brainPolicy.CloudEnabled = true; }
+        if (Environment.GetEnvironmentVariable("JEVBROWSE_AI") == "1") { _brainPolicy.AiEnabled = true; _brainPolicy.CloudEnabled = true; _brainPolicy.AutomaticJudgments = true; }
 
         // Shield semantic clutter pass (§9): residual empty boxes → one batched Jev noul each → collapse at ≥ 0.8.
         _shield.SemanticPass = async (core, id) =>
@@ -221,11 +221,11 @@ public sealed partial class MainWindow : Window
                 if (a is null) return;
                 if (a.Choices.TryGetValue(Judgements.DataClassQ, out var ans) && Judgements.RaiseFrom(cls, ans) is { } raised && _kernel.RaiseClass(tab.Id, raised))
                     DispatcherQueue.TryEnqueue(() => { StatusText.Text = $"Jev raised {tab.Url.Host} to {raised} (confidence {ans.Confidence:0.00})"; UpdateClassBadge(); });
-                if (a.Choices.TryGetValue(Judgements.WorkspaceQ, out var ws) && ws.Confidence >= 0.8)
+                if (a.Choices.TryGetValue(Judgements.WorkspaceQ, out var ws) && ws.Confidence >= 0.8 && Judgements.WorkspaceNameFor(ws.Choice, wsNames) is { } suggested)
                 {
                     var current = _kernel.Workspaces.FirstOrDefault(w => w.Id == tab.WorkspaceId)?.Name;
-                    if (current is not null && ws.Choice != current)
-                        DispatcherQueue.TryEnqueue(() => StatusText.Text = $"Jev suggests: this tab belongs in '{ws.Choice}' ({ws.Confidence:0.00}). Ctrl+K → Move this tab to: {ws.Choice}");
+                    if (current is not null && suggested != current)
+                        DispatcherQueue.TryEnqueue(() => StatusText.Text = $"Jev suggests: this tab belongs in '{suggested}' ({ws.Confidence:0.00}). Ctrl+K → Move this tab to: {suggested}");
                 }
             }
             catch (Exception) { /* advisory only */ }
@@ -234,7 +234,8 @@ public sealed partial class MainWindow : Window
         foreach (var m in Enum.GetValues<MemoryMode>()) ModeBox.Items.Add(m.ToString());
         ModeBox.SelectedIndex = (int)MemoryMode.Balanced;
         foreach (var m in Enum.GetValues<ProductMode>()) ProductModeBox.Items.Add(m.ToString());
-        ProductModeBox.SelectedIndex = (int)(Enum.TryParse<ProductMode>(Environment.GetEnvironmentVariable("JEVBROWSE_MODE"), true, out var pm) ? pm : ProductMode.Power);
+        // Simple by default: a first-time user gets tabs, Shield and privacy, and grows into Power.
+        ProductModeBox.SelectedIndex = (int)(Enum.TryParse<ProductMode>(Environment.GetEnvironmentVariable("JEVBROWSE_MODE"), true, out var pm) ? pm : ProductMode.Simple);
 
         // Resource OS tick: sample → evaluate → apply. 10 s is coarse on purpose; user actions never wait for it.
         _tick = DispatcherQueue.CreateTimer();
@@ -274,12 +275,13 @@ public sealed partial class MainWindow : Window
             });
         }
 
-        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check"))
+        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check"))
         {
             Directory.CreateDirectory(Path.Combine(DataDir, "benchmarks"));
             try
             {
-                if (args.Contains("--memory-lab")) await RunMemoryLabAsync();
+                if (args.Contains("--privacy-check")) await RunPrivacyCheckAsync();
+                else if (args.Contains("--memory-lab")) await RunMemoryLabAsync();
                 else if (args.Contains("--restore-bench")) await RunRestoreBenchAsync();
                 else if (args.Contains("--shield-check")) await RunShieldCheckAsync();
                 else if (args.Contains("--youtube-check")) await RunYouTubeCheckAsync();
@@ -415,7 +417,7 @@ public sealed partial class MainWindow : Window
     {
         var s = ProcessGroupProbe.Sample(_leases!.ProcessIds);
         var band = _lastPlan is null ? "" : $" • {_lastPlan.Band} band, budget {_lastPlan.TargetLiveRenderers}";
-        var blocked = _shield is null ? 0 : _shield.Stats.Values.Sum(x => x.Blocked);
+        var blocked = _shield?.SessionBlockedTotal ?? 0;
         PoolText.Text = $"{_kernel!.Tabs.Count} tabs • {_kernel.LiveCount}/{_leases.MaxLive} live{band}\n{s.ProcessCount} procs • {s.PrivateMb:F0} MB private (measured)\nShield: {blocked} blocked this session";
     }
 
@@ -666,16 +668,17 @@ public sealed partial class MainWindow : Window
         var box = new TextBox { PlaceholderText = "e.g. webview2 process model", Text = initialQuery };
         var results = new ListView { SelectionMode = ListViewSelectionMode.Single, MaxHeight = 320 };
         var hits = new List<MemoryHit>();
-        var info = new TextBlock { Opacity = 0.7, FontSize = 12, Text = $"{docs} pages indexed • {bytes / 1024.0 / 1024.0:F1} MB • local only" };
+        var info = new TextBlock { Opacity = 0.7, FontSize = 12, Text = $"{docs} pages indexed • {bytes / 1024.0 / 1024.0:F1} MB of text, {_memory.DatabaseFileBytes() / 1024.0 / 1024.0:F1} MB database file • local only • public pages only" };
         void RunSearch()
         {
             hits = _memory.Search(box.Text, 20, _kernel.ActiveWorkspace).ToList();
             results.Items.Clear();
             foreach (var h in hits)
             {
-                var open = _kernel.Tabs.Any(t => t.Id == h.Id);
+                // A tab may have navigated on since this page was indexed, so "open" means: some tab shows this exact page now.
+                var open = _kernel.Tabs.Any(t => t.Url == h.Url);
                 results.Items.Add(new StackPanel { Children = {
-                    new TextBlock { Text = $"{h.Title}  {(open ? "" : "(closed — will reopen)")}", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold },
+                    new TextBlock { Text = $"{h.Title}  {(open ? "" : "(not open — will reopen)")}", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold },
                     new TextBlock { Text = h.Snippet, TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = 0.8 },
                     new TextBlock { Text = $"{h.Site} • {h.CapturedAt.ToLocalTime():ddd d MMM HH:mm}", FontSize = 11, Opacity = 0.6 } } });
             }
@@ -687,12 +690,20 @@ public sealed partial class MainWindow : Window
         {
             Title = "Browser Memory",
             Content = new StackPanel { Spacing = 8, Children = { box, info, results } },
-            PrimaryButtonText = "Open", CloseButtonText = "Close", XamlRoot = Content.XamlRoot,
+            PrimaryButtonText = "Open", SecondaryButtonText = "Clear index", CloseButtonText = "Close", XamlRoot = Content.XamlRoot,
         };
         box.Loaded += (_, _) => box.Focus(FocusState.Programmatic);
-        if (await dlg.ShowAsync() != ContentDialogResult.Primary || results.SelectedIndex < 0 || results.SelectedIndex >= hits.Count) return;
+        var result = await dlg.ShowAsync();
+        if (result == ContentDialogResult.Secondary)
+        {
+            var confirm = new ContentDialog { Title = "Clear Browser Memory?", Content = new TextBlock { TextWrapping = TextWrapping.Wrap, Text = $"This deletes the local index of {docs} pages. It does not touch your tabs, history or cookies. Pages you read later are indexed again." }, PrimaryButtonText = "Clear", CloseButtonText = "Cancel", DefaultButton = ContentDialogButton.Close, XamlRoot = Content.XamlRoot };
+            if (await confirm.ShowAsync() == ContentDialogResult.Primary) { var n = _memory.Clear(); StatusText.Text = $"Browser Memory cleared ({n} pages)"; }
+            return;
+        }
+        if (result != ContentDialogResult.Primary || results.SelectedIndex < 0 || results.SelectedIndex >= hits.Count) return;
         var hit = hits[results.SelectedIndex];
-        if (_kernel.Tabs.Any(t => t.Id == hit.Id)) await _kernel.ActivateAsync(hit.Id);
+        var existing = _kernel.Tabs.FirstOrDefault(t => t.Url == hit.Url);
+        if (existing is not null) await _kernel.ActivateAsync(existing.Id);
         else { var t = _kernel.Open(hit.Url); await _kernel.ActivateAsync(t.Id); }
     }
 
@@ -780,19 +791,21 @@ public sealed partial class MainWindow : Window
 
     private async void OnBrain(object s, RoutedEventArgs e)
     {
-        var ai = new ToggleSwitch { Header = "AI enabled", IsOn = _brainPolicy.AiEnabled };
+        var ai = new ToggleSwitch { Header = "AI enabled (Ask, Explain error: only when you click)", IsOn = _brainPolicy.AiEnabled };
         var cloud = new ToggleSwitch { Header = "Cloud providers allowed", IsOn = _brainPolicy.CloudEnabled };
+        var auto = new ToggleSwitch { Header = "Automatic judgments: let Jev classify pages and ad slots after load (sends host, path, title, headings; PUBLIC pages only)", IsOn = _brainPolicy.AutomaticJudgments };
         var providers = new TextBlock { TextWrapping = TextWrapping.Wrap, Text = "Providers: " + string.Join(", ", _providers.Select(p => $"{p.Kind} {(p.IsConfigured ? "✓ " + p.Model : "(not configured)")}")) + $", Jev decisions {(_jev?.IsConfigured == true ? "✓ " + _jev.Model : "(not configured)")}" };
         var byClass = _decisions!.CloudCallsByClass();
         var metric = new TextBlock { Text = "Cloud calls by data class: " + (byClass.Count == 0 ? "none" : string.Join(", ", byClass.Select(kv => $"{kv.Key}={kv.Value}"))), Opacity = 0.8 };
         var log = new TextBlock { FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), FontSize = 11, TextWrapping = TextWrapping.Wrap,
             Text = string.Join("\n", _decisions.Recent(25).Select(r => $"{r.At.ToLocalTime():HH:mm:ss} {r.Source,-10} {r.Rule}{(r.Redacted ? $" (redacted {r.RedactionCount})" : "")}")) };
-        var panel = new StackPanel { Spacing = 8, Children = { ai, cloud, providers, metric, new TextBlock { Text = "Decision log (newest first):", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold }, new ScrollViewer { MaxHeight = 260, Content = log } } };
+        var panel = new StackPanel { Spacing = 8, Children = { ai, cloud, auto, providers, metric, new TextBlock { Text = "Decision log (newest first):", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold }, new ScrollViewer { MaxHeight = 260, Content = log } } };
         var dlg = new ContentDialog { Title = "JevBrain", Content = panel, PrimaryButtonText = "Save", CloseButtonText = "Close", XamlRoot = Content.XamlRoot };
         if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
         _brainPolicy.AiEnabled = ai.IsOn;
         _brainPolicy.CloudEnabled = cloud.IsOn;
-        StatusText.Text = $"brain: AI {(ai.IsOn ? "on" : "off")}, cloud {(cloud.IsOn ? "on" : "off")}";
+        _brainPolicy.AutomaticJudgments = auto.IsOn && ai.IsOn && cloud.IsOn;   // automatic calls need both master switches too
+        StatusText.Text = $"brain: AI {(ai.IsOn ? "on" : "off")}, cloud {(cloud.IsOn ? "on" : "off")}, automatic {(_brainPolicy.AutomaticJudgments ? "on" : "off")}";
     }
 
     // ---- Shield ----
@@ -837,10 +850,17 @@ public sealed partial class MainWindow : Window
         };
         if (st is not null && st.SiteModules.Count > 0) lines.Insert(3, $"Site modules: {string.Join(", ", st.SiteModules)} — ad definitions pruned {st.AdsPruned}, player skips {st.AdsSkipped}{(st.WallSeen > 0 ? ", anti-adblock wall seen" : "")}");
         if (st is not null) lines.AddRange(st.Recent.Reverse().Take(15).Select(x => $"✕ {x.Host}\n    {x.Rule}"));
+        // Undo for this document only: put back everything the collapse layers hid, drop the cosmetic sheet.
+        var showHidden = new Button { Content = "Show what Shield hid on this page", HorizontalAlignment = HorizontalAlignment.Stretch };
+        var undoNote = new TextBlock { FontSize = 12, Opacity = 0.75, TextWrapping = TextWrapping.Wrap };
+        showHidden.Click += async (_, _) =>
+        {
+            if (_leases!.TryGet(t.Id, out var l)) { var n = await _shield.RestoreHiddenAsync(((WebView2Lease)l).View.CoreWebView2, t.Id); undoNote.Text = n > 0 ? $"Restored {n} hidden item(s). Nothing more is hidden until you navigate." : "Nothing on this page was hidden."; }
+        };
         var dlg = new ContentDialog
         {
             Title = "Shield",
-            Content = new ScrollViewer { Content = new TextBlock { Text = string.Join("\n", lines), FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap }, MaxHeight = 400 },
+            Content = new StackPanel { Spacing = 8, Children = { showHidden, undoNote, new ScrollViewer { Content = new TextBlock { Text = string.Join("\n", lines), FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap }, MaxHeight = 360 } } },
             PrimaryButtonText = enabled ? $"Disable for {site}" : $"Enable for {site}",
             SecondaryButtonText = "Update lists",
             CloseButtonText = "Close",
@@ -849,11 +869,86 @@ public sealed partial class MainWindow : Window
         var result = await dlg.ShowAsync();
         if (result == ContentDialogResult.Primary)
         {
-            _shield.SetEnabledFor(site, !enabled);
+            await _shield.SetEnabledForAsync(site, !enabled);   // removes cosmetic + site-module scripts in every open tab of this site
             WithActiveLease(l => l.View.CoreWebView2.Reload());
             StatusText.Text = $"Shield {(enabled ? "disabled" : "enabled")} for {site}; page reloaded";
         }
         else if (result == ContentDialogResult.Secondary) await UpdateFilterListsAsync();
+    }
+
+    /// <summary>
+    /// System-level privacy gate (review #1/#15): real WebView2 renderers, real disk. Drives a public control, a
+    /// sensitive-URL tab and a Private-container session through the same hide/virtualize/switch operations a user
+    /// performs, then inspects the thumbnails directory and the database for anything that must not be there.
+    /// PASS requires the control to have produced a thumbnail (so "no file" is meaningful) and every private/sensitive
+    /// artifact count to be zero.
+    /// </summary>
+    private async Task RunPrivacyCheckAsync()
+    {
+        var k = _kernel!;
+        foreach (var t in k.Tabs.ToList()) await k.CloseAsync(t.Id);
+        var thumbDir = Path.Combine(DataDir, "thumbnails");
+        Directory.CreateDirectory(thumbDir);
+        var before = Directory.GetFiles(thumbDir).ToHashSet();
+        _leases!.MaxLive = 10;
+
+        async Task<VirtualTab> OpenActivate(string url, int settleMs = 6000)
+        {
+            var t = k.Open(new Uri(url));
+            await k.ActivateAsync(t.Id);
+            await Task.Delay(settleMs);
+            return t;
+        }
+
+        var pubWs = k.Workspaces[0];
+        var priv = k.CreateWorkspace("Private", IdentityContainer.Private);
+
+        // public control + sensitive-URL tab (Personal container)
+        await k.SwitchWorkspaceAsync(pubWs.Id);
+        var pub = await OpenActivate("https://example.com");
+        var sens = await OpenActivate("https://netbanking.hdfcbank.com/");     // classified SENSITIVE by URL
+        var other = await OpenActivate("https://en.wikipedia.org/wiki/Cat");   // activating this hides `sens`, then `pub` was hidden earlier
+
+        // private session: two tabs, switch between them, virtualize, switch workspace away and back
+        await k.SwitchWorkspaceAsync(priv.Id);
+        var p1 = await OpenActivate("https://example.org");
+        var p2 = await OpenActivate("https://en.wikipedia.org/wiki/Dog");      // hides p1 (deactivation capture path)
+        await k.VirtualizeAsync(p1.Id, Cause.User);
+        await k.VirtualizeAsync(p2.Id, Cause.User);
+        await k.SwitchWorkspaceAsync(pubWs.Id);                                // records the outgoing context checkpoint
+        _permissions?.Block(IdentityContainer.Private, priv.Id, new Uri("https://example.org"), TrustOS.PermissionKind.Notifications);
+        await Task.Delay(1500);
+
+        var now = Directory.GetFiles(thumbDir).ToHashSet();
+        var created = now.Except(before).Select(Path.GetFileName).Where(f => f is not null).Select(f => f!).ToList();
+        bool Has(VirtualTab t) => created.Any(f => f.StartsWith(t.Id.ToString()));
+        int Scalar(string sql) { using var c = _db!.Connection.CreateCommand(); c.CommandText = sql; return Convert.ToInt32(c.ExecuteScalar()); }
+        var privIds = new[] { p1.Id, p2.Id }.Select(i => i.ToString()).ToList();
+        string InList(IEnumerable<string> ids) => string.Join(",", ids.Select(i => $"'{i}'"));
+        var ephemeralDirs = Directory.Exists(Path.Combine(DataDir, "profiles", "ephemeral")) ? Directory.GetDirectories(Path.Combine(DataDir, "profiles", "ephemeral")).Length : 0;
+
+        var evidence = new
+        {
+            publicControlHasThumbnail = Has(pub),
+            sensitiveThumbnails = Has(sens) ? 1 : 0,
+            sensitiveCheckpointRow = k.GetCheckpoint(sens.Id) is null ? 0 : 1,
+            sensitiveClass = k.ClassOf(sens).ToString(),
+            privateThumbnails = (Has(p1) ? 1 : 0) + (Has(p2) ? 1 : 0),
+            privateTabRows = Scalar($"SELECT COUNT(*) FROM tabs WHERE id IN ({InList(privIds)})"),
+            privateCheckpointRows = Scalar($"SELECT COUNT(*) FROM checkpoints WHERE id IN ({InList(privIds)})"),
+            privateWorkspaceRows = Scalar("SELECT COUNT(*) FROM workspaces WHERE name = 'Private'"),
+            privateTimelineEntries = k.Timeline().Count(c => c.WorkspaceName == "Private" || c.Resources.Any(r => privIds.Contains(r.Id.ToString()))),
+            privatePermissionRows = Scalar("SELECT COUNT(*) FROM site_permissions WHERE site LIKE 'Private:%' OR site LIKE 'Disposable:%'"),
+            privateMemoryDocs = Scalar($"SELECT COUNT(*) FROM memory_docs WHERE {string.Join(" OR ", privIds.Select(i => $"id LIKE '{i}%'"))}"),
+            ephemeralProfileDirsDuringRun = ephemeralDirs,
+            newThumbnailFiles = created.Count,
+        };
+        var pass = evidence.publicControlHasThumbnail && evidence.sensitiveThumbnails == 0 && evidence.privateThumbnails == 0 && evidence.privateTabRows == 0
+                   && evidence.privateCheckpointRows == 0 && evidence.privateWorkspaceRows == 0 && evidence.privateTimelineEntries == 0
+                   && evidence.privatePermissionRows == 0 && evidence.privateMemoryDocs == 0
+                   && evidence.sensitiveClass is "Sensitive" or "Secret";   // a real bank page with a password field is (correctly) SECRET
+        var file = Path.Combine(DataDir, "benchmarks", $"privacy-check-{DateTime.Now:yyyyMMdd-HHmmss}.json");
+        await File.WriteAllTextAsync(file, JsonSerializer.Serialize(new { pass, evidence }, new JsonSerializerOptions { WriteIndented = true }));
     }
 
     /// <summary>

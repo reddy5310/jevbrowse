@@ -25,6 +25,18 @@ public sealed class BrowserMemory
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
     }
 
+    /// <summary>
+    /// One document per PAGE, not per tab: navigating within a tab adds the new page instead of replacing the old
+    /// one. Key = "{tabId}:{hash of URL without fragment}", so the owning tab is recoverable and revisiting a page
+    /// refreshes its entry.
+    /// </summary>
+    private static string DocKey(ResourceId id, Uri url)
+    {
+        var norm = url.GetLeftPart(UriPartial.Query);
+        var h = Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(norm)))[..8].ToLowerInvariant();
+        return $"{id}:{h}";
+    }
+
     public void Index(ResourceId id, Uri url, string title, ContextId workspace, string text)
     {
         text = Normalize(text);
@@ -38,7 +50,7 @@ public sealed class BrowserMemory
                 VALUES ($id, $url, $title, $site, $ws, $at, $bytes, $text)
                 ON CONFLICT(id) DO UPDATE SET url=$url, title=$title, site=$site, workspace_id=$ws, captured_at=$at, bytes=$bytes, text=$text
                 """;
-            cmd.Parameters.AddWithValue("$id", id.ToString());
+            cmd.Parameters.AddWithValue("$id", DocKey(id, url));
             cmd.Parameters.AddWithValue("$url", url.ToString());
             cmd.Parameters.AddWithValue("$title", title);
             cmd.Parameters.AddWithValue("$site", url.Host.ToLowerInvariant());
@@ -52,12 +64,31 @@ public sealed class BrowserMemory
         EnforceBudget();
     }
 
-    public void Forget(ResourceId id)
+    /// <summary>Forget one page (used when Trust OS tightens the class of the page a tab is showing).</summary>
+    public void Forget(ResourceId id, Uri url)
     {
         using var cmd = _db.Connection.CreateCommand();
         cmd.CommandText = "DELETE FROM memory_docs WHERE id=$id";
-        cmd.Parameters.AddWithValue("$id", id.ToString());
+        cmd.Parameters.AddWithValue("$id", DocKey(id, url));
         cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>Forget everything indexed from a tab (explicit user request).</summary>
+    public void ForgetTab(ResourceId id)
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "DELETE FROM memory_docs WHERE id=$id OR id LIKE $p";
+        cmd.Parameters.AddWithValue("$id", id.ToString());
+        cmd.Parameters.AddWithValue("$p", id + ":%");
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>Delete the whole index. Closing a tab does NOT do this: what you read stays findable until you say otherwise.</summary>
+    public int Clear()
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "DELETE FROM memory_docs";
+        return cmd.ExecuteNonQuery();
     }
 
     public (int Docs, long Bytes) Stats()
@@ -67,6 +98,14 @@ public sealed class BrowserMemory
         using var r = cmd.ExecuteReader();
         r.Read();
         return (r.GetInt32(0), r.GetInt64(1));
+    }
+
+    /// <summary>Actual size of the database file (index + text + everything else), which is what the disk budget is really about.</summary>
+    public long DatabaseFileBytes()
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()";
+        return Convert.ToInt64(cmd.ExecuteScalar() ?? 0);
     }
 
     /// <summary>Keyword search. Local only; nothing leaves the machine.</summary>
@@ -92,12 +131,15 @@ public sealed class BrowserMemory
         {
             var ws = new ContextId(Guid.ParseExact(r.GetString(4), "N"));
             var at = DateTimeOffset.FromUnixTimeMilliseconds(r.GetInt64(5));
-            // bm25 is lower-is-better; convert to a positive score then apply local boosts (§8 "local ranking").
-            var score = 1.0 / (1.0 + Math.Max(0, r.GetDouble(7)));
+            // FTS5 bm25() is NEGATIVE and more negative = more relevant. The magnitude is the relevance; flattening
+            // it (as an earlier version did) threw the text match away and left only the recency boost deciding.
+            var relevance = Math.Max(1e-9, -r.GetDouble(7));
+            var score = relevance;
             var ageDays = Math.Max(0, (now - at).TotalDays);
             score *= 1.0 + 0.5 * Math.Exp(-ageDays / 14.0);            // recency: up to +50% within ~2 weeks
             if (workspace is { } w && ws == w) score *= 1.25;           // same workspace
-            hits.Add(new MemoryHit(new ResourceId(Guid.ParseExact(r.GetString(0), "N")), new Uri(r.GetString(1)), r.GetString(2), r.GetString(3), ws, at, r.GetString(6), score));
+            var tabId = r.GetString(0).Split(':')[0];
+            hits.Add(new MemoryHit(new ResourceId(Guid.ParseExact(tabId, "N")), new Uri(r.GetString(1)), r.GetString(2), r.GetString(3), ws, at, r.GetString(6), score));
         }
         return hits.OrderByDescending(h => h.Score).Take(limit).ToList();
     }
@@ -115,7 +157,8 @@ public sealed class BrowserMemory
         if (brain is BrainRouter router && router.HasDecisionProvider)
         {
             var state = $"Query: {query}\n" + string.Join("\n", local.Select((h, i) => $"{i + 1}. {h.Title} — {h.Snippet}"));
-            var answers = await router.JudgeAsync("rerank", state, Judgements.RerankQuestions(local.Select(h => h.Title).ToList()), DataClass.Public, IdentityContainer.Personal, ct);
+            // The user pressed search and asked for reranking: an explicit action, not a background call.
+            var answers = await router.JudgeAsync("rerank", state, Judgements.RerankQuestions(local.Select(h => h.Title).ToList()), DataClass.Public, IdentityContainer.Personal, ct, automatic: false);
             if (answers is not null && answers.Scores.Count > 0)
                 return local.Select((h, i) => (h, s: answers.Scores.TryGetValue($"c{i}", out var sc) ? sc.Score * sc.Confidence + h.Score * 0.1 : h.Score * 0.1))
                             .OrderByDescending(x => x.s).Select(x => x.h).ToList();
@@ -131,9 +174,13 @@ public sealed class BrowserMemory
         return order.Select(i => local[i]).Concat(local.Where((_, i) => !order.Contains(i))).ToList();
     }
 
+    /// <summary>The FTS index and page overhead roughly double what the raw text costs on disk; budget against that, not the text alone.</summary>
+    private const double StorageOverhead = 2.0;
+
     private void EnforceBudget()
     {
-        var (_, bytes) = Stats();
+        var (_, textBytes) = Stats();
+        var bytes = (long)(textBytes * StorageOverhead);
         if (bytes <= _budgetBytes) return;
         // Drop oldest until under budget: bounded disk growth (Constitution / cost card).
         using var cmd = _db.Connection.CreateCommand();
@@ -143,7 +190,7 @@ public sealed class BrowserMemory
                     SELECT rowid, SUM(bytes) OVER (ORDER BY captured_at DESC) AS running FROM memory_docs
                 ) WHERE running > $budget)
             """;
-        cmd.Parameters.AddWithValue("$budget", _budgetBytes);
+        cmd.Parameters.AddWithValue("$budget", (long)(_budgetBytes / StorageOverhead));   // raw-text share of the disk budget
         cmd.ExecuteNonQuery();
     }
 

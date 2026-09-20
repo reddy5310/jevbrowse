@@ -1,0 +1,40 @@
+# Evidence matrix
+
+Every claim JevBrowse makes, and the strongest evidence behind it today. Levels, weakest to strongest:
+
+- **Designed**: an ADR/doc says so; nothing verifies it.
+- **Unit**: a test against fakes proves the logic (fast, but it cannot see engine or disk behaviour).
+- **Real engine**: a benchmark/check drives actual WebView2 renderers and inspects real disk/DB state (`--privacy-check`, `--restore-bench`, …).
+- **Release-validated**: verified on the packaged, signed build on more than one machine. **Nothing is at this level yet** (builds are unsigned and tested on one machine).
+
+Last updated 2026-09-20 after the independent review. 216 unit tests.
+
+| Claim | Level | Evidence | Known gap |
+|---|---|---|---|
+| Disposing a renderer reclaims memory; suspend barely does | Real engine | ADR 0003, `--memory-lab`: 765 → 319 MB private (5 live → 1 live) | WebView2 process group only; the shell process is not in the number. One machine |
+| Restore is fast | Real engine, thin | `--restore-bench`: p50 350 ms, p95 1.24 s | 8 samples, warm cache, measured to navigation-complete not "usable"; failed restores not counted |
+| 50 tabs, ≤5 live; scheduler never thrashes | Unit | `TabKernelTests`, 2-hour thrash simulation, interleaving test (`PrivacyAndLifecycleTests`) | Simulation uses synthetic pressure; no low-RAM hardware run |
+| Lifecycle operations cannot race (no duplicate renderers, no dispose-under-use) | Unit | 12 concurrent activations → 1 acquisition; 60 random interleaved ops keep tab state and renderer set consistent | Fake renderer latency, not WebView2's real async behaviour |
+| **Private session leaves no durable trace** | **Real engine** | `--privacy-check` (real renderers): 0 thumbnails, tab rows, checkpoints, timeline entries, workspace rows, permission rows, index docs; private profile deleted on restart. Unit: `Switching_away_captures_a_thumbnail_only_when_policy_allows`, `Private_workspace_leaves_no_context_checkpoint…` | Crash dumps and OS-level artifacts (pagefile, DNS cache) are outside what we control and not checked |
+| Sensitive pages store no pixels | Real engine | `--privacy-check`: real bank login page classified SECRET, 0 thumbnails, 0 checkpoint | One site; URL heuristics cover a fixed word list |
+| A stricter class removes what the looser class stored | Unit | `Stricter_class_purges_thumbnail_checkpoint…`, `Tightening_a_pages_class_removes_it_from_the_index` | Not yet driven end-to-end in a real renderer |
+| Identity boundaries are real (moving across identities creates a new tab; agents never touch personal identities) | Unit | `Moving_across_identities…`, `A_session_can_never_name_its_way_into_an_existing_identity…` | Cookie separation between profiles relies on WebView2 user-data folders (engine guarantee, not re-tested by us) |
+| Permission grants are temporary and scoped to container + exact origin | Unit (key + policy) | `PermissionKeyTests` | `SavesInProfile=false` is set in the WebView2 adapter but not covered by an automated real-engine test |
+| Page classification combines evidence by the stricter result | Unit | `Independent_evidence_combines_by_the_stricter_result` | **Unrecognised URLs with no signals are still PUBLIC** (see Known limitations) |
+| AI is off; background AI needs its own switch; nothing secret leaves | Unit | 21 Brain tests: kill switch, class gates, automatic-off, size cap, redaction of state *and* question text | Redaction is regex-based; `Redactor` recall on real pages is unmeasured |
+| Cloud-call audit is accurate | Unit | task, class, automatic/explicit recorded; `CloudCallsByClass` counts typed Jev calls | UI shows the log; no export |
+| Agents can only narrow a user-approved grant | Unit | `AgentCeiling` clamp tests; host fails closed without a ceiling; per-session approval | Domain enforcement on every navigation is unit-tested with a fake guard; **real-engine redirect enforcement is not exercised** |
+| Agent live-page quota is a hard limit | Unit | `Live_page_quota_is_a_hard_limit…` | CPU/network quotas do not exist |
+| Shield blocks ads/trackers on real sites | Real engine | `--shield-check` (goodreturns/cricbuzz/CNN), 110k rules, ~90 µs p95 | Debug build; long/adversarial URL cost unmeasured |
+| Shield "disable for site" removes every layer | Unit + manual | per-renderer script ownership; disabled list baked into site modules | Needs a real-engine check that a disabled site really loads unmodified |
+| YouTube ad definitions are pruned | Real engine | `--youtube-check`: Despacito 37 s of ads → 0 s | Ads are served non-deterministically; 3 videos; YouTube can change formats |
+| Browser Memory ranks by relevance and stays bounded | Unit | BM25 sign fix test; budget test | Disk budget is text × 2, an estimate; real DB size is reported next to it |
+| Migrations cannot leave a database that cannot start | Unit | `A_failed_migration_step_rolls_back_completely_and_the_next_start_recovers` | SQLite crash-kill (process abort mid-write) not simulated |
+| Filter-list activation survives a crash | Unit | `A_crash_between_the_two_activation_renames…` | |
+| CI enforces performance regressions | **Designed** | perf job is informational | No stable benchmark machine; no PR gate |
+| Signed, updatable release | **Designed** | portable zip only | No code signing, no MSIX, no security-update path |
+
+## Known limitations (deliberate, documented)
+- **No `Unknown` data class yet.** A page with no recognizable URL words and no signals is PUBLIC and may be indexed. Mitigations shipped: the page reports "logged in" (sign-out link/form) and password/payment fields; stricter evidence purges what was stored; automatic AI applies only to PUBLIC. The remaining gap (an authenticated app with no sign-out link and a neutral URL) needs a positive-evidence model: tracked in ROADMAP.
+- **Product scope.** The architecture serves general users, developers, researchers and agents at once. The dependable first release is *durable workspaces with predictable memory-efficient tab restoration*; everything else is opt-in.
+- **Not implemented:** bookmark import/export, extensions, password manager, sync, accessibility audit (keyboard-only and screen-reader passes are unverified), high-contrast theme testing.
