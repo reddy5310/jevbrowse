@@ -14,6 +14,8 @@ public static class DialogExtensions
     public static async Task<ContentDialogResult> ShowSerializedAsync(this ContentDialog dialog)
     {
         await Gate.WaitAsync();
+        // A ContentDialog is hosted outside the window's element tree, so it does not inherit the app's theme by itself.
+        if (dialog.XamlRoot?.Content is Microsoft.UI.Xaml.FrameworkElement root) dialog.RequestedTheme = root.ActualTheme;
         try { return await dialog.ShowAsync(); }
         finally { Gate.Release(); }
     }

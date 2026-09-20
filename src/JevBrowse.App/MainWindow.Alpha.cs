@@ -246,7 +246,6 @@ public sealed partial class MainWindow
     // ---- Sidebar ----
 
     private bool _sidebarCollapsed;
-    private static string UiPrefsPath => Path.Combine(DataDir, "ui-prefs.json");
 
     /// <summary>
     /// The sidebar is 276 px of a window that may be 700 wide; hiding it gives that back to the page. Remembered, so a
@@ -263,19 +262,10 @@ public sealed partial class MainWindow
         ToolTipService.SetToolTip(SidebarToggle, $"{label} (Ctrl+B)");
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(SidebarToggle, label);
         if (!remember) return;
-        try { File.WriteAllText(UiPrefsPath, JsonSerializer.Serialize(new { sidebarCollapsed = collapsed })); } catch (Exception) { /* a preference, not data */ }
+        UiPrefs.Load(DataDir).With(collapsed).Save(DataDir);
     }
 
-    private static bool LoadSidebarCollapsed()
-    {
-        try
-        {
-            if (!File.Exists(UiPrefsPath)) return false;
-            using var d = JsonDocument.Parse(File.ReadAllText(UiPrefsPath));
-            return d.RootElement.TryGetProperty("sidebarCollapsed", out var v) && v.ValueKind == JsonValueKind.True;
-        }
-        catch (Exception) { return false; }
-    }
+    private static bool LoadSidebarCollapsed() => UiPrefs.Load(DataDir).SidebarCollapsed;
 
     private void OnToggleSidebar(object s, RoutedEventArgs e) => ApplySidebar(!_sidebarCollapsed, remember: true);
 
@@ -378,6 +368,9 @@ public sealed partial class MainWindow
             new("Session receipt for this site", () => { OnReceipt(this, new RoutedEventArgs()); return Task.CompletedTask; }),
             new("Shield: toggle for this site", () => { OnShield(this, new RoutedEventArgs()); return Task.CompletedTask; }),
             new("Data class for this site…", () => { OnClassBadgeTapped(this, new TappedRoutedEventArgs()); return Task.CompletedTask; }),
+            new("Theme: dark", () => { ApplyTheme(ThemePreference.Dark, remember: true); return Task.CompletedTask; }),
+            new("Theme: light", () => { ApplyTheme(ThemePreference.Light, remember: true); return Task.CompletedTask; }),
+            new("Theme: match Windows", () => { ApplyTheme(ThemePreference.System, remember: true); return Task.CompletedTask; }),
             new("Grant Claude Code localhost + GitHub for 30 minutes", () => GrantAgentAsync(30)),
             new("New workspace…", () => { OnNewWorkspace(this, new RoutedEventArgs()); return Task.CompletedTask; }),
             new("Update Shield filter lists", UpdateFilterListsAsync),

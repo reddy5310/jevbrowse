@@ -58,6 +58,7 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        InitTheme();
         // One layered surface: Mica behind everything, our own title bar, dark by default.
         SystemBackdrop = new Microsoft.UI.Xaml.Media.MicaBackdrop { Kind = Microsoft.UI.Composition.SystemBackdrops.MicaKind.BaseAlt };
         ExtendsContentIntoTitleBar = true;
@@ -327,7 +328,11 @@ public sealed partial class MainWindow : Window
         }
 
         var firstRun = !FirstRunDone();
-        if (!_kernel.TabsIn(_kernel.ActiveWorkspace).Any()) _kernel.Open(new Uri(firstRun ? WelcomePage.Url : "https://example.com"));
+        // Development and measurement only: lets a check open a known page (for example a deliberately animated one, as a
+        // positive control for the idle-cost script) without a code change. Unset, behaviour is exactly as before.
+        var startUrl = Environment.GetEnvironmentVariable("JEVBROWSE_START_URL");
+        if (!_kernel.TabsIn(_kernel.ActiveWorkspace).Any())
+            _kernel.Open(new Uri(!string.IsNullOrWhiteSpace(startUrl) && Uri.IsWellFormedUriString(startUrl, UriKind.Absolute) ? startUrl : firstRun ? WelcomePage.Url : "https://example.com"));
         await _kernel.ActivateAsync(_kernel.TabsIn(_kernel.ActiveWorkspace).First().Id);
         if (firstRun) { await Task.Delay(800); await ShowFirstRunTipsAsync(); }
     }
@@ -617,15 +622,18 @@ public sealed partial class MainWindow : Window
         // What a screen reader says: the state, then what pressing does. The visible text is capitals and a bullet.
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(ClassBadge,
             $"{_kernel.ContainerOf(t)} profile, {ClassLabel(cls)}. Press to change how this site is treated.");
-        ClassBadge.Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(cls switch
+        // From the token dictionaries, so the badge's text always has the contrast the tests measured. The class is also
+        // in the words on the badge, so its colour is never the only thing that says it.
+        ClassBadge.Background = Tokens.Brush(cls switch
         {
-            DataClass.Public => Microsoft.UI.Colors.DarkSeaGreen,
-            DataClass.Unknown => Microsoft.UI.Colors.SlateGray,
-            DataClass.Authenticated => Microsoft.UI.Colors.SteelBlue,
-            DataClass.Sensitive => Microsoft.UI.Colors.DarkOrange,
-            DataClass.Secret => Microsoft.UI.Colors.Firebrick,
-            _ => Microsoft.UI.Colors.SlateGray,
+            DataClass.Public => "JevBadgePublicBrush",
+            DataClass.Unknown => "JevBadgeUnknownBrush",
+            DataClass.Authenticated => "JevBadgeSignedInBrush",
+            DataClass.Sensitive => "JevBadgeSensitiveBrush",
+            DataClass.Secret => "JevBadgeSecretBrush",
+            _ => "JevBadgePrivateBrush",
         });
+        ClassBadgeText.Foreground = Tokens.Brush("JevBadgeTextBrush");
     }
 
     /// <summary>User-facing name for a data class. Internal names are diagnostics, not labels.</summary>
@@ -862,15 +870,17 @@ public sealed partial class MainWindow : Window
         var show = r.Environment != DeployEnvironment.Unknown;
         EnvBadge.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
         EnvBadgeText.Text = r.Environment.ToString().ToUpperInvariant();
-        var color = r.Environment switch
+        // The production strip is a safety signal, so its text has to be readable: the old fills were 2.2 to 3.5 : 1.
+        var fill = Tokens.Brush(r.Environment switch
         {
-            DeployEnvironment.Prod => Windows.UI.Color.FromArgb(0xE0, 0xFF, 0x3B, 0x30),
-            DeployEnvironment.Staging => Windows.UI.Color.FromArgb(0xE0, 0xFF, 0x95, 0x00),
-            DeployEnvironment.Dev => Windows.UI.Color.FromArgb(0xE0, 0x00, 0x7A, 0xFF),
-            _ => Windows.UI.Color.FromArgb(0xE0, 0x34, 0xC7, 0x59),
-        };
-        EnvBadge.Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(color);
-        ProdBorder.BorderBrush = new Microsoft.UI.Xaml.Media.SolidColorBrush(color);
+            DeployEnvironment.Prod => "JevDangerBrush",
+            DeployEnvironment.Staging => "JevEnvStagingBrush",
+            DeployEnvironment.Dev => "JevEnvDevBrush",
+            _ => "JevEnvOtherBrush",
+        });
+        EnvBadge.Background = fill;
+        EnvBadgeText.Foreground = Tokens.Brush("JevDangerTextBrush");
+        ProdBorder.BorderBrush = fill;
         ProdBorder.Visibility = r.Environment == DeployEnvironment.Prod ? Visibility.Visible : Visibility.Collapsed;
     }
 

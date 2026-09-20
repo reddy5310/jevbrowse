@@ -7,32 +7,219 @@
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
-            <!-- JevBrowse palette: deep navy surfaces, teal→violet accent, glowing state dots. -->
-            <Color x:Key="JevBg">#0B0D12</Color>
-            <Color x:Key="JevPanel">#121620</Color>
-            <Color x:Key="JevLine">#1E2533</Color>
-            <Color x:Key="JevTeal">#20D6C6</Color>
-            <Color x:Key="JevViolet">#8B7BFF</Color>
-            <SolidColorBrush x:Key="JevBgBrush" Color="{StaticResource JevBg}"/>
-            <SolidColorBrush x:Key="JevPanelBrush" Color="{StaticResource JevPanel}"/>
-            <SolidColorBrush x:Key="JevLineBrush" Color="{StaticResource JevLine}"/>
-            <SolidColorBrush x:Key="JevTealBrush" Color="{StaticResource JevTeal}"/>
-            <LinearGradientBrush x:Key="JevAccentBrush" StartPoint="0,0" EndPoint="1,0">
-                <GradientStop Color="{StaticResource JevTeal}" Offset="0"/>
-                <GradientStop Color="{StaticResource JevViolet}" Offset="1"/>
-            </LinearGradientBrush>
+
+            <!--
+              SEMANTIC TOKENS. Nothing in the interface names a raw colour; it names what the colour is FOR.
+
+              Depth:     Surface0 (window) < Surface1 (panels) < Surface2 (raised controls) < Surface3 (hover/overlay).
+              Light:     the active surface is marked by Accent, not by decoration everywhere.
+              Text:      TextPrimary and TextSecondary are the only two text colours in the chrome. Dimming text with
+                         Opacity is not allowed: it produces a contrast nobody chose. Both are tested against every
+                         surface in tests/Unit/JevBrowse.Kernel.Tests/DesignTokenTests.cs (WCAG 2.x, parsed from THIS file).
+              Themes:    Dark (the default), Light, and HighContrast. HighContrast uses ONLY Windows system colours, so the
+                         user's contrast theme is what they see; a test enforces that.
+              Colour is never the only carrier: tab state and data class are also words (see TabItem, ClassLabel).
+            -->
+            <ResourceDictionary.ThemeDictionaries>
+
+                <ResourceDictionary x:Key="Dark">
+                    <Color x:Key="JevSurface0">#0B0D12</Color>
+                    <Color x:Key="JevSurface1">#121620</Color>
+                    <Color x:Key="JevSurface2">#1A2030</Color>
+                    <Color x:Key="JevSurface3">#252D42</Color>
+                    <Color x:Key="JevBorderSubtle">#1E2533</Color>
+                    <Color x:Key="JevBorderStrong">#66718C</Color>
+                    <Color x:Key="JevTextPrimary">#EAEEF6</Color>
+                    <Color x:Key="JevTextSecondary">#A9B1C3</Color>
+                    <Color x:Key="JevFocus">#7FE8DF</Color>
+                    <Color x:Key="JevAccent">#20D6C6</Color>
+                    <Color x:Key="JevAccentOn">#04201D</Color>
+                    <Color x:Key="JevViolet">#9A8CFF</Color>
+                    <Color x:Key="JevBackdrop">#05070B</Color>
+                    <Color x:Key="JevStateHot">#3DDC84</Color>
+                    <Color x:Key="JevStateWarm">#FFB454</Color>
+                    <Color x:Key="JevStateCold">#4AA3FF</Color>
+                    <Color x:Key="JevStateSuspended">#9A8CFF</Color>
+                    <Color x:Key="JevStateVirtual">#7A8399</Color>
+                    <Color x:Key="JevStateArchived">#66718C</Color>
+                    <Color x:Key="JevBadgePublic">#1F6B4A</Color>
+                    <Color x:Key="JevBadgeUnknown">#4A5468</Color>
+                    <Color x:Key="JevBadgeSignedIn">#2A64A8</Color>
+                    <Color x:Key="JevBadgeSensitive">#A64B08</Color>
+                    <Color x:Key="JevBadgeSecret">#B3261E</Color>
+                    <Color x:Key="JevBadgePrivate">#5B3FA0</Color>
+                    <Color x:Key="JevBadgeText">#FFFFFF</Color>
+                    <Color x:Key="JevDanger">#C62828</Color>
+                    <Color x:Key="JevDangerText">#FFFFFF</Color>
+                    <Color x:Key="JevEnvStaging">#9A5200</Color>
+                    <Color x:Key="JevEnvDev">#1F5FB8</Color>
+                    <Color x:Key="JevEnvOther">#1E7A46</Color>
+                    <Color x:Key="JevScrim">#B0000000</Color>
+                    <SolidColorBrush x:Key="JevSurface0Brush" Color="{StaticResource JevSurface0}"/>
+                    <SolidColorBrush x:Key="JevSurface1Brush" Color="{StaticResource JevSurface1}"/>
+                    <SolidColorBrush x:Key="JevSurface2Brush" Color="{StaticResource JevSurface2}"/>
+                    <SolidColorBrush x:Key="JevSurface3Brush" Color="{StaticResource JevSurface3}"/>
+                    <SolidColorBrush x:Key="JevBorderSubtleBrush" Color="{StaticResource JevBorderSubtle}"/>
+                    <SolidColorBrush x:Key="JevBorderStrongBrush" Color="{StaticResource JevBorderStrong}"/>
+                    <SolidColorBrush x:Key="JevTextPrimaryBrush" Color="{StaticResource JevTextPrimary}"/>
+                    <SolidColorBrush x:Key="JevTextSecondaryBrush" Color="{StaticResource JevTextSecondary}"/>
+                    <SolidColorBrush x:Key="JevFocusBrush" Color="{StaticResource JevFocus}"/>
+                    <SolidColorBrush x:Key="JevAccentSolidBrush" Color="{StaticResource JevAccent}"/>
+                    <SolidColorBrush x:Key="JevAccentOnBrush" Color="{StaticResource JevAccentOn}"/>
+                    <SolidColorBrush x:Key="JevBackdropBrush" Color="{StaticResource JevBackdrop}"/>
+                    <SolidColorBrush x:Key="JevStateHotBrush" Color="{StaticResource JevStateHot}"/>
+                    <SolidColorBrush x:Key="JevStateWarmBrush" Color="{StaticResource JevStateWarm}"/>
+                    <SolidColorBrush x:Key="JevStateColdBrush" Color="{StaticResource JevStateCold}"/>
+                    <SolidColorBrush x:Key="JevStateSuspendedBrush" Color="{StaticResource JevStateSuspended}"/>
+                    <SolidColorBrush x:Key="JevStateVirtualBrush" Color="{StaticResource JevStateVirtual}"/>
+                    <SolidColorBrush x:Key="JevStateArchivedBrush" Color="{StaticResource JevStateArchived}"/>
+                    <SolidColorBrush x:Key="JevBadgePublicBrush" Color="{StaticResource JevBadgePublic}"/>
+                    <SolidColorBrush x:Key="JevBadgeUnknownBrush" Color="{StaticResource JevBadgeUnknown}"/>
+                    <SolidColorBrush x:Key="JevBadgeSignedInBrush" Color="{StaticResource JevBadgeSignedIn}"/>
+                    <SolidColorBrush x:Key="JevBadgeSensitiveBrush" Color="{StaticResource JevBadgeSensitive}"/>
+                    <SolidColorBrush x:Key="JevBadgeSecretBrush" Color="{StaticResource JevBadgeSecret}"/>
+                    <SolidColorBrush x:Key="JevBadgePrivateBrush" Color="{StaticResource JevBadgePrivate}"/>
+                    <SolidColorBrush x:Key="JevBadgeTextBrush" Color="{StaticResource JevBadgeText}"/>
+                    <SolidColorBrush x:Key="JevDangerBrush" Color="{StaticResource JevDanger}"/>
+                    <SolidColorBrush x:Key="JevDangerTextBrush" Color="{StaticResource JevDangerText}"/>
+                    <SolidColorBrush x:Key="JevEnvStagingBrush" Color="{StaticResource JevEnvStaging}"/>
+                    <SolidColorBrush x:Key="JevEnvDevBrush" Color="{StaticResource JevEnvDev}"/>
+                    <SolidColorBrush x:Key="JevEnvOtherBrush" Color="{StaticResource JevEnvOther}"/>
+                    <SolidColorBrush x:Key="JevScrimBrush" Color="{StaticResource JevScrim}"/>
+                    <LinearGradientBrush x:Key="JevAccentBrush" StartPoint="0,0" EndPoint="1,0">
+                        <GradientStop Color="{StaticResource JevAccent}" Offset="0"/>
+                        <GradientStop Color="{StaticResource JevViolet}" Offset="1"/>
+                    </LinearGradientBrush>
+                </ResourceDictionary>
+
+                <ResourceDictionary x:Key="Light">
+                    <Color x:Key="JevSurface0">#F3F5F9</Color>
+                    <Color x:Key="JevSurface1">#FFFFFF</Color>
+                    <Color x:Key="JevSurface2">#EDF0F6</Color>
+                    <Color x:Key="JevSurface3">#E1E6EF</Color>
+                    <Color x:Key="JevBorderSubtle">#D5DBE6</Color>
+                    <Color x:Key="JevBorderStrong">#6B7488</Color>
+                    <Color x:Key="JevTextPrimary">#121622</Color>
+                    <Color x:Key="JevTextSecondary">#485065</Color>
+                    <Color x:Key="JevFocus">#0B6B63</Color>
+                    <Color x:Key="JevAccent">#0B8177</Color>
+                    <Color x:Key="JevAccentOn">#FFFFFF</Color>
+                    <Color x:Key="JevViolet">#5B4FD6</Color>
+                    <Color x:Key="JevBackdrop">#FFFFFF</Color>
+                    <Color x:Key="JevStateHot">#1E8E4E</Color>
+                    <Color x:Key="JevStateWarm">#B26A00</Color>
+                    <Color x:Key="JevStateCold">#1F6FB8</Color>
+                    <Color x:Key="JevStateSuspended">#5B4FD6</Color>
+                    <Color x:Key="JevStateVirtual">#6B7488</Color>
+                    <Color x:Key="JevStateArchived">#6B7488</Color>
+                    <Color x:Key="JevBadgePublic">#1F6B4A</Color>
+                    <Color x:Key="JevBadgeUnknown">#4A5468</Color>
+                    <Color x:Key="JevBadgeSignedIn">#2A64A8</Color>
+                    <Color x:Key="JevBadgeSensitive">#A64B08</Color>
+                    <Color x:Key="JevBadgeSecret">#B3261E</Color>
+                    <Color x:Key="JevBadgePrivate">#5B3FA0</Color>
+                    <Color x:Key="JevBadgeText">#FFFFFF</Color>
+                    <Color x:Key="JevDanger">#C62828</Color>
+                    <Color x:Key="JevDangerText">#FFFFFF</Color>
+                    <Color x:Key="JevEnvStaging">#9A5200</Color>
+                    <Color x:Key="JevEnvDev">#1F5FB8</Color>
+                    <Color x:Key="JevEnvOther">#1E7A46</Color>
+                    <Color x:Key="JevScrim">#B0000000</Color>
+                    <SolidColorBrush x:Key="JevSurface0Brush" Color="{StaticResource JevSurface0}"/>
+                    <SolidColorBrush x:Key="JevSurface1Brush" Color="{StaticResource JevSurface1}"/>
+                    <SolidColorBrush x:Key="JevSurface2Brush" Color="{StaticResource JevSurface2}"/>
+                    <SolidColorBrush x:Key="JevSurface3Brush" Color="{StaticResource JevSurface3}"/>
+                    <SolidColorBrush x:Key="JevBorderSubtleBrush" Color="{StaticResource JevBorderSubtle}"/>
+                    <SolidColorBrush x:Key="JevBorderStrongBrush" Color="{StaticResource JevBorderStrong}"/>
+                    <SolidColorBrush x:Key="JevTextPrimaryBrush" Color="{StaticResource JevTextPrimary}"/>
+                    <SolidColorBrush x:Key="JevTextSecondaryBrush" Color="{StaticResource JevTextSecondary}"/>
+                    <SolidColorBrush x:Key="JevFocusBrush" Color="{StaticResource JevFocus}"/>
+                    <SolidColorBrush x:Key="JevAccentSolidBrush" Color="{StaticResource JevAccent}"/>
+                    <SolidColorBrush x:Key="JevAccentOnBrush" Color="{StaticResource JevAccentOn}"/>
+                    <SolidColorBrush x:Key="JevBackdropBrush" Color="{StaticResource JevBackdrop}"/>
+                    <SolidColorBrush x:Key="JevStateHotBrush" Color="{StaticResource JevStateHot}"/>
+                    <SolidColorBrush x:Key="JevStateWarmBrush" Color="{StaticResource JevStateWarm}"/>
+                    <SolidColorBrush x:Key="JevStateColdBrush" Color="{StaticResource JevStateCold}"/>
+                    <SolidColorBrush x:Key="JevStateSuspendedBrush" Color="{StaticResource JevStateSuspended}"/>
+                    <SolidColorBrush x:Key="JevStateVirtualBrush" Color="{StaticResource JevStateVirtual}"/>
+                    <SolidColorBrush x:Key="JevStateArchivedBrush" Color="{StaticResource JevStateArchived}"/>
+                    <SolidColorBrush x:Key="JevBadgePublicBrush" Color="{StaticResource JevBadgePublic}"/>
+                    <SolidColorBrush x:Key="JevBadgeUnknownBrush" Color="{StaticResource JevBadgeUnknown}"/>
+                    <SolidColorBrush x:Key="JevBadgeSignedInBrush" Color="{StaticResource JevBadgeSignedIn}"/>
+                    <SolidColorBrush x:Key="JevBadgeSensitiveBrush" Color="{StaticResource JevBadgeSensitive}"/>
+                    <SolidColorBrush x:Key="JevBadgeSecretBrush" Color="{StaticResource JevBadgeSecret}"/>
+                    <SolidColorBrush x:Key="JevBadgePrivateBrush" Color="{StaticResource JevBadgePrivate}"/>
+                    <SolidColorBrush x:Key="JevBadgeTextBrush" Color="{StaticResource JevBadgeText}"/>
+                    <SolidColorBrush x:Key="JevDangerBrush" Color="{StaticResource JevDanger}"/>
+                    <SolidColorBrush x:Key="JevDangerTextBrush" Color="{StaticResource JevDangerText}"/>
+                    <SolidColorBrush x:Key="JevEnvStagingBrush" Color="{StaticResource JevEnvStaging}"/>
+                    <SolidColorBrush x:Key="JevEnvDevBrush" Color="{StaticResource JevEnvDev}"/>
+                    <SolidColorBrush x:Key="JevEnvOtherBrush" Color="{StaticResource JevEnvOther}"/>
+                    <SolidColorBrush x:Key="JevScrimBrush" Color="{StaticResource JevScrim}"/>
+                    <LinearGradientBrush x:Key="JevAccentBrush" StartPoint="0,0" EndPoint="1,0">
+                        <GradientStop Color="{StaticResource JevAccent}" Offset="0"/>
+                        <GradientStop Color="{StaticResource JevViolet}" Offset="1"/>
+                    </LinearGradientBrush>
+                </ResourceDictionary>
+
+                <!-- Windows contrast themes: ONLY system colours, so the user's own choice is what appears. State and data
+                     class are also spoken as words everywhere, so nothing depends on hue here. -->
+                <ResourceDictionary x:Key="HighContrast">
+                    <SolidColorBrush x:Key="JevSurface0Brush" Color="{ThemeResource SystemColorWindowColor}"/>
+                    <SolidColorBrush x:Key="JevSurface1Brush" Color="{ThemeResource SystemColorWindowColor}"/>
+                    <SolidColorBrush x:Key="JevSurface2Brush" Color="{ThemeResource SystemColorButtonFaceColor}"/>
+                    <SolidColorBrush x:Key="JevSurface3Brush" Color="{ThemeResource SystemColorButtonFaceColor}"/>
+                    <SolidColorBrush x:Key="JevBorderSubtleBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+                    <SolidColorBrush x:Key="JevBorderStrongBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+                    <SolidColorBrush x:Key="JevTextPrimaryBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+                    <SolidColorBrush x:Key="JevTextSecondaryBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+                    <SolidColorBrush x:Key="JevFocusBrush" Color="{ThemeResource SystemColorHighlightColor}"/>
+                    <SolidColorBrush x:Key="JevAccentSolidBrush" Color="{ThemeResource SystemColorHighlightColor}"/>
+                    <SolidColorBrush x:Key="JevAccentOnBrush" Color="{ThemeResource SystemColorHighlightTextColor}"/>
+                    <SolidColorBrush x:Key="JevBackdropBrush" Color="{ThemeResource SystemColorWindowColor}"/>
+                    <SolidColorBrush x:Key="JevStateHotBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+                    <SolidColorBrush x:Key="JevStateWarmBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+                    <SolidColorBrush x:Key="JevStateColdBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+                    <SolidColorBrush x:Key="JevStateSuspendedBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+                    <SolidColorBrush x:Key="JevStateVirtualBrush" Color="{ThemeResource SystemColorGrayTextColor}"/>
+                    <SolidColorBrush x:Key="JevStateArchivedBrush" Color="{ThemeResource SystemColorGrayTextColor}"/>
+                    <SolidColorBrush x:Key="JevBadgePublicBrush" Color="{ThemeResource SystemColorButtonFaceColor}"/>
+                    <SolidColorBrush x:Key="JevBadgeUnknownBrush" Color="{ThemeResource SystemColorButtonFaceColor}"/>
+                    <SolidColorBrush x:Key="JevBadgeSignedInBrush" Color="{ThemeResource SystemColorButtonFaceColor}"/>
+                    <SolidColorBrush x:Key="JevBadgeSensitiveBrush" Color="{ThemeResource SystemColorButtonFaceColor}"/>
+                    <SolidColorBrush x:Key="JevBadgeSecretBrush" Color="{ThemeResource SystemColorButtonFaceColor}"/>
+                    <SolidColorBrush x:Key="JevBadgePrivateBrush" Color="{ThemeResource SystemColorButtonFaceColor}"/>
+                    <SolidColorBrush x:Key="JevBadgeTextBrush" Color="{ThemeResource SystemColorButtonTextColor}"/>
+                    <SolidColorBrush x:Key="JevDangerBrush" Color="{ThemeResource SystemColorHighlightColor}"/>
+                    <SolidColorBrush x:Key="JevDangerTextBrush" Color="{ThemeResource SystemColorHighlightTextColor}"/>
+                    <SolidColorBrush x:Key="JevEnvStagingBrush" Color="{ThemeResource SystemColorHighlightColor}"/>
+                    <SolidColorBrush x:Key="JevEnvDevBrush" Color="{ThemeResource SystemColorHighlightColor}"/>
+                    <SolidColorBrush x:Key="JevEnvOtherBrush" Color="{ThemeResource SystemColorHighlightColor}"/>
+                    <SolidColorBrush x:Key="JevScrimBrush" Color="{ThemeResource SystemColorWindowColor}"/>
+                    <SolidColorBrush x:Key="JevAccentBrush" Color="{ThemeResource SystemColorHighlightColor}"/>
+                </ResourceDictionary>
+
+            </ResourceDictionary.ThemeDictionaries>
+
             <ThemeShadow x:Key="JevShadow"/>
+
+            <!-- Text that names no colour is the primary text token. (A Grid has no Foreground to inherit from, so the
+                 default is set here, once, and every TextBlock in the window and in dialogs picks it up.) -->
+            <Style TargetType="TextBlock">
+                <Setter Property="Foreground" Value="{ThemeResource JevTextPrimaryBrush}"/>
+            </Style>
+
             <Style x:Key="JevToolButton" TargetType="Button">
-                <Setter Property="Background" Value="#161B27"/>
-                <Setter Property="BorderBrush" Value="{StaticResource JevLineBrush}"/>
+                <Setter Property="Background" Value="{ThemeResource JevSurface2Brush}"/>
+                <Setter Property="BorderBrush" Value="{ThemeResource JevBorderSubtleBrush}"/>
                 <Setter Property="CornerRadius" Value="10"/>
                 <Setter Property="Padding" Value="10,6"/>
                 <Setter Property="FontSize" Value="12.5"/>
             </Style>
             <Style x:Key="JevCombo" TargetType="ComboBox">
                 <Setter Property="CornerRadius" Value="10"/>
-                <Setter Property="Background" Value="#161B27"/>
-                <Setter Property="BorderBrush" Value="{StaticResource JevLineBrush}"/>
+                <Setter Property="Background" Value="{ThemeResource JevSurface2Brush}"/>
+                <Setter Property="BorderBrush" Value="{ThemeResource JevBorderSubtleBrush}"/>
             </Style>
         </ResourceDictionary>
     </Application.Resources>

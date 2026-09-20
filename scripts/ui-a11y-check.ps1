@@ -28,12 +28,16 @@
 .PARAMETER Configuration   debug (default) or release build to launch.
 .PARAMETER Root            Fixed test root. Each run gets its own new subdirectory under it.
 .PARAMETER MaxTabPresses   Upper bound on Tab presses; running out is INCONCLUSIVE, never a pass.
+.PARAMETER Theme           dark (default), light or system: which theme the app starts in, for the accessibility checks and the captures.
+.PARAMETER Shots           Also open each menu and dialog and save a true screen capture of it. Never changes the verdict.
 #>
 param(
     [string]$Configuration = 'debug',
     [string]$Root = 'D:\Browser\_ui-check',
     [int]$Width = 1422,
-    [int]$MaxTabPresses = 45
+    [int]$MaxTabPresses = 45,
+    [ValidateSet('dark', 'light', 'system')][string]$Theme = 'dark',
+    [switch]$Shots
 )
 $ErrorActionPreference = 'Stop'
 $script:exitCode = 3
@@ -70,6 +74,7 @@ catch {
 }
 
 $env:JEVBROWSE_DATA_DIR = $Out
+$env:JEVBROWSE_THEME = $Theme
 $env:JEVBROWSE_NO_FILTER_UPDATE = '1'; $env:JEVBROWSE_AI = '0'; $env:JEVBROWSE_MODE = 'Power'; $env:JEVBROWSE_DEVSPACE = '0'
 '{"firstRunDone":true}' | Set-Content "$Out\settings.json" -Encoding ascii
 
@@ -168,10 +173,33 @@ try {
         }
     }
 
-    $r = $win.Current.BoundingRectangle
-    $bmp = New-Object System.Drawing.Bitmap ([int]$r.Width), ([int]$r.Height)
-    $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen([int]$r.X, [int]$r.Y, 0, 0, $bmp.Size)
-    $bmp.Save("$Out\shots\main.png", [System.Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $bmp.Dispose()
+    function Shot($name) {
+        $b = $win.Current.BoundingRectangle
+        $bm = New-Object System.Drawing.Bitmap ([int]$b.Width), ([int]$b.Height)
+        $gr = [System.Drawing.Graphics]::FromImage($bm); $gr.CopyFromScreen([int]$b.X, [int]$b.Y, 0, 0, $bm.Size)
+        $bm.Save("$Out\shots\$name.png", [System.Drawing.Imaging.ImageFormat]::Png); $gr.Dispose(); $bm.Dispose()
+    }
+    if ($Shots -and (Ensure-Foreground)) {
+        Shot "$Theme-01-main"
+        foreach ($item in @(@('This tab menu', "$Theme-02-this-tab-menu"), @('Tools menu', "$Theme-03-tools-menu"),
+                            @('Shield: blocked requests and site repair', "$Theme-04-shield"), @('Receipt: what this site did', "$Theme-05-receipt"),
+                            @('Explain why this tab is awake or asleep', "$Theme-06-explain"))) {
+            if (-not (Ensure-Foreground)) { break }
+            $el = $win.FindFirst($Scope::Descendants, (New-Object System.Windows.Automation.AndCondition(
+                    (New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, $item[0])),
+                    (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Button)))))
+            if ($el) {
+                $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke(); Start-Sleep -Milliseconds 1100
+                Shot $item[1]
+                [System.Windows.Forms.SendKeys]::SendWait('{ESC}'); Start-Sleep -Milliseconds 600
+            }
+        }
+    }
+
+    # A screen capture is of whatever is on screen in that rectangle. If the app is not verifiably in front, that could be
+    # another program's window, and photographing it is not something a test should do. So: only when it is in front.
+    $captureNote = 'saved'
+    if (Ensure-Foreground) { Shot "$Theme-main-final" } else { $captureNote = 'skipped: the app was not in front, and a capture would show whatever is on screen there' }
 
     $verdict = if ($failures.Count -gt 0) { 'FAIL' } elseif (-not $cycleComplete) { 'INCONCLUSIVE' } else { 'PASS' }
     $script:exitCode = switch ($verdict) { 'PASS' { 0 } 'FAIL' { 1 } default { 2 } }
@@ -181,6 +209,7 @@ try {
         runDirectory = $Out
         interactiveControls = $all.Count
         tabTraversal = $tabStatus
+        finalCapture = $captureNote
         tabOrder = $reached
         failures = $failures
     }

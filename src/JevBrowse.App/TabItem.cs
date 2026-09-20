@@ -10,15 +10,6 @@ namespace JevBrowse.App;
 /// <summary>Sidebar view of a VirtualTab. Presentation only; the kernel owns the truth.</summary>
 public sealed class TabItem(VirtualTab tab) : INotifyPropertyChanged
 {
-    private static readonly Dictionary<ResourceState, SolidColorBrush> Brushes = new()
-    {
-        [ResourceState.Hot] = new(Windows.UI.Color.FromArgb(255, 0x3D, 0xDC, 0x84)),
-        [ResourceState.Warm] = new(Windows.UI.Color.FromArgb(255, 0xFF, 0xB4, 0x54)),
-        [ResourceState.Cold] = new(Windows.UI.Color.FromArgb(255, 0x4A, 0xA3, 0xFF)),
-        [ResourceState.Suspended] = new(Windows.UI.Color.FromArgb(255, 0x8B, 0x7B, 0xFF)),
-        [ResourceState.Virtual] = new(Windows.UI.Color.FromArgb(255, 0x6B, 0x73, 0x85)),
-        [ResourceState.Archived] = new(Windows.UI.Color.FromArgb(255, 0x3A, 0x3F, 0x4B)),
-    };
 
     public VirtualTab Tab { get; } = tab;
     public ResourceId Id => Tab.Id;
@@ -40,7 +31,19 @@ public sealed class TabItem(VirtualTab tab) : INotifyPropertyChanged
     /// <summary>Why this tab is special, in words: placement first, then the reasons it will not sleep on its own.</summary>
     private string ProtectionWords =>
         string.Join(", ", (Tab.IsPinned ? new[] { "pinned" } : []).Concat(ProtectionPhrases.StayAwake(Tab.Protection)));
-    public SolidColorBrush StateBrush => Brushes[Tab.State];
+    /// <summary>
+    /// The dot is redundant with the word beside it ("open", "sleeping"), never the only carrier. Its colour is a token,
+    /// asked for again on every refresh so a theme switch reaches it.
+    /// </summary>
+    public Brush StateBrush => Tokens.Brush(Tab.State switch
+    {
+        ResourceState.Hot => "JevStateHotBrush",
+        ResourceState.Warm => "JevStateWarmBrush",
+        ResourceState.Cold => "JevStateColdBrush",
+        ResourceState.Suspended => "JevStateSuspendedBrush",
+        ResourceState.Archived => "JevStateArchivedBrush",
+        _ => "JevStateVirtualBrush",
+    });
 
     /// <summary>
     /// What a screen reader announces. The colour dot carries the state visually and would otherwise be silent, so

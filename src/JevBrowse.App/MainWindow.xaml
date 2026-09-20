@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="using:JevBrowse.App"
         Title="JevBrowse">
-    <Grid x:Name="Root" Background="{StaticResource JevBgBrush}">
+    <Grid x:Name="Root" Background="{ThemeResource JevSurface0Brush}">
         <Grid.KeyboardAccelerators>
             <KeyboardAccelerator Key="K" Modifiers="Control" Invoked="OnPaletteAccelerator"/>
             <KeyboardAccelerator Key="F1" Invoked="OnHelpAccelerator"/>
@@ -33,15 +33,15 @@
         <!-- Custom title bar with the accent line: the window itself reads as one layered surface. -->
         <Grid x:Name="TitleBar" Grid.Row="0" Grid.ColumnSpan="2" Background="Transparent">
             <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center" Margin="14,0">
-                <Border Width="10" Height="10" CornerRadius="5" Background="{StaticResource JevAccentBrush}"/>
-                <TextBlock Text="JevBrowse" FontWeight="SemiBold" FontSize="13" Opacity="0.9"/>
-                <TextBlock x:Name="TitleHint" Text="Ctrl+K for commands · F1 for help" FontSize="12" Opacity="0.45"/>
+                <Border Width="10" Height="10" CornerRadius="5" Background="{ThemeResource JevAccentBrush}"/>
+                <TextBlock Text="JevBrowse" FontWeight="SemiBold" FontSize="13"/>
+                <TextBlock x:Name="TitleHint" Text="Ctrl+K for commands · F1 for help" FontSize="12" Foreground="{ThemeResource JevTextSecondaryBrush}"/>
             </StackPanel>
-            <Rectangle Height="1" VerticalAlignment="Bottom" Fill="{StaticResource JevAccentBrush}" Opacity="0.35"/>
+            <Rectangle Height="1" VerticalAlignment="Bottom" Fill="{ThemeResource JevAccentBrush}" Opacity="0.35"/>
         </Grid>
 
         <!-- Sidebar: a floating panel with depth. Every logical resource is visible; the dot says whether it is live. -->
-        <Border x:Name="Sidebar" Grid.Row="1" Grid.Column="0" Margin="10,8,4,10" CornerRadius="16" Background="{StaticResource JevPanelBrush}" BorderBrush="{StaticResource JevLineBrush}" BorderThickness="1" Shadow="{StaticResource JevShadow}" Translation="0,0,24">
+        <Border x:Name="Sidebar" Grid.Row="1" Grid.Column="0" Margin="10,8,4,10" CornerRadius="16" Background="{ThemeResource JevSurface1Brush}" BorderBrush="{ThemeResource JevBorderSubtleBrush}" BorderThickness="1" Shadow="{StaticResource JevShadow}" Translation="0,0,24">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
@@ -94,7 +94,7 @@
                                 <Border Width="10" Height="10" CornerRadius="5" VerticalAlignment="Center" Background="{x:Bind StateBrush, Mode=OneWay}" Shadow="{StaticResource JevShadow}" Translation="0,0,8" AutomationProperties.AccessibilityView="Raw"/>
                                 <StackPanel Grid.Column="1">
                                     <TextBlock Text="{x:Bind Title, Mode=OneWay}" TextTrimming="CharacterEllipsis" FontSize="13" AutomationProperties.AccessibilityView="Raw"/>
-                                    <TextBlock Text="{x:Bind Subtitle, Mode=OneWay}" TextTrimming="CharacterEllipsis" FontSize="11" Opacity="0.55" AutomationProperties.AccessibilityView="Raw"/>
+                                    <TextBlock Text="{x:Bind Subtitle, Mode=OneWay}" TextTrimming="CharacterEllipsis" FontSize="11" Foreground="{ThemeResource JevTextSecondaryBrush}" AutomationProperties.AccessibilityView="Raw"/>
                                 </StackPanel>
                                 <Button Grid.Column="2" Content="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="10" Padding="4" Background="Transparent" BorderThickness="0" Click="OnCloseTab" Tag="{x:Bind Id}"
                                         AutomationProperties.Name="{x:Bind CloseName, Mode=OneWay}" ToolTipService.ToolTip="{x:Bind CloseName, Mode=OneWay}"/>
@@ -102,8 +102,8 @@
                         </DataTemplate>
                     </ListView.ItemTemplate>
                 </ListView>
-                <Border Grid.Row="2" Margin="10,6,10,10" Padding="10,8" CornerRadius="12" Background="#0E1119" BorderBrush="{StaticResource JevLineBrush}" BorderThickness="1">
-                    <TextBlock x:Name="PoolText" FontSize="12" TextWrapping="Wrap" Opacity="0.85"/>
+                <Border Grid.Row="2" Margin="10,6,10,10" Padding="10,8" CornerRadius="12" Background="{ThemeResource JevSurface0Brush}" BorderBrush="{ThemeResource JevBorderSubtleBrush}" BorderThickness="1">
+                    <TextBlock x:Name="PoolText" FontSize="12" TextWrapping="Wrap" Foreground="{ThemeResource JevTextSecondaryBrush}"/>
                 </Border>
             </Grid>
         </Border>
@@ -134,7 +134,7 @@
                 <Button Content="&#xE72B;" FontFamily="Segoe MDL2 Assets" Grid.Column="1" Click="OnBack" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Back" AutomationProperties.Name="Back"/>
                 <Button Content="&#xE72A;" FontFamily="Segoe MDL2 Assets" Grid.Column="2" Click="OnForward" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Forward" AutomationProperties.Name="Forward"/>
                 <Button x:Name="ReloadButton" Content="&#xE72C;" FontFamily="Segoe MDL2 Assets" Grid.Column="3" Click="OnReloadClick" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Reload this page (Ctrl+R)" AutomationProperties.Name="Reload"/>
-                <Border Grid.Column="4" CornerRadius="14" Background="{StaticResource JevPanelBrush}" BorderBrush="{StaticResource JevLineBrush}" BorderThickness="1" Padding="6,0" Shadow="{StaticResource JevShadow}" Translation="0,0,12">
+                <Border Grid.Column="4" CornerRadius="14" Background="{ThemeResource JevSurface1Brush}" BorderBrush="{ThemeResource JevBorderSubtleBrush}" BorderThickness="1" Padding="6,0" Shadow="{StaticResource JevShadow}" Translation="0,0,12">
                     <Grid ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
@@ -143,10 +143,10 @@
                         <!-- A Button, not a tappable TextBlock: this is where a person changes how a site is treated, and a TextBlock with a
                              Tapped handler cannot be reached by keyboard or screen reader at all. -->
                         <Button x:Name="ClassBadge" Padding="8,2" MinHeight="0" MinWidth="0" CornerRadius="8" VerticalAlignment="Center" BorderThickness="0"
-                                Background="#1F5F5A" Click="OnClassBadgeTapped"
+                                Background="{ThemeResource JevBadgeUnknownBrush}" Click="OnClassBadgeTapped"
                                 ToolTipService.ToolTip="How JevBrowse treats this page. Click to change it for this site."
                                 AutomationProperties.Name="How this page is treated">
-                            <TextBlock x:Name="ClassBadgeText" FontSize="10.5" FontWeight="SemiBold" Text="PERSONAL"/>
+                            <TextBlock x:Name="ClassBadgeText" FontSize="10.5" FontWeight="SemiBold" Text="PERSONAL" Foreground="{ThemeResource JevBadgeTextBrush}"/>
                         </Button>
                         <TextBox x:Name="AddressBox" Grid.Column="1" PlaceholderText="Search or enter address" KeyDown="OnAddressKeyDown" BorderThickness="0" Background="Transparent" FontSize="13.5"/>
                     </Grid>
@@ -189,22 +189,22 @@
                 </StackPanel>
                 </ScrollViewer>
             </Grid>
-            <Border Grid.Row="1" CornerRadius="16" BorderBrush="{StaticResource JevLineBrush}" BorderThickness="1" Background="#000000" Shadow="{StaticResource JevShadow}" Translation="0,0,16">
+            <Border Grid.Row="1" CornerRadius="16" BorderBrush="{ThemeResource JevBorderSubtleBrush}" BorderThickness="1" Background="{ThemeResource JevBackdropBrush}" Shadow="{StaticResource JevShadow}" Translation="0,0,16">
                 <Grid>
                     <Grid x:Name="WebHost" CornerRadius="16">
                         <!-- Shown while a sleeping tab comes back, and when nothing is selected. Never implies the
                              live page is present: the preview is labelled as a saved image. -->
                         <StackPanel x:Name="RestorePanel" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12" MaxWidth="460" Padding="24">
-                            <Border x:Name="PreviewFrame" Visibility="Collapsed" CornerRadius="10" BorderThickness="1" BorderBrush="{StaticResource JevLineBrush}" HorizontalAlignment="Center">
+                            <Border x:Name="PreviewFrame" Visibility="Collapsed" CornerRadius="10" BorderThickness="1" BorderBrush="{ThemeResource JevBorderSubtleBrush}" HorizontalAlignment="Center">
                                 <Grid>
                                     <Image x:Name="PreviewImage" MaxHeight="240" Stretch="Uniform"/>
-                                    <Border Background="#B0000000" VerticalAlignment="Bottom" Padding="8,4">
-                                        <TextBlock Text="Previous view — a saved image, not the live page" FontSize="11" Foreground="White"/>
+                                    <Border Background="{ThemeResource JevScrimBrush}" VerticalAlignment="Bottom" Padding="8,4">
+                                        <TextBlock Text="Previous view — a saved image, not the live page" FontSize="11" Foreground="{ThemeResource JevBadgeTextBrush}"/>
                                     </Border>
                                 </Grid>
                             </Border>
                             <TextBlock x:Name="RestoreTitle" HorizontalAlignment="Center" TextAlignment="Center" FontSize="15" FontWeight="SemiBold" TextWrapping="Wrap"/>
-                            <TextBlock x:Name="RestoreStatus" HorizontalAlignment="Center" TextAlignment="Center" FontSize="12.5" Opacity="0.7" TextWrapping="Wrap"/>
+                            <TextBlock x:Name="RestoreStatus" HorizontalAlignment="Center" TextAlignment="Center" FontSize="12.5" Foreground="{ThemeResource JevTextSecondaryBrush}" TextWrapping="Wrap"/>
                             <ProgressBar x:Name="RestoreProgress" IsIndeterminate="True" Width="200" Visibility="Collapsed"/>
                             <StackPanel x:Name="RestoreActions" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center" Visibility="Collapsed">
                                 <Button Content="Try again" Click="OnRestoreRetry" Style="{StaticResource JevToolButton}"/>
@@ -213,13 +213,13 @@
                             </StackPanel>
                         </StackPanel>
                     </Grid>
-                    <Border x:Name="ProdBorder" CornerRadius="16" BorderBrush="#E0FF3B30" BorderThickness="4" IsHitTestVisible="False" Visibility="Collapsed"/>
-                    <Border x:Name="EnvBadge" Background="#E0FF3B30" CornerRadius="0,0,10,0" Padding="10,3" HorizontalAlignment="Left" VerticalAlignment="Top" IsHitTestVisible="False" Visibility="Collapsed">
-                        <TextBlock x:Name="EnvBadgeText" Foreground="White" FontWeight="Bold" FontSize="12" Text="PROD"/>
+                    <Border x:Name="ProdBorder" CornerRadius="16" BorderBrush="{ThemeResource JevDangerBrush}" BorderThickness="4" IsHitTestVisible="False" Visibility="Collapsed"/>
+                    <Border x:Name="EnvBadge" Background="{ThemeResource JevDangerBrush}" CornerRadius="0,0,10,0" Padding="10,3" HorizontalAlignment="Left" VerticalAlignment="Top" IsHitTestVisible="False" Visibility="Collapsed">
+                        <TextBlock x:Name="EnvBadgeText" Foreground="{ThemeResource JevBadgeTextBrush}" FontWeight="Bold" FontSize="12" Text="PROD"/>
                     </Border>
                 </Grid>
             </Border>
-            <TextBlock x:Name="StatusText" Grid.Row="2" Padding="8,6,8,0" FontSize="12" TextWrapping="Wrap" Opacity="0.85" AutomationProperties.LiveSetting="Polite"/>
+            <TextBlock x:Name="StatusText" Grid.Row="2" Padding="8,6,8,0" FontSize="12" TextWrapping="Wrap" Foreground="{ThemeResource JevTextSecondaryBrush}" AutomationProperties.LiveSetting="Polite"/>
         </Grid>
     </Grid>
 </Window>
