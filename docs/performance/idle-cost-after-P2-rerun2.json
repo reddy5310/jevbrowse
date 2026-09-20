@@ -1,0 +1,24 @@
+﻿{
+    "label":  "after-P2-rerun2",
+    "configuration":  "debug",
+    "sampledSeconds":  40,
+    "logicalCores":  16,
+    "processesInTree":  {
+                            "min":  7,
+                            "max":  7
+                        },
+    "measurementTrust":  "ok",
+    "processesThatExitedWhileSampling":  0,
+    "addressBarShows":  "jev://welcome/",
+    "cpuSecondsConsumedWhileSampling":  2.172,
+    "cpuPercentOfOneCore":  {
+                                "average":  1.22,
+                                "peak":  2.55
+                            },
+    "gpuEngineInstancesMatchedToApp":  45,
+    "gpuPercentSummedAcrossEngines":  {
+                                          "average":  0.01,
+                                          "peak":  0.12
+                                      },
+    "note":  "Idle = window in front on the local welcome page, untouched. One machine; not a comparison with any other browser."
+}

@@ -255,9 +255,17 @@ public sealed partial class MainWindow
     private void ApplySidebar(bool collapsed, bool remember)
     {
         _sidebarCollapsed = collapsed;
-        SidebarColumn.Width = new GridLength(collapsed ? 0 : 276);
-        Sidebar.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
-        MainArea.Margin = collapsed ? new Thickness(10, 8, 10, 10) : new Thickness(4, 8, 10, 10);
+        void Layout()
+        {
+            SidebarColumn.Width = new GridLength(collapsed ? 0 : 276);
+            Sidebar.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
+            MainArea.Margin = collapsed ? new Thickness(10, 8, 10, 10) : new Thickness(4, 8, 10, 10);
+        }
+        // Only a person's own toggle animates (remember == true); the state restored at start-up just is. Hiding fades the
+        // panel out and then gives its room back; showing gives the room back and fades the panel in.
+        if (!remember || !Motion.Enabled) { Sidebar.Opacity = 1; Layout(); }
+        else if (collapsed) Motion.Fade(Sidebar, 0f, JevBrowse.VirtualTabs.MotionKind.Fast, () => { Layout(); Sidebar.Opacity = 1; });
+        else { Sidebar.Opacity = 0; Layout(); Motion.Fade(Sidebar, 1f, JevBrowse.VirtualTabs.MotionKind.Base); }
         var label = collapsed ? "Show sidebar" : "Hide sidebar";
         ToolTipService.SetToolTip(SidebarToggle, $"{label} (Ctrl+B)");
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(SidebarToggle, label);

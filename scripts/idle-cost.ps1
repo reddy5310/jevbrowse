@@ -84,7 +84,8 @@ try {
     $n = [Math]::Max(1, [int]($SampleSeconds / $interval))
     $prevCpu = @{}
     $firstCpu = @{}; $lastCpu = @{}      # independent cross-check: total CPU consumed, from first and last reading only
-    $readErrors = 0
+    $readErrors = 0                      # a process that is STILL RUNNING but could not be read: a real error
+    $exitedDuringSampling = 0            # a process that no longer exists by the time it was read: normal for helper processes
     $gpuMatchedMax = 0
     $sumDeltas = 0.0                     # CPU-seconds added up sample by sample
     $cpuSamples = New-Object System.Collections.Generic.List[double]
@@ -94,7 +95,7 @@ try {
 
     # Prime the CPU baseline so the first sample is a real delta.
     foreach ($id in @($proc.Id) + @(Get-Descendants $proc.Id)) {
-        try { $v = (Get-Process -Id $id -ErrorAction Stop).TotalProcessorTime.TotalSeconds; $prevCpu[$id] = $v; $firstCpu[$id] = $v; $lastCpu[$id] = $v } catch { $readErrors++ }
+        try { $v = (Get-Process -Id $id -ErrorAction Stop).TotalProcessorTime.TotalSeconds; $prevCpu[$id] = $v; $firstCpu[$id] = $v; $lastCpu[$id] = $v } catch { if (Get-Process -Id $id -ErrorAction SilentlyContinue) { $readErrors++ } else { $exitedDuringSampling++ } }
     }
     $lastT = $sw.Elapsed.TotalSeconds
 
@@ -113,7 +114,7 @@ try {
                 if ($prevCpu.ContainsKey($id)) { $d = $t - $prevCpu[$id]; if ($d -gt 0) { $cpuSec += $d } }
                 else { $firstCpu[$id] = $t }        # a process that appeared during sampling
                 $prevCpu[$id] = $t; $lastCpu[$id] = $t
-            } catch { $readErrors++ }
+            } catch { if (Get-Process -Id $id -ErrorAction SilentlyContinue) { $readErrors++ } else { $exitedDuringSampling++ } }
         }
         $sumDeltas += $cpuSec
         $cpuSamples.Add(100.0 * $cpuSec / $dt)   # % of ONE core, over the REAL elapsed time (listing the tree is not instant)
@@ -145,6 +146,7 @@ try {
         logicalCores = $cores
         processesInTree = [ordered]@{ min = ($procCounts | Measure-Object -Minimum).Minimum; max = ($procCounts | Measure-Object -Maximum).Maximum }
         measurementTrust = $trust
+        processesThatExitedWhileSampling = $exitedDuringSampling
         addressBarShows = if ($addressShows.Length -gt 60) { $addressShows.Substring(0, 60) + '...' } else { $addressShows }
         cpuSecondsConsumedWhileSampling = [Math]::Round($crossCheck, 3)
         cpuPercentOfOneCore = Stat $cpuSamples

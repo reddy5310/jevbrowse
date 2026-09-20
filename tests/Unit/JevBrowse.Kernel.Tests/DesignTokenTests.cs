@@ -138,6 +138,47 @@ public class DesignTokenTests
         Assert.Empty(Regex.Matches(xaml, @"<TextBlock[^>]*\sOpacity=""0?\.\d+"""));
     }
 
+    [Theory]
+    [InlineData("dark")]
+    [InlineData("light")]
+    public void The_welcome_page_is_legible_in_both_schemes(string scheme)
+    {
+        var html = File.ReadAllText(Path.Combine(Src(), "WelcomePage.cs"));
+        // dark = the :root block; light = the block inside @media (prefers-color-scheme: light)
+        var block = scheme == "dark"
+            ? Regex.Match(html, @":root \{ color-scheme:dark;(?<v>.*?)\}", RegexOptions.Singleline).Groups["v"].Value
+            : Regex.Match(html, @"prefers-color-scheme: light\) \{\s*:root \{ color-scheme:light;(?<v>.*?)\}", RegexOptions.Singleline).Groups["v"].Value;
+        Assert.NotEmpty(block);
+        var v = Regex.Matches(block, @"--(?<k>[\w-]+):(?<c>#[0-9a-fA-F]{6})").ToDictionary(m => m.Groups["k"].Value, m => m.Groups["c"].Value);
+
+        Assert.True(Ratio(v["text"], v["bg"]) >= 7.0, $"{scheme}: text on page = {Ratio(v["text"], v["bg"]):F2}");
+        Assert.True(Ratio(v["muted"], v["bg"]) >= 4.5, $"{scheme}: muted on page = {Ratio(v["muted"], v["bg"]):F2}");
+        foreach (var card in new[] { "card1", "card2" })
+        {
+            Assert.True(Ratio(v["body"], v[card]) >= 7.0, $"{scheme}: body on {card} = {Ratio(v["body"], v[card]):F2}");
+            Assert.True(Ratio(v["text"], v[card]) >= 7.0, $"{scheme}: text on {card} = {Ratio(v["text"], v[card]):F2}");
+            Assert.True(Ratio(v["teal"], v[card]) >= 4.5, $"{scheme}: teal on {card} = {Ratio(v["teal"], v[card]):F2}");
+            Assert.True(Ratio(v["rose"], v[card]) >= 4.5, $"{scheme}: rose on {card} = {Ratio(v["rose"], v[card]):F2}");
+        }
+        Assert.True(Ratio(v["teal"], v["chip"]) >= 4.5, $"{scheme}: key chip = {Ratio(v["teal"], v["chip"]):F2}");
+        Assert.True(Ratio(v["text"], v["btn"]) >= 7.0, $"{scheme}: button text = {Ratio(v["text"], v["btn"]):F2}");
+        // The primary button is a teal-to-violet gradient with its own text colour: the worst end must still be readable.
+        foreach (var end in new[] { "teal", "violet" })
+            Assert.True(Ratio(v["btn-on"], v[end]) >= 4.5, $"{scheme}: primary button text on {end} = {Ratio(v["btn-on"], v[end]):F2}");
+        foreach (var dot in new[] { "hot", "cold", "virt" })
+            Assert.True(Ratio(v[dot], v["card1"]) >= 3.0, $"{scheme}: state dot {dot} = {Ratio(v[dot], v["card1"]):F2}");
+    }
+
+    [Fact]
+    public void The_welcome_page_honours_reduced_motion_and_names_no_literal_colour_outside_its_two_schemes()
+    {
+        var html = File.ReadAllText(Path.Combine(Src(), "WelcomePage.cs"));
+        Assert.Contains("prefers-reduced-motion: reduce", html);
+        // Literal colours belong only in the two variable blocks; everything else must use the variables.
+        var stripped = Regex.Replace(html, @":root \{[^}]*\}", "");
+        Assert.Empty(Regex.Matches(stripped, @"(?<![\w-])#[0-9a-fA-F]{6}\b"));
+    }
+
     [Fact]
     public void Nothing_in_the_shell_code_picks_a_named_colour()
     {

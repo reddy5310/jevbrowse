@@ -92,6 +92,7 @@ public sealed partial class MainWindow : Window
     }
 
     private bool _shutdownCheckpointDone;
+    private int _restoreEpoch;
     private bool _shutdownInProgress;
 
     // ---- First run / help ----
@@ -157,7 +158,7 @@ public sealed partial class MainWindow : Window
         // DevSpace: optional module. Off unless JEVBROWSE_DEVSPACE=1 or toggled in the Dev panel; attaches nothing when off.
         _dev = new DevSpaceAdapter(Path.Combine(DataDir, "devspace", "projects.json"));
         _dev.SetEnabled(Environment.GetEnvironmentVariable("JEVBROWSE_DEVSPACE") == "1");
-        _leases.OnCoreCreated = async (core, id, container, isolation, url) => { await _shield.AttachAsync(core, id, url); _permissions.Attach(core, container, isolation); _dev.Attach(core, id); };
+        _leases.OnCoreCreated = async (core, id, container, isolation, url) => { ApplyPageScheme(core); await _shield.AttachAsync(core, id, url); _permissions.Attach(core, container, isolation); _dev.Attach(core, id); };
         _shield.WallDetected += id => DispatcherQueue.TryEnqueue(() =>
         {
             var t = _kernel?.Tabs.FirstOrDefault(x => x.Id == id);
@@ -516,6 +517,8 @@ public sealed partial class MainWindow : Window
         var tab = _kernel?.Tabs.FirstOrDefault(t => t.Id == id);
         if (tab is null) return;
         _restoringId = id;
+        _restoreEpoch++;                       // any fade still finishing from an earlier restore must not hide THIS one
+        RestorePanel.Opacity = 1;
         RestorePanel.Visibility = Visibility.Visible;
         RestoreActions.Visibility = Visibility.Collapsed;
         RestoreProgress.Visibility = Visibility.Visible;
@@ -563,8 +566,17 @@ public sealed partial class MainWindow : Window
         if (_restoringId != id) return;
         _restoreTimer?.Stop();
         _restoringId = null;
-        RestorePanel.Visibility = Visibility.Collapsed;
-        PreviewImage.Source = null;
+        // Continuity: the saved picture fades into the live page, so it is clear the picture was a stand-in and that the
+        // real page has arrived. With animations off in Windows the change is immediate. The epoch check stops a fade that
+        // is still finishing from hiding a NEW restore that started in the meantime.
+        var epoch = ++_restoreEpoch;
+        Motion.Fade(RestorePanel, 0f, JevBrowse.VirtualTabs.MotionKind.Fast, () =>
+        {
+            if (epoch != _restoreEpoch) return;
+            RestorePanel.Visibility = Visibility.Collapsed;
+            RestorePanel.Opacity = 1;
+            PreviewImage.Source = null;
+        });
         // Say so when something was actually lost, and name the loss. A missing preview image changed nothing the
         // user can see in the page, so it is not reported as a failed restore.
         var shortfall = _kernel?.LastCapture(id)?.Shortfall ?? "";

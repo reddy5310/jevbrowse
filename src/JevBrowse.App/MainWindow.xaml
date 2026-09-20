@@ -134,7 +134,7 @@
                 <Button Content="&#xE72B;" FontFamily="Segoe MDL2 Assets" Grid.Column="1" Click="OnBack" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Back" AutomationProperties.Name="Back"/>
                 <Button Content="&#xE72A;" FontFamily="Segoe MDL2 Assets" Grid.Column="2" Click="OnForward" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Forward" AutomationProperties.Name="Forward"/>
                 <Button x:Name="ReloadButton" Content="&#xE72C;" FontFamily="Segoe MDL2 Assets" Grid.Column="3" Click="OnReloadClick" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Reload this page (Ctrl+R)" AutomationProperties.Name="Reload"/>
-                <Border Grid.Column="4" CornerRadius="14" Background="{ThemeResource JevSurface1Brush}" BorderBrush="{ThemeResource JevBorderSubtleBrush}" BorderThickness="1" Padding="6,0" Shadow="{StaticResource JevShadow}" Translation="0,0,12">
+                <Border x:Name="AddressPill" Grid.Column="4" CornerRadius="14" Background="{ThemeResource JevSurface1Brush}" BorderBrush="{ThemeResource JevBorderSubtleBrush}" BorderThickness="1" Padding="6,0" Shadow="{StaticResource JevShadow}" Translation="0,0,12">
                     <Grid ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
@@ -189,7 +189,7 @@
                 </StackPanel>
                 </ScrollViewer>
             </Grid>
-            <Border Grid.Row="1" CornerRadius="16" BorderBrush="{ThemeResource JevBorderSubtleBrush}" BorderThickness="1" Background="{ThemeResource JevBackdropBrush}" Shadow="{StaticResource JevShadow}" Translation="0,0,16">
+            <Border x:Name="PageSurface" Grid.Row="1" CornerRadius="16" BorderBrush="{ThemeResource JevBorderSubtleBrush}" BorderThickness="1" Background="{ThemeResource JevBackdropBrush}" Shadow="{StaticResource JevShadow}" Translation="0,0,16">
                 <Grid>
                     <Grid x:Name="WebHost" CornerRadius="16">
                         <!-- Shown while a sleeping tab comes back, and when nothing is selected. Never implies the
