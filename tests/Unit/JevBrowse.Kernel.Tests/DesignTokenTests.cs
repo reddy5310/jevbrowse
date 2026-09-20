@@ -299,6 +299,20 @@ public class DesignTokenTests
     }
 
     [Fact]
+    public void Ending_a_restore_hides_its_indeterminate_progress_bar_because_it_animates_for_as_long_as_it_is_visible()
+    {
+        // A collapsed panel does not stop a visible indeterminate ProgressBar inside it: idle CPU went from ~1.4% to ~7% when nothing
+        // collapsed it after start-up. Both places that end a restore must collapse the bar itself, not only its panel.
+        var code = File.ReadAllText(Path.Combine(Src(), "MainWindow.xaml.cs"));
+        var finish = code[code.IndexOf("private void FinishRestore", StringComparison.Ordinal)..];
+        finish = finish[..finish.IndexOf("private ResourceId? _shortfallFor", StringComparison.Ordinal)];
+        Assert.Contains("RestoreProgress.Visibility = Visibility.Collapsed", finish);
+        var idle = code[code.IndexOf("private void UpdateIdlePanel", StringComparison.Ordinal)..];
+        idle = idle[..idle.IndexOf("private void ShowRestoring", StringComparison.Ordinal)];
+        Assert.Matches(@"_restoringId is null\)\s*\{[^}]*RestoreProgress\.Visibility = Visibility\.Collapsed", idle);
+    }
+
+    [Fact]
     public void Every_token_the_window_refers_to_exists()
     {
         var defined = AppResources().Descendants().Select(e => (string?)e.Attribute(X + "Key")).Where(k => k is not null).ToHashSet();

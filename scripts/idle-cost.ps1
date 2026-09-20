@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Measures what the app costs while it is doing nothing: CPU and GPU used by the app and its child processes at rest.
 
@@ -31,7 +31,10 @@ param(
     [int]$SettleSeconds = 20,
     [int]$SampleSeconds = 40,
     [string]$Label = 'run',
-    [string]$StartUrl = 'jev://welcome/'
+    [string]$StartUrl = 'jev://welcome/',
+    # Agent pages held open while measuring: 'static:N', 'busy:N' (hidden, and deliberately hard-working), or 'busy-shown:N' (the control:
+    # the same page SHOWN, which proves the instrument can see a busy page). Empty = none.
+    [string]$AgentLoad = ''
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'env.ps1') | Out-Null
@@ -61,7 +64,7 @@ function Get-Descendants([int]$rootPid) {
 }
 
 $exe = Join-Path $PSScriptRoot "..\artifacts\bin\JevBrowse.App\${Configuration}_win-x64\JevBrowse.App.exe"
-$proc = Start-Process (Resolve-Path $exe) -PassThru
+$proc = if ($AgentLoad) { Start-Process (Resolve-Path $exe) -ArgumentList "--agent-hidden-load=$AgentLoad" -PassThru } else { Start-Process (Resolve-Path $exe) -PassThru }
 $cores = [Environment]::ProcessorCount
 try {
     Start-Sleep -Seconds $SettleSeconds
@@ -91,6 +94,7 @@ try {
     $cpuSamples = New-Object System.Collections.Generic.List[double]
     $gpuSamples = New-Object System.Collections.Generic.List[double]
     $procCounts = New-Object System.Collections.Generic.List[int]
+    $wsSamples = New-Object System.Collections.Generic.List[double]; $privSamples = New-Object System.Collections.Generic.List[double]   # MB, summed over the app and its children
     $sw = [Diagnostics.Stopwatch]::StartNew(); $lastT = 0.0
 
     # Prime the CPU baseline so the first sample is a real delta.
@@ -105,10 +109,10 @@ try {
         $procCounts.Add($ids.Count)
         $now = $sw.Elapsed.TotalSeconds; $dt = $now - $lastT; $lastT = $now
 
-        $cpuSec = 0.0
+        $cpuSec = 0.0; $wsMb = 0.0; $privMb = 0.0
         foreach ($id in $ids) {
             try {
-                $t = (Get-Process -Id $id -ErrorAction Stop).TotalProcessorTime.TotalSeconds
+                $gp = Get-Process -Id $id -ErrorAction Stop; $t = $gp.TotalProcessorTime.TotalSeconds; $wsMb += $gp.WorkingSet64 / 1MB; $privMb += $gp.PrivateMemorySize64 / 1MB
                 # Plain comparison, not [Math]::Max(0, $double): that call is ambiguous in PowerShell and throws, and an
                 # empty catch turned every sample into a silent zero.
                 if ($prevCpu.ContainsKey($id)) { $d = $t - $prevCpu[$id]; if ($d -gt 0) { $cpuSec += $d } }
@@ -116,7 +120,7 @@ try {
                 $prevCpu[$id] = $t; $lastCpu[$id] = $t
             } catch { if (Get-Process -Id $id -ErrorAction SilentlyContinue) { $readErrors++ } else { $exitedDuringSampling++ } }
         }
-        $sumDeltas += $cpuSec
+        $sumDeltas += $cpuSec; $wsSamples.Add($wsMb); $privSamples.Add($privMb)
         $cpuSamples.Add(100.0 * $cpuSec / $dt)   # % of ONE core, over the REAL elapsed time (listing the tree is not instant)
 
         if ($gpuAvailable) {
@@ -131,6 +135,9 @@ try {
         }
     }
 
+    # What the app says the agent pages' controls were doing, so "hidden" is read back rather than assumed.
+    $hiddenState = $null
+    if ($AgentLoad) { $hs = Join-Path $Out 'benchmarks\hidden-load-state.json'; if (Test-Path $hs) { $hiddenState = Get-Content $hs -Raw | ConvertFrom-Json } }
     $crossCheck = 0.0
     foreach ($id in $lastCpu.Keys) { if ($firstCpu.ContainsKey($id)) { $crossCheck += ($lastCpu[$id] - $firstCpu[$id]) } }
     $summed = $sumDeltas
@@ -150,6 +157,9 @@ try {
         addressBarShows = if ($addressShows.Length -gt 60) { $addressShows.Substring(0, 60) + '...' } else { $addressShows }
         cpuSecondsConsumedWhileSampling = [Math]::Round($crossCheck, 3)
         cpuPercentOfOneCore = Stat $cpuSamples
+        memoryMegabytes = [ordered]@{ workingSetSummedOverTheProcessTree = (Stat $wsSamples); privateBytesSummedOverTheProcessTree = (Stat $privSamples) }
+        agentLoad = $(if ($AgentLoad) { $AgentLoad } else { 'none' })
+        agentPagesAsTheAppReportedThem = $hiddenState
         gpuEngineInstancesMatchedToApp = $gpuMatchedMax
         gpuPercentSummedAcrossEngines = if ($gpuAvailable) { Stat $gpuSamples } else { 'unavailable on this machine' }
         note = 'Idle = window in front on the local welcome page, untouched. One machine; not a comparison with any other browser.'
@@ -161,6 +171,13 @@ try {
     if ($StartUrl -and -not $addressShows.StartsWith($wantHead, [StringComparison]::OrdinalIgnoreCase)) {
         Write-Output "WARNING: -StartUrl was not the page that loaded (address bar shows '$addressShows'); this is not the control it was meant to be."
         exit 2
+    }
+    if ($AgentLoad) {
+        $kind = ($AgentLoad -split ':')[0]
+        if ($null -eq $hiddenState) { Write-Output 'WARNING: the app never reported its agent pages, so this run does not show what it was meant to.'; exit 2 }
+        $shownCount = @($hiddenState.agentPages | Where-Object { $_.shown -eq 'Visible' }).Count
+        if ($kind -ne 'busy-shown' -and $shownCount -gt 0) { Write-Output "WARNING: $shownCount agent page(s) were SHOWN in a run meant to keep them hidden."; exit 2 }
+        if ($kind -eq 'busy-shown' -and $shownCount -lt 1) { Write-Output 'WARNING: the control page was not shown, so it is not the control it was meant to be.'; exit 2 }
     }
     if ($trust -ne 'ok') { exit 2 }
 }

@@ -270,6 +270,8 @@ public sealed partial class MainWindow : Window
         _leases.LocalPage = u => u.Scheme == "jev" && u.Host == "welcome" ? WelcomePage.Html(_providers.Any(p => p.IsConfigured), _jev?.IsConfigured == true) : null;
 
         var uiDialog = args.FirstOrDefault(a => a.StartsWith("--ui-dialog=", StringComparison.Ordinal)) is { } ud0 ? ud0["--ui-dialog=".Length..] : null;
+        if (args.FirstOrDefault(a => a.StartsWith("--agent-hidden-load=", StringComparison.Ordinal)) is { } hiddenLoad)
+            _ = RunAgentHiddenLoadAsync(hiddenLoad["--agent-hidden-load=".Length..]);   // measured from outside by scripts/idle-cost.ps1 -AgentLoad
         if (args.Contains("--ui-shot") || uiDialog is not null)
         {
             // Render the window itself (not the screen) after the welcome page and tips settle, for docs and review.
@@ -355,7 +357,7 @@ public sealed partial class MainWindow : Window
             });
         }
 
-        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--private-session-check") || args.Contains("--agent-check") || args.Contains("--agent-window-check") || args.Contains("--agent-screenshot-stage-check") || args.Contains("--agent-frame-secret-check") || args.Contains("--agent-show-during-capture-check") || args.Contains("--agent-indicator-check") || args.Contains("--media-check") || args.Contains("--site-sweep") || args.Any(a => a.StartsWith("--join=", StringComparison.Ordinal)))
+        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--private-session-check") || args.Contains("--agent-check") || args.Contains("--agent-window-check") || args.Contains("--agent-screenshot-stage-check") || args.Contains("--agent-frame-secret-check") || args.Contains("--agent-show-during-capture-check") || args.Contains("--agent-indicator-check") || args.Contains("--idle-invariants-check") || args.Contains("--media-check") || args.Contains("--site-sweep") || args.Any(a => a.StartsWith("--join=", StringComparison.Ordinal)))
         {
             Directory.CreateDirectory(Path.Combine(DataDir, "benchmarks"));
             try
@@ -370,6 +372,7 @@ public sealed partial class MainWindow : Window
                 else if (args.Contains("--agent-frame-secret-check")) await RunAgentFrameSecretCheckAsync();
                 else if (args.Contains("--agent-show-during-capture-check")) await RunAgentShowDuringCaptureCheckAsync();
                 else if (args.Contains("--agent-indicator-check")) await RunAgentIndicatorCheckAsync();
+                else if (args.Contains("--idle-invariants-check")) await RunIdleInvariantsCheckAsync();
                 else if (args.Contains("--privacy-check")) await RunPrivacyCheckAsync();
                 else if (args.Contains("--memory-lab")) await RunMemoryLabAsync();
                 else if (args.Contains("--restore-bench")) await RunRestoreBenchAsync();
@@ -577,7 +580,7 @@ public sealed partial class MainWindow : Window
             RestoreTitle.Text = "Nothing open here";
             RestoreStatus.Text = "Choose a tab on the left, or press Ctrl+K.";
         }
-        else if (_restoringId is null) RestorePanel.Visibility = Visibility.Collapsed;
+        else if (_restoringId is null) { RestorePanel.Visibility = Visibility.Collapsed; RestoreProgress.Visibility = Visibility.Collapsed; }
     }
 
     private void ShowRestoring(ResourceId id, bool hasSavedPlace)
@@ -644,6 +647,7 @@ public sealed partial class MainWindow : Window
             RestorePanel.Visibility = Visibility.Collapsed;
             RestorePanel.Opacity = 1;
             PreviewImage.Source = null;
+            RestoreProgress.Visibility = Visibility.Collapsed;   // an indeterminate bar animates for as long as it is Visible, even in a collapsed panel
         });
         // Say so when something was actually lost, and name the loss. A missing preview image changed nothing the
         // user can see in the page, so it is not reported as a failed restore.
@@ -1717,6 +1721,81 @@ public sealed partial class MainWindow : Window
             statusLine = StatusText.Text,
         };
         await File.WriteAllTextAsync(Path.Combine(dir, "agent-indicator-check.json"), JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    private LocalAgentHost? _hiddenLoadHost;
+    private System.Net.HttpListener? _hiddenLoadServer;
+
+    /// <summary>
+    /// For measurement only: opens N agent pages from a local server and leaves them alone so their cost can be read from outside. Kinds:
+    /// "static" (a plain page), "busy" (a page that draws to a canvas every frame, animates in CSS and runs a hot timer, the worst thing a
+    /// page can do to be a nuisance), "busy-shown" (the same page but SHOWN: the control that proves the instrument can see a busy page).
+    /// Runs alongside the normal window; nothing exits. Writes what it did and what the controls' visibility really was.
+    /// </summary>
+    private async Task RunAgentHiddenLoadAsync(string spec)
+    {
+        try
+        {
+            var parts = spec.Split(':'); var kind = parts[0]; var count = parts.Length > 1 && int.TryParse(parts[1], out var c) ? c : 1;
+            var k = _kernel!;
+            var dir = Path.Combine(DataDir, "benchmarks"); Directory.CreateDirectory(dir);
+            await Task.Delay(6000);
+            int port = 47900; System.Net.HttpListener? server = null;
+            for (; port < 48000; port++)
+            {
+                var l = new System.Net.HttpListener(); l.Prefixes.Add($"http://127.0.0.1:{port}/");
+                try { l.Start(); server = l; break; } catch (Exception) { l.Close(); }
+            }
+            if (server is null) return;
+            _hiddenLoadServer = server;
+            const string busy = "<!doctype html><html><head><meta charset=utf-8><title>busy</title><style>@keyframes spin{to{transform:rotate(360deg)}}#a{width:80px;height:80px;background:#08c;animation:spin 1s linear infinite}</style></head><body><div id=a></div><canvas id=c width=600 height=400></canvas><script>"
+                + "const g=document.getElementById('c').getContext('2d');let t=0;function f(){t++;g.clearRect(0,0,600,400);for(let i=0;i<300;i++){g.beginPath();g.arc(300+Math.cos(t/20+i)*200,200+Math.sin(t/17+i)*150,8,0,6.3);g.fill();}requestAnimationFrame(f);}f();"
+                + "let x=0;setInterval(()=>{for(let i=0;i<20000;i++)x+=Math.sqrt(i);},4);</script></body></html>";
+            const string plain = "<!doctype html><html><head><meta charset=utf-8><title>static</title></head><body><h1>A quiet page</h1><p>Nothing here moves.</p></body></html>";
+            _ = Task.Run(async () =>
+            {
+                while (server.IsListening)
+                {
+                    System.Net.HttpListenerContext ctx;
+                    try { ctx = await server.GetContextAsync(); } catch (Exception) { break; }
+                    var bytes = System.Text.Encoding.UTF8.GetBytes(kind.StartsWith("busy", StringComparison.Ordinal) ? busy : plain);
+                    ctx.Response.ContentType = "text/html; charset=utf-8"; ctx.Response.ContentLength64 = bytes.Length;
+                    await ctx.Response.OutputStream.WriteAsync(bytes); ctx.Response.Close();
+                }
+            });
+            var ceiling = new AgentCeiling { Limits = new AgentManifest { Agent = "ceiling", AllowDomains = ["127.0.0.1"], Actions = [AgentAction.Navigate, AgentAction.Read], SessionMinutes = 60, MaxLivePages = 8, MaxActions = 500, DenyDataClasses = [DataClass.Secret] } };
+            _hiddenLoadHost = new LocalAgentHost(_agents!, ceiling);
+            _agentHost = _hiddenLoadHost;
+            var (session, _) = await _hiddenLoadHost.GrantAsync(new AgentManifest { Agent = "load-probe", AllowDomains = ["127.0.0.1"], Actions = [AgentAction.Navigate, AgentAction.Read], SessionMinutes = 60, MaxLivePages = Math.Max(count, 1), DenyDataClasses = [DataClass.Secret] });
+            for (var i = 0; i < count; i++) { await _agents!.ExecuteAsync(session, new AgentRequest(AgentAction.Navigate, $"http://127.0.0.1:{port}/{kind}?n={i}"), default); await Task.Delay(800); }
+            await Task.Delay(3000);
+            if (kind == "busy-shown" && k.Tabs.FirstOrDefault(t => session.Pages.Contains(t.Id)) is { } first) { await k.ActivateAsync(first.Id); RebuildWorkspaces(); }
+            await Task.Delay(2000);
+            string Vis(ResourceId id) => _leases!.TryGet(id, out var lease) ? ((WebView2Lease)lease).View.Visibility.ToString() : "no renderer";
+            var pages = k.Tabs.Where(t => session.Pages.Contains(t.Id)).Select(t => new { url = t.Url.ToString(), state = t.State.ToString(), shown = Vis(t.Id) }).ToList();
+            var state = new { kind, count, agentPages = pages, personsPageActive = k.Active is not null && !session.Pages.Contains(k.Active.Id), liveRenderers = _leases!.LiveResources.Count };
+            await File.WriteAllTextAsync(Path.Combine(dir, "hidden-load-state.json"), JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch (Exception ex) { try { await File.WriteAllTextAsync(Path.Combine(DataDir, "benchmarks", "hidden-load-error.txt"), ex.ToString()); } catch (Exception) { } }
+    }
+
+    /// <summary>
+    /// What must be true of the window when nothing is happening. A control that animates by itself (an indeterminate progress bar) costs
+    /// CPU and GPU for as long as it is visible, even inside a collapsed panel nobody can see, so "no restore in flight" has to mean it is
+    /// not visible. This is the rule that a start-up restore quietly broke (idle CPU went from about 1.4% to about 7%); the idle-cost
+    /// script measures the consequence, this checks the cause.
+    /// </summary>
+    private async Task RunIdleInvariantsCheckAsync()
+    {
+        var k = _kernel!;
+        var dir = Path.Combine(DataDir, "benchmarks"); Directory.CreateDirectory(dir);
+        var t = k.Open(new Uri(WelcomePage.Url));
+        await k.ActivateAsync(t.Id);
+        await Task.Delay(9000);
+        var noRestore = _restoringId is null;
+        var progressVisible = RestoreProgress.Visibility == Visibility.Visible;
+        var result = new { restoringIdEmpty = noRestore, restorePanel = RestorePanel.Visibility.ToString(), restoreProgressVisible = progressVisible, pass = !(noRestore && progressVisible) };
+        await File.WriteAllTextAsync(Path.Combine(dir, "idle-invariants.json"), JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
     }
 
     /// <summary>
