@@ -282,7 +282,17 @@ public sealed partial class MainWindow : Window
                 await Task.Delay(9000);
                 DispatcherQueue.TryEnqueue(async () =>
                 {
-                    if (args.FirstOrDefault(a => a.StartsWith("--ui-panel=", StringComparison.Ordinal)) is { } up) { var which = up["--ui-panel=".Length..]; if (which == "receipt") OnReceipt(this, new RoutedEventArgs()); else if (which == "shield") OnShield(this, new RoutedEventArgs()); else if (which == "explain") OnExplain(this, new RoutedEventArgs()); else if (which == "search") OnPalette(this, new RoutedEventArgs()); else if (which == "workspaces") OnWorkspaceOverview(this, new RoutedEventArgs()); await Task.Delay(700); }
+                    if (args.Contains("--ui-demo-agent") && _agents is not null)
+                    {
+                        // A real endpoint and a real session, so the agent panel can be looked at with something in it.
+                        var ceiling = new AgentCeiling { Limits = new AgentManifest { Agent = "ceiling", AllowDomains = ["example.com"], Actions = [AgentAction.Navigate, AgentAction.Read], SessionMinutes = 30, MaxLivePages = 2, MaxActions = 100 } };
+                        _agentHost = new LocalAgentHost(_agents, ceiling);
+                        _agentHost.Start();
+                        var (demo, _) = await _agentHost.GrantAsync(new AgentManifest { Agent = "Claude Code", AllowDomains = ["example.com"], Actions = [AgentAction.Navigate, AgentAction.Read], SessionMinutes = 30, MaxLivePages = 2 });
+                        await _agents.ExecuteAsync(demo, new AgentRequest(AgentAction.Navigate, "https://example.com/"), default);
+                        await _agents.ExecuteAsync(demo, new AgentRequest(AgentAction.Navigate, "https://not-approved.test/login"), default);   // refused: outside the approved domain
+                    }
+                    if (args.FirstOrDefault(a => a.StartsWith("--ui-panel=", StringComparison.Ordinal)) is { } up) { var which = up["--ui-panel=".Length..]; if (which == "receipt") OnReceipt(this, new RoutedEventArgs()); else if (which == "shield") OnShield(this, new RoutedEventArgs()); else if (which == "explain") OnExplain(this, new RoutedEventArgs()); else if (which == "search") OnPalette(this, new RoutedEventArgs()); else if (which == "workspaces") OnWorkspaceOverview(this, new RoutedEventArgs()); else if (which == "agents") OnAgentActivity(this, new RoutedEventArgs()); await Task.Delay(700); }
                     try
                     {
                         // What the person's Windows "Show animations" setting did to this run: the decision, and how long a real

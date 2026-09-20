@@ -265,7 +265,7 @@ try {
         $name = 'More: command palette and help'
         (Find-ByName $name).SetFocus(); Start-Sleep -Milliseconds 400
         Send-Keys '{ENTER}'; Start-Sleep -Milliseconds 900
-        foreach ($item in 'Command palette', 'Workspaces overview', 'Help and welcome') {
+        foreach ($item in 'Command palette', 'Workspaces overview', 'Agent activity', 'Help and welcome') {
             $m = $win.FindFirst($Scope::Descendants, (New-Object System.Windows.Automation.AndCondition(
                     (New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, $item)),
                     (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::MenuItem)))))
@@ -275,19 +275,19 @@ try {
         if ((Focused-Name) -ne $name) { $failures.Add("MORE: after Escape focus is on '$((Focused-Name))', not on the More button") }
     }
     # Workspace previews: More > Workspaces overview opens a panel by keyboard, Esc closes it, focus is back on More.
-    function Test-Workspaces {
+    function Test-MorePanel([string]$label, [int]$downs, [string]$expectButtonLike) {
         $name = 'More: command palette and help'
         (Find-ByName $name).SetFocus(); Start-Sleep -Milliseconds 400
         Send-Keys '{ENTER}'; Start-Sleep -Milliseconds 900
-        Send-Keys '{DOWN}{ENTER}'; Start-Sleep -Milliseconds 1200
-        if (-not (Panel-Open)) { $failures.Add('WORKSPACES: More > Workspaces overview did not open the panel'); return }
+        Send-Keys (('{DOWN}' * $downs) + '{ENTER}'); Start-Sleep -Milliseconds 1200
+        if (-not (Panel-Open)) { $failures.Add("${label}: More menu did not open the panel"); return }
         $names = @($win.FindAll($Scope::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Button))) | ForEach-Object { $_.Current.Name })
-        if (-not ($names | Where-Object { $_ -like 'Go to *' })) { $failures.Add("WORKSPACES: the panel lists no tab to go to (saw: $($names -join ' | '))") }
-        Test-Layout @(Interactive) 'panel workspaces open: '
+        if (-not ($names | Where-Object { $_ -like $expectButtonLike })) { $failures.Add("${label}: the panel has no button like '$expectButtonLike' (saw: $($names -join ' | '))") }
+        Test-Layout @(Interactive) "panel $label open: "
         (Find-ByName 'Close panel').SetFocus(); Start-Sleep -Milliseconds 300
         Send-Keys '{ESC}'; Start-Sleep -Milliseconds 900
-        if (Panel-Open) { $failures.Add('WORKSPACES: Escape did not close the panel') }
-        elseif ((Focused-Name) -ne $name) { $failures.Add("WORKSPACES: after Escape focus is on '$((Focused-Name))', not on the More button") }
+        if (Panel-Open) { $failures.Add("${label}: Escape did not close the panel") }
+        elseif ((Focused-Name) -ne $name) { $failures.Add("${label}: after Escape focus is on '$((Focused-Name))', not on the More button") }
     }
     # Unified search: Ctrl+K opens it with focus in the box, typing finds a command AND the open tab, Esc closes it and puts focus
     # back where it was.
@@ -324,7 +324,8 @@ try {
             Test-Panel $b
         }
         if ($panelStatus -eq 'not started' -and (Ensure-Foreground)) { Test-More }
-        if ($panelStatus -eq 'not started' -and (Ensure-Foreground)) { Test-Workspaces }
+        if ($panelStatus -eq 'not started' -and (Ensure-Foreground)) { Test-MorePanel 'WORKSPACES' 1 'Go to *' }
+        if ($panelStatus -eq 'not started' -and (Ensure-Foreground)) { Test-MorePanel 'AGENTS' 2 'Set up agent access*' }
         if ($panelStatus -eq 'not started' -and (Ensure-Foreground)) { Test-Search }
         if ($script:foregroundLost) {
             while ($failures.Count -gt $before) { $failures.RemoveAt($failures.Count - 1) }   # made after keys stopped arriving: not evidence

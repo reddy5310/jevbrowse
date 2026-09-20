@@ -7,7 +7,7 @@ Every claim JevBrowse makes, and the strongest evidence behind it today. Levels,
 - **Real engine**: a benchmark/check drives actual WebView2 renderers and inspects real disk/DB state (`--privacy-check`, `--restore-bench`, …).
 - **Release-validated**: verified on the packaged, signed build on more than one machine. **Nothing is at this level yet** (builds are unsigned and tested on one machine).
 
-Last updated 2026-09-20 after Private session cleanup (ADR 0019). 245 unit tests.
+Last updated 2026-09-20 after P3 (ADR 0024, 0025). 350 unit tests.
 
 | Claim | Level | Evidence | Known gap |
 |---|---|---|---|
@@ -44,6 +44,7 @@ Last updated 2026-09-20 after Private session cleanup (ADR 0019). 245 unit tests
 | Browser Memory ranks by relevance and stays bounded | Unit | BM25 sign fix test; budget test | Disk budget is text × 2, an estimate; real DB size is reported next to it |
 | Migrations cannot leave a database that cannot start | Unit | `A_failed_migration_step_rolls_back_completely_and_the_next_start_recovers` | SQLite crash-kill (process abort mid-write) not simulated |
 | Filter-list activation survives a crash | Unit | `A_crash_between_the_two_activation_renames…` | |
+| **Side panels, unified search, workspace previews and agent activity are usable by keyboard and stay inside the window** | Unit + real window with real keys | `ui-a11y-check.ps1` (Windows UI Automation + real keystrokes) for Shield, Explain, Receipt, Workspaces, Agent activity and Search: Enter opens, focus moves in, Tab keeps moving, Esc closes with focus back on the opening control, layout unclipped with each open; More menu lists palette, workspaces, agent activity, help. Passed at 700 and 1422 wide, sidebar shown and hidden. `UnifiedSearchTests` (7), `WorkspacePreviewTests` (6), `AgentActivityTests` (12) | Only the empty agent state and one live demo session were looked at; no real external agent (Claude Code) was driven through the panel. Scaling and text size untested. Gate is inconclusive, by design, while another window holds the foreground |
 | CI enforces performance regressions | **Designed** | perf job is informational | No stable benchmark machine; no PR gate |
 | Signed, updatable release | **Designed** | portable zip only | No code signing, no MSIX, no security-update path |
 

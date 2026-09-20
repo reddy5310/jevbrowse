@@ -19,6 +19,7 @@ public sealed partial class MainWindow
     private Func<(string Title, UIElement Body)?>? _panelBuild;
     private Control? _panelReturnTo, _panelHome;
     private bool _panelLive = true;
+    private Action? _panelOnClose;   // a panel that runs a timer or holds a subscription says here how to let go of it
     private Control? _panelFocus;   // a builder that has a better first control than the close button (the search box) names it here
 
     private bool PanelOpen => SidePanel.Visibility == Visibility.Visible;
@@ -30,6 +31,7 @@ public sealed partial class MainWindow
     private void OpenPanel(string id, Func<(string Title, UIElement Body)?> build, Control home, bool live = true)
     {
         if (PanelOpen && _panelId == id) { ClosePanel(); return; }
+        _panelOnClose?.Invoke(); _panelOnClose = null;   // switching panels lets go of the old one
         _panelFocus = null;
         var built = build();
         if (built is null) return;
@@ -64,9 +66,9 @@ public sealed partial class MainWindow
     }
 
     /// <summary>Called when the active tab changes: a panel about "this page" must not go on describing the last one.</summary>
-    private void RefreshPanel()
+    private void RefreshPanel(bool force = false)
     {
-        if (!PanelOpen || _panelBuild is null || !_panelLive) return;
+        if (!PanelOpen || _panelBuild is null || (!_panelLive && !force)) return;
         var hadFocusInside = FocusManager.GetFocusedElement(Content.XamlRoot) is Control c && IsInsidePanel(c);
         var built = _panelBuild();
         if (built is null) { ClosePanel(restoreFocus: false); return; }
@@ -79,6 +81,7 @@ public sealed partial class MainWindow
     {
         if (!PanelOpen) return;
         var hadFocusInside = FocusManager.GetFocusedElement(Content.XamlRoot) is Control c && IsInsidePanel(c);
+        _panelOnClose?.Invoke(); _panelOnClose = null;
         SidePanel.Visibility = Visibility.Collapsed;
         SidePanelBody.Content = null;
         _panelId = null; _panelBuild = null;

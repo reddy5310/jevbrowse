@@ -194,6 +194,7 @@
                             <MenuFlyout Placement="BottomEdgeAlignedRight">
                                 <MenuFlyoutItem Text="Command palette" Click="OnPalette"/>
                                 <MenuFlyoutItem Text="Workspaces overview" Click="OnWorkspaceOverview"/>
+                                <MenuFlyoutItem Text="Agent activity" Click="OnAgentActivity"/>
                                 <MenuFlyoutItem Text="Help and welcome" Click="OnHelp"/>
                             </MenuFlyout>
                         </Button.Flyout>

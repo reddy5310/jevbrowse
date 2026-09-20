@@ -371,6 +371,7 @@ public sealed partial class MainWindow
             new("Theme: match Windows", () => { ApplyTheme(ThemePreference.System, remember: true); return Task.CompletedTask; }),
             new("Grant Claude Code localhost + GitHub for 30 minutes", () => GrantAgentAsync(30)),
             new("Workspaces overview: what is in each workspace", () => { OnWorkspaceOverview(this, new RoutedEventArgs()); return Task.CompletedTask; }),
+            new("Agent activity: what agents are doing", () => { OnAgentActivity(this, new RoutedEventArgs()); return Task.CompletedTask; }),
             new("New workspace…", () => { OnNewWorkspace(this, new RoutedEventArgs()); return Task.CompletedTask; }),
             new("Update Shield filter lists", UpdateFilterListsAsync),
         };
