@@ -9,7 +9,9 @@ namespace JevBrowse.App.Shield;
 public sealed class TabShieldStats
 {
     public int Total, Blocked, ThirdParty, CosmeticSelectors, Collapsed, SemanticCollapsed;
+    public int AdsPruned, AdsSkipped, WallSeen;
     public string? LastCollapseResult, LastSemantic;
+    public List<string> SiteModules { get; } = [];
     public readonly DateTimeOffset StartedAt = DateTimeOffset.UtcNow;
     public readonly ConcurrentQueue<(string Host, string Rule)> Recent = new();
     /// <summary>Distinct third-party hosts contacted (for "show every third party contacted by this page", §26).</summary>
@@ -165,7 +167,8 @@ public sealed class ShieldAdapter
     }
 
     public ConcurrentDictionary<ResourceId, TabShieldStats> Stats { get; } = new();
-    private string? _cosmeticScriptId;
+    /// <summary>A site's anti-adblock wall was detected on this tab; the window tells the user and offers the per-site switch.</summary>
+    public event Action<ResourceId>? WallDetected;
     /// <summary>Optional semantic clutter pass (JevBrain). Null = off. Never on the request path; runs after load.</summary>
     public Func<CoreWebView2, ResourceId, Task>? SemanticPass { get; set; }
     public int RuleCount => _engine.RuleCount;
@@ -178,26 +181,83 @@ public sealed class ShieldAdapter
         _sites.SetShieldEnabled(site, enabled);
     }
 
+    // Post-load fallback: if a cross-host navigation raced the document-start registration, add the sheet now.
+    private const string EnsureCosmeticScript = """
+        ((css) => { if (document.getElementById('jev-shield-cosmetic')) return 'present';
+          const s = document.createElement('style'); s.id = 'jev-shield-cosmetic'; s.textContent = css; (document.head || document.documentElement).appendChild(s); return 'added'; })(__CSS__)
+        """;
+
+    /// <summary>Awaited before the first navigation (see WebView2LeaseManager.OnCoreCreated).</summary>
+    public async Task AttachAsync(CoreWebView2 core, ResourceId id, Uri initialUrl)
+    {
+        var stats = Stats.GetOrAdd(id, _ => new TabShieldStats());
+
+        // Site modules: registered once, before any navigation, self-gated on host inside the script.
+        foreach (var m in SiteScripts.All)
+        {
+            var gated = $$"""
+                (() => { const h = location.host.toLowerCase(); if (!{{System.Text.Json.JsonSerializer.Serialize(m.HostSuffixes)}}.some(s => h === s || h.endsWith('.' + s))) return;
+                {{m.Script}}
+                })();
+                """;
+            try { await core.AddScriptToExecuteOnDocumentCreatedAsync(gated); } catch (Exception) { }
+        }
+        if (initialUrl.Scheme is "http" or "https")
+        {
+            foreach (var m in SiteScripts.For(initialUrl.Host)) stats.SiteModules.Add($"{m.Name} v{m.Version}");
+            await RegisterCosmeticAsync(core, stats, initialUrl.Host);
+        }
+        Attach(core, id);
+    }
+
+    private string? _cosmeticId;
+    private async Task RegisterCosmeticAsync(CoreWebView2 core, TabShieldStats stats, string host)
+    {
+        if (!IsEnabledFor(NetworkRequest.SiteOf(host))) return;
+        var css = CssFor(host);
+        if (css.Length == 0) return;
+        try
+        {
+            if (_cosmeticId is { } old) core.RemoveScriptToExecuteOnDocumentCreated(old);
+            _cosmeticId = await core.AddScriptToExecuteOnDocumentCreatedAsync(CosmeticScript.Replace("__CSS__", System.Text.Json.JsonSerializer.Serialize(css)));
+            stats.CosmeticSelectors = css.Count(c => c == '\n');
+        }
+        catch (Exception) { }
+    }
+
     public void Attach(CoreWebView2 core, ResourceId id)
     {
         var stats = Stats.GetOrAdd(id, _ => new TabShieldStats());
 
-        // Cosmetic filtering: inject the host's stylesheet on every top-level navigation (script registered per document).
+        // Site modules report through fixed strings only (NATIVE_BRIDGE.md); we count, never parse.
+        core.WebMessageReceived += (_, e) =>
+        {
+            string? msg = null;
+            try { msg = e.TryGetWebMessageAsString(); } catch (Exception) { }
+            switch (msg)
+            {
+                case "jev:yt-ad-pruned": stats.AdsPruned++; break;
+                case "jev:yt-ad-skipped": stats.AdsSkipped++; break;
+                case "jev:yt-wall": stats.WallSeen++; WallDetected?.Invoke(id); break;
+            }
+        };
+
+        // Cross-host navigation: swap the cosmetic sheet for the new host (best effort; the post-load fallback covers the race).
+        string lastHost = "";
         core.NavigationStarting += async (_, e) =>
         {
-            if (!e.IsUserInitiated && e.IsRedirected) return;
-            if (!Uri.TryCreate(e.Uri, UriKind.Absolute, out var u) || u.Scheme is not ("http" or "https")) return;
-            var site = NetworkRequest.SiteOf(u.Host);
-            if (!IsEnabledFor(site)) return;
+            if (!Uri.TryCreate(e.Uri, UriKind.Absolute, out var u) || u.Scheme is not ("http" or "https") || u.Host == lastHost) return;
+            lastHost = u.Host;
+            stats.SiteModules.Clear();
+            foreach (var m in SiteScripts.For(u.Host)) stats.SiteModules.Add($"{m.Name} v{m.Version}");
+            await RegisterCosmeticAsync(core, stats, u.Host);
+        };
+        core.NavigationCompleted += async (_, _) =>
+        {
+            if (!Uri.TryCreate(core.Source, UriKind.Absolute, out var u) || !IsEnabledFor(NetworkRequest.SiteOf(u.Host))) return;
             var css = CssFor(u.Host);
             if (css.Length == 0) return;
-            try
-            {
-                if (_cosmeticScriptId is { } old) core.RemoveScriptToExecuteOnDocumentCreated(old);
-                _cosmeticScriptId = await core.AddScriptToExecuteOnDocumentCreatedAsync(CosmeticScript.Replace("__CSS__", System.Text.Json.JsonSerializer.Serialize(css)));
-                stats.CosmeticSelectors = css.Count(c => c == '\n');
-            }
-            catch (Exception) { }
+            try { await core.ExecuteScriptAsync(EnsureCosmeticScript.Replace("__CSS__", System.Text.Json.JsonSerializer.Serialize(css))); } catch (Exception) { }
         };
         core.NavigationCompleted += async (_, _) =>
         {

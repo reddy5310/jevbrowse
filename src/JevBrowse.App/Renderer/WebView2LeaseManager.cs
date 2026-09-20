@@ -34,9 +34,14 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
     public IReadOnlyCollection<ResourceId> LiveResources => _live.Keys;
     public IEnumerable<int> ProcessIds => _envs.Values.SelectMany(e => e.GetProcessInfos().Select(p => p.ProcessId));
 
-    /// <summary>Called once per new CoreWebView2 before its first navigation. Shield and Trust OS attach here.</summary>
-    public Action<CoreWebView2, ResourceId, IdentityContainer>? OnCoreCreated { get; set; }
+    /// <summary>
+    /// Called once per new CoreWebView2 and awaited BEFORE its first navigation, so document-start scripts are
+    /// registered in time. Shield and Trust OS attach here.
+    /// </summary>
+    public Func<CoreWebView2, ResourceId, IdentityContainer, Uri, Task>? OnCoreCreated { get; set; }
     public Action<ResourceId>? OnCoreDisposed { get; set; }
+    /// <summary>Resolves jev:// URLs to locally generated HTML (welcome/help). No network involved.</summary>
+    public Func<Uri, string?>? LocalPage { get; set; }
 
     public async Task<CoreWebView2Environment> GetEnvironmentAsync(IdentityContainer container)
     {
@@ -63,10 +68,11 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
         var view = new WebView2 { Visibility = Visibility.Collapsed };
         _host.Children.Add(view);
         await view.EnsureCoreWebView2Async(env);
-        OnCoreCreated?.Invoke(view.CoreWebView2, id, container);
+        if (OnCoreCreated is not null) await OnCoreCreated(view.CoreWebView2, id, container, initialUrl);
         var lease = await WebView2Lease.CreateAsync(id, view, _thumbnailDir);
         _live[id] = lease;
-        view.CoreWebView2.Navigate(initialUrl.ToString());
+        if (initialUrl.Scheme == "jev" && LocalPage is not null && LocalPage(initialUrl) is { } html) view.CoreWebView2.NavigateToString(html);
+        else view.CoreWebView2.Navigate(initialUrl.ToString());
         return lease;
     }
 

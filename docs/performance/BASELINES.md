@@ -61,3 +61,13 @@ Compile: 110,839 network + ~19 k cosmetic rules in ~260 ms (Debug).
 ## Gates for future PRs
 
 A PR that moves restore p95 or the 5-live private figure by more than 10% needs an ADR (Architecture §22).
+
+### YouTube (ADR 0015, `--youtube-check`, 75 s per video, logged out, 2026-09-20)
+
+| Video | before module | after module |
+|---|---|---|
+| Despacito (kJQP7kiw5Fk) | 37 s in ad state, video reached 39 s | **0 s in ad state**, 19 ad definitions pruned, video reached 71 s |
+| Gangnam Style (9bZkp7q19f0) | 0 s (no ads served) | 0 s, 0 pruned |
+| Never Gonna Give You Up | 0 s (no ads served) | 0 s, 0 pruned |
+
+Wall detection: one false positive from a hidden renderer, fixed by requiring visibility. No visible enforcement notice in any run. Ads are served non-deterministically; the claim we make is only what this table shows.

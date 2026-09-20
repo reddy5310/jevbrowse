@@ -3,118 +3,151 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="using:JevBrowse.App"
         Title="JevBrowse">
-    <Grid>
+    <Grid x:Name="Root" Background="{StaticResource JevBgBrush}">
         <Grid.KeyboardAccelerators>
             <KeyboardAccelerator Key="K" Modifiers="Control" Invoked="OnPaletteAccelerator"/>
+            <KeyboardAccelerator Key="F1" Invoked="OnHelpAccelerator"/>
         </Grid.KeyboardAccelerators>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="36"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="260"/>
+            <ColumnDefinition Width="276"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
-        <!-- Sidebar: every logical resource is visible; the badge says whether it owns a renderer. -->
-        <Grid Grid.Column="0" Background="{ThemeResource LayerFillColorDefaultBrush}">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="*"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
-            <StackPanel Padding="8" Spacing="6">
-                <StackPanel Orientation="Horizontal" Spacing="4">
-                    <Button Content="+ New" Click="OnNewTab"/>
-                    <Button Content="Hibernate all" Click="OnHibernateAll" ToolTipService.ToolTip="Virtualize everything except current"/>
-                    <Button Content="&#xE71C;" FontFamily="Segoe MDL2 Assets" Click="OnPalette" ToolTipService.ToolTip="Command palette (Ctrl+K)"/>
-                    <Button Content="Lab" Click="OnMemoryLab"/>
-                </StackPanel>
-                <ComboBox x:Name="ProductModeBox" HorizontalAlignment="Stretch" SelectionChanged="OnProductModeChanged" ToolTipService.ToolTip="Product mode: which features are shown"/>
-                <ComboBox x:Name="ModeBox" HorizontalAlignment="Stretch" SelectionChanged="OnModeChanged" ToolTipService.ToolTip="Memory budget mode (Resource OS)"/>
-                <Grid ColumnSpacing="4">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <ComboBox x:Name="WorkspaceBox" HorizontalAlignment="Stretch" SelectionChanged="OnWorkspaceChanged" ToolTipService.ToolTip="Workspace (Context OS)"/>
-                    <Button Grid.Column="1" Content="+" Click="OnNewWorkspace" ToolTipService.ToolTip="New workspace"/>
-                    <Button x:Name="TimelineButton" Grid.Column="2" Content="&#xE81C;" FontFamily="Segoe MDL2 Assets" Click="OnTimeline" ToolTipService.ToolTip="Time Travel: restore an earlier context"/>
-                </Grid>
+        <!-- Custom title bar with the accent line: the window itself reads as one layered surface. -->
+        <Grid x:Name="TitleBar" Grid.Row="0" Grid.ColumnSpan="2" Background="Transparent">
+            <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center" Margin="14,0">
+                <Border Width="10" Height="10" CornerRadius="5" Background="{StaticResource JevAccentBrush}"/>
+                <TextBlock Text="JevBrowse" FontWeight="SemiBold" FontSize="13" Opacity="0.9"/>
+                <TextBlock x:Name="TitleHint" Text="Ctrl+K for commands · F1 for help" FontSize="12" Opacity="0.45"/>
             </StackPanel>
-            <ListView x:Name="TabList" Grid.Row="1" SelectionMode="Single" SelectionChanged="OnTabSelected" ItemsSource="{x:Bind Items}">
-                <ListView.ItemTemplate>
-                    <DataTemplate x:DataType="local:TabItem">
-                        <Grid ColumnSpacing="6" Padding="0,4">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <Border Width="8" Height="8" CornerRadius="4" VerticalAlignment="Center" Background="{x:Bind StateBrush, Mode=OneWay}"/>
-                            <StackPanel Grid.Column="1">
-                                <TextBlock Text="{x:Bind Title, Mode=OneWay}" TextTrimming="CharacterEllipsis" FontSize="13"/>
-                                <TextBlock Text="{x:Bind Subtitle, Mode=OneWay}" TextTrimming="CharacterEllipsis" FontSize="11" Opacity="0.6"/>
-                            </StackPanel>
-                            <Button Grid.Column="2" Content="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="10" Padding="4" Background="Transparent" BorderThickness="0" Click="OnCloseTab" Tag="{x:Bind Id}"/>
-                        </Grid>
-                    </DataTemplate>
-                </ListView.ItemTemplate>
-            </ListView>
-            <TextBlock x:Name="PoolText" Grid.Row="2" Padding="8" FontSize="12" FontFamily="Consolas" TextWrapping="Wrap"/>
+            <Rectangle Height="1" VerticalAlignment="Bottom" Fill="{StaticResource JevAccentBrush}" Opacity="0.35"/>
         </Grid>
 
-        <Grid Grid.Column="1">
+        <!-- Sidebar: a floating panel with depth. Every logical resource is visible; the dot says whether it is live. -->
+        <Border Grid.Row="1" Grid.Column="0" Margin="10,8,4,10" CornerRadius="16" Background="{StaticResource JevPanelBrush}" BorderBrush="{StaticResource JevLineBrush}" BorderThickness="1" Shadow="{StaticResource JevShadow}" Translation="0,0,24">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <StackPanel Padding="12,12,12,6" Spacing="8">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <Button Content="+ New" Click="OnNewTab" Style="{StaticResource JevToolButton}"/>
+                        <Button Content="Hibernate all" Click="OnHibernateAll" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Virtualize everything except current"/>
+                        <Button Content="&#xE71C;" FontFamily="Segoe MDL2 Assets" Click="OnPalette" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Command palette (Ctrl+K)"/>
+                        <Button Content="&#xE897;" FontFamily="Segoe MDL2 Assets" Click="OnHelp" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Welcome / help (F1)"/>
+                    </StackPanel>
+                    <ComboBox x:Name="ProductModeBox" HorizontalAlignment="Stretch" Style="{StaticResource JevCombo}" SelectionChanged="OnProductModeChanged" ToolTipService.ToolTip="Product mode: which features are shown"/>
+                    <ComboBox x:Name="ModeBox" HorizontalAlignment="Stretch" Style="{StaticResource JevCombo}" SelectionChanged="OnModeChanged" ToolTipService.ToolTip="Memory budget mode (Resource OS)"/>
+                    <Grid ColumnSpacing="6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <ComboBox x:Name="WorkspaceBox" HorizontalAlignment="Stretch" Style="{StaticResource JevCombo}" SelectionChanged="OnWorkspaceChanged" ToolTipService.ToolTip="Workspace (Context OS)"/>
+                        <Button Grid.Column="1" Content="+" Click="OnNewWorkspace" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="New workspace"/>
+                        <Button x:Name="TimelineButton" Grid.Column="2" Content="&#xE81C;" FontFamily="Segoe MDL2 Assets" Click="OnTimeline" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Time Travel: restore an earlier context"/>
+                    </Grid>
+                    <Button x:Name="LabButton" Content="Lab" Click="OnMemoryLab" Style="{StaticResource JevToolButton}" Visibility="Collapsed"/>
+                </StackPanel>
+                <ListView x:Name="TabList" Grid.Row="1" SelectionMode="Single" SelectionChanged="OnTabSelected" ItemsSource="{x:Bind Items}" Padding="6,0">
+                    <ListView.ItemContainerStyle>
+                        <Style TargetType="ListViewItem">
+                            <Setter Property="Margin" Value="0,2"/>
+                            <Setter Property="CornerRadius" Value="12"/>
+                            <Setter Property="Padding" Value="10,6"/>
+                        </Style>
+                    </ListView.ItemContainerStyle>
+                    <ListView.ItemTemplate>
+                        <DataTemplate x:DataType="local:TabItem">
+                            <Grid ColumnSpacing="10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Width="10" Height="10" CornerRadius="5" VerticalAlignment="Center" Background="{x:Bind StateBrush, Mode=OneWay}" Shadow="{StaticResource JevShadow}" Translation="0,0,8"/>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="{x:Bind Title, Mode=OneWay}" TextTrimming="CharacterEllipsis" FontSize="13"/>
+                                    <TextBlock Text="{x:Bind Subtitle, Mode=OneWay}" TextTrimming="CharacterEllipsis" FontSize="11" Opacity="0.55"/>
+                                </StackPanel>
+                                <Button Grid.Column="2" Content="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="10" Padding="4" Background="Transparent" BorderThickness="0" Click="OnCloseTab" Tag="{x:Bind Id}"/>
+                            </Grid>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+                <Border Grid.Row="2" Margin="10,6,10,10" Padding="10,8" CornerRadius="12" Background="#0E1119" BorderBrush="{StaticResource JevLineBrush}" BorderThickness="1">
+                    <TextBlock x:Name="PoolText" FontSize="11.5" FontFamily="Consolas" TextWrapping="Wrap" Opacity="0.85"/>
+                </Border>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1" Grid.Column="1" Margin="4,8,10,10">
             <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
-            <Grid Grid.Row="0" Padding="8" ColumnSpacing="8">
+            <!-- Row 0: navigation + full-width pill address bar with the trust badge inside it. Row 1: tools. -->
+            <Grid Grid.Row="0" Padding="0,0,0,6" ColumnSpacing="8">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <Button Content="&#xE72B;" FontFamily="Segoe MDL2 Assets" Click="OnBack"/>
-                <Button Content="&#xE72A;" FontFamily="Segoe MDL2 Assets" Grid.Column="1" Click="OnForward"/>
-                <Grid Grid.Column="2" ColumnSpacing="6">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                    <Border x:Name="ClassBadge" CornerRadius="4" Padding="6,2" VerticalAlignment="Center" Background="{ThemeResource SystemFillColorNeutralBackgroundBrush}" ToolTipService.ToolTip="Identity container • data class (Trust OS). Click to override.">
-                        <TextBlock x:Name="ClassBadgeText" FontSize="11" Text="PERSONAL" Tapped="OnClassBadgeTapped"/>
-                    </Border>
-                    <TextBox x:Name="AddressBox" Grid.Column="1" PlaceholderText="Search or enter address" KeyDown="OnAddressKeyDown"/>
-                </Grid>
-                <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4">
-                    <Button Content="Hibernate" Click="OnHibernateCurrent" ToolTipService.ToolTip="Dispose this renderer; keep the tab"/>
-                    <Button x:Name="PinButton" Content="Pin" Click="OnPinCurrent" ToolTipService.ToolTip="Never auto-hibernate this tab"/>
-                    <Button x:Name="MoveButton" Content="Move to…" ToolTipService.ToolTip="Move this tab to another workspace">
+                <Button Content="&#xE72B;" FontFamily="Segoe MDL2 Assets" Click="OnBack" Style="{StaticResource JevToolButton}"/>
+                <Button Content="&#xE72A;" FontFamily="Segoe MDL2 Assets" Grid.Column="1" Click="OnForward" Style="{StaticResource JevToolButton}"/>
+                <Border Grid.Column="2" CornerRadius="14" Background="{StaticResource JevPanelBrush}" BorderBrush="{StaticResource JevLineBrush}" BorderThickness="1" Padding="6,0" Shadow="{StaticResource JevShadow}" Translation="0,0,12">
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Border x:Name="ClassBadge" CornerRadius="8" Padding="8,2" VerticalAlignment="Center" Background="#1F5F5A" ToolTipService.ToolTip="Identity container • data class (Trust OS). Click to override.">
+                            <TextBlock x:Name="ClassBadgeText" FontSize="10.5" FontWeight="SemiBold" Text="PERSONAL" Tapped="OnClassBadgeTapped"/>
+                        </Border>
+                        <TextBox x:Name="AddressBox" Grid.Column="1" PlaceholderText="Search or enter address" KeyDown="OnAddressKeyDown" BorderThickness="0" Background="Transparent" FontSize="13.5"/>
+                    </Grid>
+                </Border>
+            </Grid>
+            <Grid Grid.Row="1" Padding="0,0,0,8">
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                    <Button Content="Hibernate" Click="OnHibernateCurrent" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Dispose this renderer; keep the tab"/>
+                    <Button x:Name="PinButton" Content="Pin" Click="OnPinCurrent" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Never auto-hibernate this tab"/>
+                    <Button x:Name="MoveButton" Content="Move…" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Move this tab to another workspace">
                         <Button.Flyout>
                             <MenuFlyout x:Name="MoveMenu" Opening="OnMoveMenuOpening"/>
                         </Button.Flyout>
                     </Button>
-                    <Button x:Name="ExplainButton" Content="Explain" Click="OnExplain" ToolTipService.ToolTip="Why did the scheduler last touch this tab?"/>
-                    <Button x:Name="ShieldButton" Content="Shield" Click="OnShield" ToolTipService.ToolTip="Blocked requests on this page; disable per site"/>
-                    <Button x:Name="ReceiptButton" Content="Receipt" Click="OnReceipt" ToolTipService.ToolTip="Session receipt for this site (§15)"/>
-                    <Button x:Name="AskButton" Content="Ask" Click="OnAsk" ToolTipService.ToolTip="Summarize this page (explicit; you confirm before anything is sent)"/>
-                    <Button x:Name="BrainButton" Content="Brain" Click="OnBrain" ToolTipService.ToolTip="AI switches and the decision log"/>
-                    <Button x:Name="MemoryButton" Content="Memory" Click="OnMemory" ToolTipService.ToolTip="Search everything you've read (local index of public pages)"/>
-                    <Button x:Name="DevButton" Content="Dev" Click="OnDev" ToolTipService.ToolTip="DevSpace: environment, localhost, errors, network (optional module)"/>
-                    <Button x:Name="AgentsButton" Content="Agents" Click="OnAgents" ToolTipService.ToolTip="Agent Gateway: scoped sessions, quotas, audit; opt-in local endpoint"/>
+                    <Button x:Name="ExplainButton" Content="Explain" Click="OnExplain" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Why did the scheduler last touch this tab?"/>
+                    <Button x:Name="ShieldButton" Content="Shield" Click="OnShield" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Blocked requests on this page; disable per site"/>
+                    <Button x:Name="ReceiptButton" Content="Receipt" Click="OnReceipt" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Session receipt for this site"/>
+                    <Button x:Name="AskButton" Content="Ask" Click="OnAsk" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Summarize this page (explicit; you confirm before anything is sent)"/>
+                    <Button x:Name="BrainButton" Content="Brain" Click="OnBrain" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="AI switches and the decision log"/>
+                    <Button x:Name="MemoryButton" Content="Memory" Click="OnMemory" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Search everything you've read"/>
+                    <Button x:Name="DevButton" Content="Dev" Click="OnDev" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="DevSpace (optional module)"/>
+                    <Button x:Name="AgentsButton" Content="Agents" Click="OnAgents" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Agent Gateway"/>
                 </StackPanel>
             </Grid>
-            <Grid Grid.Row="1">
-                <Grid x:Name="WebHost">
-                    <TextBlock x:Name="VirtualPlaceholder" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.5" Text="No live renderer. Select a tab."/>
+            <Border Grid.Row="2" CornerRadius="16" BorderBrush="{StaticResource JevLineBrush}" BorderThickness="1" Background="#000000" Shadow="{StaticResource JevShadow}" Translation="0,0,16">
+                <Grid>
+                    <Grid x:Name="WebHost" CornerRadius="16">
+                        <TextBlock x:Name="VirtualPlaceholder" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.5" Text="No live renderer. Select a tab, or press Ctrl+K."/>
+                    </Grid>
+                    <Border x:Name="ProdBorder" CornerRadius="16" BorderBrush="#E0FF3B30" BorderThickness="4" IsHitTestVisible="False" Visibility="Collapsed"/>
+                    <Border x:Name="EnvBadge" Background="#E0FF3B30" CornerRadius="0,0,10,0" Padding="10,3" HorizontalAlignment="Left" VerticalAlignment="Top" IsHitTestVisible="False" Visibility="Collapsed">
+                        <TextBlock x:Name="EnvBadgeText" Foreground="White" FontWeight="Bold" FontSize="12" Text="PROD"/>
+                    </Border>
                 </Grid>
-                <!-- DevSpace PROD chrome: unmissable, drawn over the page edges, hit-test transparent. -->
-                <Border x:Name="ProdBorder" BorderBrush="#E0FF3B30" BorderThickness="4" IsHitTestVisible="False" Visibility="Collapsed"/>
-                <Border x:Name="EnvBadge" Background="#E0FF3B30" CornerRadius="0,0,6,0" Padding="10,3" HorizontalAlignment="Left" VerticalAlignment="Top" IsHitTestVisible="False" Visibility="Collapsed">
-                    <TextBlock x:Name="EnvBadgeText" Foreground="White" FontWeight="Bold" FontSize="12" Text="PROD"/>
-                </Border>
-            </Grid>
-            <TextBlock x:Name="StatusText" Grid.Row="2" Padding="8,4" FontFamily="Consolas" FontSize="12" TextWrapping="Wrap"/>
+            </Border>
+            <TextBlock x:Name="StatusText" Grid.Row="3" Padding="8,6,8,0" FontFamily="Consolas" FontSize="11.5" TextWrapping="Wrap" Opacity="0.8"/>
         </Grid>
     </Grid>
 </Window>

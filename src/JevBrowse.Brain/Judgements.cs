@@ -48,6 +48,14 @@ public static class Judgements
         return d;
     }
 
+    public const string WorkspaceQ = "workspace";
+
+    /// <summary>Which of the user's workspaces this page belongs to. Names only; the user confirms any move.</summary>
+    public static IReadOnlyDictionary<string, Question> WorkspaceQuestion(IReadOnlyList<string> workspaceNames) => new Dictionary<string, Question>
+    {
+        [WorkspaceQ] = new ChoiceQuestion("Which of the user's workspaces does this page most plausibly belong to?", workspaceNames.Distinct().ToDictionary(n => n, n => $"The workspace named '{n}'")),
+    };
+
     public static IReadOnlyDictionary<string, Question> RerankQuestions(IReadOnlyList<string> candidateTitles)
     {
         var d = new Dictionary<string, Question>();

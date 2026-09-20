@@ -21,6 +21,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.Web.WebView2.Core;
 using Windows.System;
+using Question = JevBrowse.Brain.Question;
 
 namespace JevBrowse.App;
 
@@ -57,8 +58,61 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        // One layered surface: Mica behind everything, our own title bar, dark by default.
+        SystemBackdrop = new Microsoft.UI.Xaml.Media.MicaBackdrop { Kind = Microsoft.UI.Composition.SystemBackdrops.MicaKind.BaseAlt };
+        ExtendsContentIntoTitleBar = true;
+        SetTitleBar(TitleBar);
         Closed += (_, _) => { _agentHost?.Dispose(); _leases?.Shutdown(); _db?.Dispose(); };
         _ = InitAsync();
+    }
+
+    // ---- First run / help ----
+
+    private string SettingsPath => Path.Combine(DataDir, "settings.json");
+
+    private bool FirstRunDone()
+    {
+        try { return File.Exists(SettingsPath) && JsonDocument.Parse(File.ReadAllText(SettingsPath)).RootElement.TryGetProperty("firstRunDone", out var v) && v.GetBoolean(); }
+        catch (Exception) { return false; }
+    }
+
+    private void MarkFirstRunDone()
+    {
+        try { File.WriteAllText(SettingsPath, JsonSerializer.Serialize(new { firstRunDone = true, at = DateTimeOffset.UtcNow })); } catch (Exception) { }
+    }
+
+    private void OnHelpAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { e.Handled = true; OnHelp(s, new RoutedEventArgs()); }
+
+    private async void OnHelp(object s, RoutedEventArgs e)
+    {
+        if (_kernel is null) return;
+        var existing = _kernel.Tabs.FirstOrDefault(t => t.Url.Scheme == "jev" && t.Url.Host == "welcome");
+        var t = existing ?? _kernel.Open(new Uri(WelcomePage.Url));
+        await _kernel.ActivateAsync(t.Id);
+    }
+
+    /// <summary>Four short tips anchored to the real controls, shown once, replayable via F1.</summary>
+    private async Task ShowFirstRunTipsAsync()
+    {
+        var tips = new (FrameworkElement Target, string Title, string Body)[]
+        {
+            (TabList, "Your tabs live here", "Every tab stays listed. Green = live in front, amber = live, blue = low priority, grey = virtual (using no memory). Click any to bring it back."),
+            (ProductModeBox, "Pick a product mode", "Simple hides everything but tabs and Shield. Power shows it all. Developer and Agent unlock those modules."),
+            (ShieldButton, "Shield shows its work", "See every blocked request and its rule; turn Shield off for a site in one click if something breaks."),
+            (BrainButton, "AI is off until you say so", "Brain has two switches. Jev answers typed questions with probabilities; Ask summarizes after you confirm what is sent."),
+        };
+        foreach (var (target, title, body) in tips)
+        {
+            if (target.Visibility != Visibility.Visible) continue;
+            var tcs = new TaskCompletionSource();
+            var tip = new TeachingTip { Target = target, Title = title, Subtitle = body, IsLightDismissEnabled = true, CloseButtonContent = "Next", PreferredPlacement = TeachingTipPlacementMode.Auto };
+            tip.Closed += (_, _) => tcs.TrySetResult();
+            Root.Children.Add(tip);
+            tip.IsOpen = true;
+            await tcs.Task;
+            Root.Children.Remove(tip);
+        }
+        MarkFirstRunDone();
     }
 
     private async Task InitAsync()
@@ -75,7 +129,12 @@ public sealed partial class MainWindow : Window
         // DevSpace: optional module. Off unless JEVBROWSE_DEVSPACE=1 or toggled in the Dev panel; attaches nothing when off.
         _dev = new DevSpaceAdapter(Path.Combine(DataDir, "devspace", "projects.json"));
         _dev.SetEnabled(Environment.GetEnvironmentVariable("JEVBROWSE_DEVSPACE") == "1");
-        _leases.OnCoreCreated = (core, id, _) => { _shield.Attach(core, id); _permissions.Attach(core); _dev.Attach(core, id); };
+        _leases.OnCoreCreated = async (core, id, _, url) => { await _shield.AttachAsync(core, id, url); _permissions.Attach(core); _dev.Attach(core, id); };
+        _shield.WallDetected += id => DispatcherQueue.TryEnqueue(() =>
+        {
+            var t = _kernel?.Tabs.FirstOrDefault(x => x.Id == id);
+            StatusText.Text = $"{t?.Url.Host ?? "site"} showed an anti-adblock wall. Shield panel → 'Disable for site' if you need the page; Shield stays honest about what it can and cannot do.";
+        });
         _leases.OnCoreDisposed = id => { _shield.Detach(id); _dev.Detach(id); };
         if (!_filters.HasActiveLists && Environment.GetEnvironmentVariable("JEVBROWSE_NO_FILTER_UPDATE") is null)
             await UpdateFilterListsAsync();
@@ -143,9 +202,19 @@ public sealed partial class MainWindow : Window
                 var map = await lease.GetPageMapAsync(default);
                 if (map is null) return;
                 var state = Judgements.PageState(tab.Url, map.Title, map.Headings, _kernel.SignalsOf(tab), map.Links.Count, map.Fields.Count);
-                var a = await _brain.JudgeAsync("classify", state, Judgements.PageQuestions(), cls, _kernel.ContainerOf(tab), default);
-                if (a is not null && a.Choices.TryGetValue(Judgements.DataClassQ, out var ans) && Judgements.RaiseFrom(cls, ans) is { } raised && _kernel.RaiseClass(tab.Id, raised))
+                var questions = new Dictionary<string, Question>(Judgements.PageQuestions());
+                var wsNames = _kernel.Workspaces.Select(w => w.Name).Distinct().ToList();
+                if (wsNames.Count > 1) foreach (var kv in Judgements.WorkspaceQuestion(wsNames)) questions[kv.Key] = kv.Value;
+                var a = await _brain.JudgeAsync("classify", state, questions, cls, _kernel.ContainerOf(tab), default);
+                if (a is null) return;
+                if (a.Choices.TryGetValue(Judgements.DataClassQ, out var ans) && Judgements.RaiseFrom(cls, ans) is { } raised && _kernel.RaiseClass(tab.Id, raised))
                     DispatcherQueue.TryEnqueue(() => { StatusText.Text = $"Jev raised {tab.Url.Host} to {raised} (confidence {ans.Confidence:0.00})"; UpdateClassBadge(); });
+                if (a.Choices.TryGetValue(Judgements.WorkspaceQ, out var ws) && ws.Confidence >= 0.8)
+                {
+                    var current = _kernel.Workspaces.FirstOrDefault(w => w.Id == tab.WorkspaceId)?.Name;
+                    if (current is not null && ws.Choice != current)
+                        DispatcherQueue.TryEnqueue(() => StatusText.Text = $"Jev suggests: this tab belongs in '{ws.Choice}' ({ws.Confidence:0.00}). Ctrl+K → Move this tab to: {ws.Choice}");
+                }
             }
             catch (Exception) { /* advisory only */ }
         };
@@ -162,7 +231,38 @@ public sealed partial class MainWindow : Window
         _tick.Start();
 
         var args = Environment.GetCommandLineArgs();
-        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check"))
+        _leases.LocalPage = u => u.Scheme == "jev" && u.Host == "welcome" ? WelcomePage.Html(_providers.Any(p => p.IsConfigured), _jev?.IsConfigured == true) : null;
+
+        if (args.Contains("--ui-shot"))
+        {
+            // Render the window itself (not the screen) after the welcome page and tips settle, for docs and review.
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(9000);
+                DispatcherQueue.TryEnqueue(async () =>
+                {
+                    try
+                    {
+                        var rtb = new Microsoft.UI.Xaml.Media.Imaging.RenderTargetBitmap();
+                        await rtb.RenderAsync(Root);
+                        var buf = await rtb.GetPixelsAsync();
+                        var pixels = new byte[buf.Length];
+                        using (var dr = Windows.Storage.Streams.DataReader.FromBuffer(buf)) dr.ReadBytes(pixels);
+                        Directory.CreateDirectory(Path.Combine(DataDir, "benchmarks"));
+                        var folder = await Windows.Storage.StorageFolder.GetFolderFromPathAsync(Path.Combine(DataDir, "benchmarks"));
+                        var file = await folder.CreateFileAsync("ui-shot.png", Windows.Storage.CreationCollisionOption.ReplaceExisting);
+                        using var stream = await file.OpenAsync(Windows.Storage.FileAccessMode.ReadWrite);
+                        var enc = await Windows.Graphics.Imaging.BitmapEncoder.CreateAsync(Windows.Graphics.Imaging.BitmapEncoder.PngEncoderId, stream);
+                        enc.SetPixelData(Windows.Graphics.Imaging.BitmapPixelFormat.Bgra8, Windows.Graphics.Imaging.BitmapAlphaMode.Premultiplied, (uint)rtb.PixelWidth, (uint)rtb.PixelHeight, 96, 96, pixels);
+                        await enc.FlushAsync();
+                    }
+                    catch (Exception ex) { await File.WriteAllTextAsync(Path.Combine(DataDir, "benchmarks", "bench-error.txt"), ex.ToString()); }
+                    Application.Current.Exit();
+                });
+            });
+        }
+
+        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check"))
         {
             Directory.CreateDirectory(Path.Combine(DataDir, "benchmarks"));
             try
@@ -170,6 +270,7 @@ public sealed partial class MainWindow : Window
                 if (args.Contains("--memory-lab")) await RunMemoryLabAsync();
                 else if (args.Contains("--restore-bench")) await RunRestoreBenchAsync();
                 else if (args.Contains("--shield-check")) await RunShieldCheckAsync();
+                else if (args.Contains("--youtube-check")) await RunYouTubeCheckAsync();
                 else await RunMemoryCheckAsync();
             }
             catch (Exception ex) { await File.WriteAllTextAsync(Path.Combine(DataDir, "benchmarks", "bench-error.txt"), ex.ToString()); }
@@ -177,8 +278,10 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        if (_kernel.Tabs.Count == 0) _kernel.Open(new Uri("https://example.com"));
+        var firstRun = !FirstRunDone();
+        if (_kernel.Tabs.Count == 0) _kernel.Open(new Uri(firstRun ? WelcomePage.Url : "https://example.com"));
         await _kernel.ActivateAsync(_kernel.Tabs[0].Id);
+        if (firstRun) { await Task.Delay(800); await ShowFirstRunTipsAsync(); }
     }
 
     // ---- kernel → UI ----
@@ -684,6 +787,7 @@ public sealed partial class MainWindow : Window
             $"{_shield.RuleCount:N0} network rules, {_shield.CosmeticGeneric + _shield.CosmeticDomain:N0} cosmetic rules active",
             "",
         };
+        if (st is not null && st.SiteModules.Count > 0) lines.Insert(3, $"Site modules: {string.Join(", ", st.SiteModules)} — ad definitions pruned {st.AdsPruned}, player skips {st.AdsSkipped}{(st.WallSeen > 0 ? ", anti-adblock wall seen" : "")}");
         if (st is not null) lines.AddRange(st.Recent.Reverse().Take(15).Select(x => $"✕ {x.Host}\n    {x.Rule}"));
         var dlg = new ContentDialog
         {
@@ -702,6 +806,46 @@ public sealed partial class MainWindow : Window
             StatusText.Text = $"Shield {(enabled ? "disabled" : "enabled")} for {site}; page reloaded";
         }
         else if (result == ContentDialogResult.Secondary) await UpdateFilterListsAsync();
+    }
+
+    /// <summary>
+    /// ADR 0015 gate: play a video for a fixed window and measure what actually happened: ad definitions pruned,
+    /// player-level skips, seconds the player spent in ad state, whether a detection wall appeared.
+    /// </summary>
+    private async Task RunYouTubeCheckAsync()
+    {
+        var k = _kernel!;
+        foreach (var t in k.Tabs.ToList()) await k.CloseAsync(t.Id);
+        var urls = (Environment.GetEnvironmentVariable("JEVBROWSE_YT_URLS") ?? "https://www.youtube.com/watch?v=dQw4w9WgXcQ;https://www.youtube.com/watch?v=jNQXAC9IVRw").Split(';', StringSplitOptions.RemoveEmptyEntries);
+        var rows = new List<object>();
+        foreach (var u in urls)
+        {
+            var t = k.Open(new Uri(u));
+            await k.ActivateAsync(t.Id);
+            int adSeconds = 0, playingSeconds = 0, samples = 0; double maxTime = 0;
+            for (int i = 0; i < 75; i++)
+            {
+                await Task.Delay(1000);
+                if (!_leases!.TryGet(t.Id, out var l)) continue;
+                try
+                {
+                    var r = await ((WebView2Lease)l).View.CoreWebView2.ExecuteScriptAsync("(() => { const p = document.querySelector('.html5-video-player'); const v = document.querySelector('video.html5-main-video'); return JSON.stringify({ ad: !!(p && p.classList.contains('ad-showing')), playing: !!(v && !v.paused && v.currentTime > 0), t: v ? v.currentTime : 0 }); })()");
+                    using var doc = JsonDocument.Parse(JsonSerializer.Deserialize<string>(r) ?? "{}");
+                    samples++;
+                    if (doc.RootElement.GetProperty("ad").GetBoolean()) adSeconds++;
+                    if (doc.RootElement.GetProperty("playing").GetBoolean()) playingSeconds++;
+                    maxTime = Math.Max(maxTime, doc.RootElement.GetProperty("t").GetDouble());
+                    if (i == 8 && !doc.RootElement.GetProperty("playing").GetBoolean())
+                        await ((WebView2Lease)l).View.CoreWebView2.ExecuteScriptAsync("(() => { const v = document.querySelector('video.html5-main-video'); if (v) v.play().catch(() => {}); const b = document.querySelector('.ytp-large-play-button, .ytp-play-button'); if (b) b.click(); })()");
+                }
+                catch (Exception) { }
+            }
+            _shield!.Stats.TryGetValue(t.Id, out var st);
+            rows.Add(new { url = u, samples, playingSeconds, adSeconds, videoReachedSeconds = Math.Round(maxTime), adsPruned = st?.AdsPruned ?? 0, adsSkipped = st?.AdsSkipped ?? 0, wallSeen = st?.WallSeen ?? 0, requestsBlocked = st?.Blocked ?? 0, modules = st?.SiteModules });
+            await k.VirtualizeAsync(t.Id, Cause.User);
+        }
+        var file = Path.Combine(DataDir, "benchmarks", $"youtube-check-{DateTime.Now:yyyyMMdd-HHmmss}.json");
+        await File.WriteAllTextAsync(file, JsonSerializer.Serialize(new { pages = rows }, new JsonSerializerOptions { WriteIndented = true }));
     }
 
     /// <summary>Phase 4 gate: load ad-heavy pages with the real engine and report blocked/total per page.</summary>

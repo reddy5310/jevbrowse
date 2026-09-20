@@ -12,6 +12,14 @@ One script is injected into every document (`WebView2Lease.PageScript`). It may 
 | `jev:secret-field` | an `input[type=password]` exists | raises the tab's data class to SECRET (less persistence) |
 | `jev:payment-field` | an `input[autocomplete^=cc-]` exists | raises the tab's data class to SECRET |
 
+Site modules (ADR 0015) may additionally post, and the host only *counts*:
+
+| Message | Meaning |
+|---|---|
+| `jev:yt-ad-pruned` | ad definitions were removed from a YouTube player response |
+| `jev:yt-ad-skipped` | the player was in ad state and the skipper acted |
+| `jev:yt-wall` | an anti-adblock wall element appeared |
+
 The host (`CoreWebView2.WebMessageReceived`) compares the message to those literals and ignores anything else. It never parses JSON, never reads input values, and never exposes a host object (`AddHostObjectToScript` is not used anywhere).
 
 ## Abuse analysis
