@@ -7,7 +7,7 @@ Every claim JevBrowse makes, and the strongest evidence behind it today. Levels,
 - **Real engine**: a benchmark/check drives actual WebView2 renderers and inspects real disk/DB state (`--privacy-check`, `--restore-bench`, …).
 - **Release-validated**: verified on the packaged, signed build on more than one machine. **Nothing is at this level yet** (builds are unsigned and tested on one machine).
 
-Last updated 2026-09-20 after the second independent review (ADR 0017). 231 unit tests.
+Last updated 2026-09-20 after the third independent review (ADR 0017, ADR 0018). 234 unit tests.
 
 | Claim | Level | Evidence | Known gap |
 |---|---|---|---|
@@ -21,8 +21,9 @@ Last updated 2026-09-20 after the second independent review (ADR 0017). 231 unit
 | Identity boundaries are real (moving across identities creates a new tab; agents never touch personal identities) | Unit | `Moving_across_identities…`, `A_session_can_never_name_its_way_into_an_existing_identity…` | Cookie separation between profiles relies on WebView2 user-data folders (engine guarantee, not re-tested by us) |
 | Permission grants are temporary and scoped to container + exact origin | Unit (key + policy) | `PermissionKeyTests` | `SavesInProfile=false` is set in the WebView2 adapter but not covered by an automated real-engine test |
 | Page classification combines evidence by the stricter result | Unit | `Independent_evidence_combines_by_the_stricter_result` | — |
-| **PUBLIC is earned, not assumed; "Not assessed" is honest** | Unit + real engine | `Public_must_be_earned_and_is_never_assumed`, `Not_assessed_keeps_the_page_on_the_device`, `A_page_we_cannot_assess_is_not_indexed…`; badge verified in a clean profile | Positive evidence is a heuristic (no sign-out affordance + real content); a logged-in app with neither would still read as PUBLIC |
-| **Restore outcomes are distinguished and shown** | Unit | `CaptureResult` outcomes; automatic demotion stops on TimedOut/Cancelled/Failed; partial capture reported and not dressed up | The 12 s restore timeout and failure choices are not yet covered by an automated UI test |
+| **PUBLIC is earned, not assumed; "Not assessed" is honest** | Unit + real engine | `Public_must_be_earned_and_is_never_assumed`: the only routes to PUBLIC are a structurally public host or the user's per-site choice. No page-side signal promotes — absence of a sign-in affordance is not evidence of public availability | The host list is short and hand-maintained, so most sites sit at Not assessed until the user decides. That is the intended direction of error |
+| **Nothing we could not assess leaves the device** | Unit | `A_page_we_could_not_assess_is_never_sent_even_on_an_explicit_request` covers both the chat and typed-decision routers with AI on, cloud on, providers configured and the user explicitly asking; `…MayLeaveDeviceOnExplicitRequest` is an enumerated set, not an ordinal test | Not driven through the real Ask dialog by an automated check |
+| **Restore outcomes are distinguished and shown** | Unit | `CaptureResult` outcomes plus `PreservedParts` (Address/Position/Preview): `Shortfall` names the loss the user will notice and stays silent when only the preview was lost | The 12 s restore timeout and failure choices are not yet covered by an automated UI test |
 | AI is off; background AI needs its own switch; nothing secret leaves | Unit | 21 Brain tests: kill switch, class gates, automatic-off, size cap, redaction of state *and* question text | Redaction is regex-based; `Redactor` recall on real pages is unmeasured |
 | Cloud-call audit is accurate | Unit | task, class, automatic/explicit recorded; `CloudCallsByClass` counts typed Jev calls | UI shows the log; no export |
 | Agents can only narrow a user-approved grant | Unit | `AgentCeiling` clamp tests; host fails closed without a ceiling; per-session approval | — |
@@ -40,6 +41,6 @@ Last updated 2026-09-20 after the second independent review (ADR 0017). 231 unit
 | Signed, updatable release | **Designed** | portable zip only | No code signing, no MSIX, no security-update path |
 
 ## Known limitations (deliberate, documented)
-- **Positive evidence for PUBLIC is still a heuristic.** A page earns PUBLIC from a structurally public host or from reporting no password/payment input, no sign-out affordance, and real content. An authenticated app with none of those signals would still read as PUBLIC. Everything else is now **Not assessed** and is kept on-device only.
+- **Most sites are Not assessed, and stay that way until you say otherwise.** PUBLIC comes only from a short list of structurally public hosts (Wikipedia, MDN, Microsoft Learn, …) or from your own per-site choice on the class badge. JevBrowse will not infer "public" from a page merely having content and no visible sign-out link — an authenticated report looks identical. The cost is that Browser Memory indexes little by default and Ask refuses on most pages until you classify the site. That is deliberate.
 - **Product scope.** The architecture serves general users, developers, researchers and agents at once. The dependable first release is *durable workspaces with predictable memory-efficient tab restoration*; everything else is opt-in.
 - **Not implemented:** bookmark import/export, extensions, password manager, sync, accessibility audit (keyboard-only and screen-reader passes are unverified), high-contrast theme testing.

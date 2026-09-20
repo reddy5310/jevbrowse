@@ -56,14 +56,31 @@ public class DataClassifierTests
         var unknown = new Uri("https://reports.somecompany.example/q3");   // matches no URL heuristic in either direction
         // No evidence either way → Not assessed. Insufficient knowledge is not a claim of "public".
         Assert.Equal(DataClass.Unknown, C.Classify(unknown, IdentityContainer.Personal, PageSignals.None));
-        // Positive evidence from the page (no password, no payment, no sign-out affordance) earns PUBLIC…
-        Assert.Equal(DataClass.Public, C.Classify(unknown, IdentityContainer.Personal, PageSignals.PublicEvidence));
-        // …but never over stronger evidence.
-        Assert.Equal(DataClass.Authenticated, C.Classify(unknown, IdentityContainer.Personal, PageSignals.PublicEvidence | PageSignals.Authenticated));
-        Assert.Equal(DataClass.Secret, C.Classify(unknown, IdentityContainer.Personal, PageSignals.PublicEvidence | PageSignals.PasswordField));
-        Assert.Equal(DataClass.Sensitive, C.Classify(new Uri("https://netbanking.hdfcbank.com/"), IdentityContainer.Personal, PageSignals.PublicEvidence));
-        // A structurally public site does not have to wait for the page to report in.
+
+        // The page rendering content with no sign-in affordance is NOT evidence of public availability: an
+        // authenticated report looks exactly like this. It must not promote.
+        Assert.Equal(DataClass.Unknown, C.Classify(unknown, IdentityContainer.Personal, PageSignals.ContentRendered));
+        Assert.Equal(DataClass.Authenticated, C.Classify(unknown, IdentityContainer.Personal, PageSignals.ContentRendered | PageSignals.Authenticated));
+        Assert.Equal(DataClass.Secret, C.Classify(unknown, IdentityContainer.Personal, PageSignals.ContentRendered | PageSignals.PasswordField));
+        Assert.Equal(DataClass.Sensitive, C.Classify(new Uri("https://netbanking.hdfcbank.com/"), IdentityContainer.Personal, PageSignals.ContentRendered));
+
+        // Only two routes to PUBLIC. A structurally public host…
         Assert.Equal(DataClass.Public, C.Classify(new Uri("https://en.wikipedia.org/wiki/Cat"), IdentityContainer.Personal, PageSignals.None));
+        // …or the user saying so for that site.
+        var told = new DataClassifier(site => site == "somecompany.example" ? DataClass.Public : null);
+        Assert.Equal(DataClass.Public, told.Classify(unknown, IdentityContainer.Personal, PageSignals.None));
+    }
+
+    [Fact]
+    public void A_page_we_could_not_assess_is_never_sent_to_the_cloud_even_when_the_user_asks()
+    {
+        // The ordinal test this replaces (cls <= Authenticated) let UNKNOWN through the explicit-action exception
+        // the moment Unknown was inserted at 1. Membership is enumerated so an enum edit cannot widen it again.
+        Assert.False(DataClass.Unknown.MayLeaveDeviceOnExplicitRequest());
+        Assert.True(DataClass.Public.MayLeaveDeviceOnExplicitRequest());
+        Assert.True(DataClass.Authenticated.MayLeaveDeviceOnExplicitRequest());
+        foreach (var c in new[] { DataClass.Sensitive, DataClass.Secret, DataClass.Ephemeral })
+            Assert.False(c.MayLeaveDeviceOnExplicitRequest());
     }
 
     [Fact]

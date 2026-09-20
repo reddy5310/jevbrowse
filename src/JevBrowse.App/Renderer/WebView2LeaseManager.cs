@@ -144,9 +144,10 @@ public sealed class WebView2Lease : IRendererLease
             if (pw) post('jev:secret-field');
             if (cc) post('jev:payment-field');
             if (out) post('jev:authenticated');
-            // Positive evidence the page is public. Only reported once the document has real content, so an empty
-            // shell cannot earn PUBLIC before its app has rendered.
-            if (!pw && !cc && !out && document.body && (document.body.innerText || '').trim().length > 200) post('jev:public-evidence');
+            // The page has rendered real content and shows no sign-in affordance. This does NOT mean public -- an
+            // authenticated document looks identical -- so it never raises or lowers the class. It only tells the
+            // shell the assessment is settled rather than still loading.
+            if (!pw && !cc && !out && document.body && (document.body.innerText || '').trim().length > 200) post('jev:content-rendered');
           };
           if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', scan); else scan();
           new MutationObserver(() => scan()).observe(document.documentElement, { childList: true, subtree: true });
@@ -203,8 +204,8 @@ public sealed class WebView2Lease : IRendererLease
                 case "jev:dirty-form": lease.SetDetected(ProtectionFlags.DirtyForm, true); break;
                 case "jev:secret-field": lease.SetSignals(lease._signals | PageSignals.PasswordField); break;
                 case "jev:payment-field": lease.SetSignals(lease._signals | PageSignals.PaymentField); break;
-                case "jev:authenticated": lease.SetSignals((lease._signals | PageSignals.Authenticated) & ~PageSignals.PublicEvidence); break;
-                case "jev:public-evidence": if (!lease._signals.HasFlag(PageSignals.Authenticated)) lease.SetSignals(lease._signals | PageSignals.PublicEvidence); break;
+                case "jev:authenticated": lease.SetSignals((lease._signals | PageSignals.Authenticated) & ~PageSignals.ContentRendered); break;
+                case "jev:content-rendered": if (!lease._signals.HasFlag(PageSignals.Authenticated)) lease.SetSignals(lease._signals | PageSignals.ContentRendered); break;
             }
         };
         await core.AddScriptToExecuteOnDocumentCreatedAsync(PageScript);
@@ -271,6 +272,7 @@ public sealed class WebView2Lease : IRendererLease
         double sx = 0, sy = 0; string? favicon = null;
         var gaps = new List<string>();
         var outcome = CaptureOutcome.Captured;
+        var kept = PreservedParts.None;
         try
         {
             var script = core.ExecuteScriptAsync("JSON.stringify({x:window.scrollX,y:window.scrollY,f:(document.querySelector('link[rel~=\"icon\"]')||{}).href||null})").AsTask();
@@ -280,6 +282,7 @@ public sealed class WebView2Lease : IRendererLease
                 sx = doc.RootElement.GetProperty("x").GetDouble();
                 sy = doc.RootElement.GetProperty("y").GetDouble();
                 favicon = doc.RootElement.TryGetProperty("f", out var f) && f.ValueKind == JsonValueKind.String ? f.GetString() : null;
+                kept |= PreservedParts.Position;
             }
             else
             {
@@ -302,9 +305,14 @@ public sealed class WebView2Lease : IRendererLease
 
         if (ct.IsCancellationRequested) return new(null, CaptureOutcome.Cancelled, "cancelled");
         var url = Uri.TryCreate(core.Source, UriKind.Absolute, out var u) ? u : new Uri("about:blank");
-        var cp = new Checkpoint(ResourceId, url, core.DocumentTitle, sx, sy, favicon, AllowThumbnails ? _lastThumbnail : null, DateTimeOffset.UtcNow);
+        var thumb = AllowThumbnails ? _lastThumbnail : null;
+        var cp = new Checkpoint(ResourceId, url, core.DocumentTitle, sx, sy, favicon, thumb, DateTimeOffset.UtcNow);
+        kept |= PreservedParts.Address;                                    // we got this far, so core.Source is real
+        if (thumb is not null) kept |= PreservedParts.Preview;
+        // A class that forbids thumbnails is not a shortfall: nothing was lost, the policy said not to keep pixels.
+        if (!AllowThumbnails) kept |= PreservedParts.Preview;
         if (outcome == CaptureOutcome.Captured && gaps.Count > 0) outcome = CaptureOutcome.Partial;
-        return new(cp, outcome, gaps.Count == 0 ? "address, position and preview" : string.Join("; ", gaps));
+        return new(cp, outcome, gaps.Count == 0 ? "address, position and preview" : string.Join("; ", gaps), kept);
     }
 
     // Readability-lite: prefer <article>/<main>/role=main, else the densest text container; strip nav/aside/footer/

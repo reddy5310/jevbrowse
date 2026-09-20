@@ -231,8 +231,14 @@ public class MemoryIndexerTests : IDisposable
         Assert.Equal(0, _memory.Stats().Docs);
         Assert.Contains("not assessed", reason);
 
-        _leases[t.Id].RaiseSignals(PageSignals.PublicEvidence);    // the page reports no sign-in affordances
-        Assert.True(await _indexer.IndexAsync(t.Id));
+        // Content rendering with no sign-in affordance changes nothing: it is not evidence the page is public.
+        _leases[t.Id].RaiseSignals(PageSignals.ContentRendered);
+        Assert.False(await _indexer.IndexAsync(t.Id));
+        Assert.Equal(0, _memory.Stats().Docs);
+
+        // A structurally public page is indexed without anyone being asked.
+        var wiki = await Open("https://en.wikipedia.org/wiki/Cat");
+        Assert.True(await _indexer.IndexAsync(wiki.Id));
         Assert.Equal(1, _memory.Stats().Docs);
     }
 }

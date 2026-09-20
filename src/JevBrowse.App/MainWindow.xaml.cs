@@ -432,6 +432,7 @@ public sealed partial class MainWindow : Window
     /// <summary>Nothing selected, or the selected tab is back: the panel says which, and never sits there lying.</summary>
     private void UpdateIdlePanel()
     {
+        ClearStaleRestoreMessage();
         if (_kernel?.Active is null)
         {
             _restoringId = null;
@@ -455,7 +456,10 @@ public sealed partial class MainWindow : Window
         RestoreActions.Visibility = Visibility.Collapsed;
         RestoreProgress.Visibility = Visibility.Visible;
         RestoreTitle.Text = string.IsNullOrWhiteSpace(tab.Title) ? tab.Url.Host : tab.Title;
-        RestoreStatus.Text = hasSavedPlace ? "Restoring… your place is saved." : "Restoring… we did not save a position for this page, so it will open at the top.";
+        // What we promise depends on what was actually kept, not on whether a checkpoint row exists. A capture that
+        // saved the address but lost the scroll position must not say "your place is saved".
+        var savedPlace = _kernel?.LastCapture(id) is { } last ? last.Preserved.HasFlag(PreservedParts.Position) : hasSavedPlace;
+        RestoreStatus.Text = savedPlace ? "Restoring… your place is saved." : "Restoring… we did not save a position for this page, so it will open at the top.";
 
         // The preview is only ever a previously saved image, and only when policy let us keep one.
         PreviewFrame.Visibility = Visibility.Collapsed;
@@ -497,9 +501,24 @@ public sealed partial class MainWindow : Window
         _restoringId = null;
         RestorePanel.Visibility = Visibility.Collapsed;
         PreviewImage.Source = null;
-        // Say so when we could not put them back where they were, rather than quietly opening at the top.
-        if (_kernel?.LastCapture(id) is { Outcome: CaptureOutcome.Partial } partial)
-            StatusText.Text = $"Restored, but not your exact place: {partial.Detail}";
+        // Say so when something was actually lost, and name the loss. A missing preview image changed nothing the
+        // user can see in the page, so it is not reported as a failed restore.
+        var shortfall = _kernel?.LastCapture(id)?.Shortfall ?? "";
+        if (shortfall.Length > 0) { StatusText.Text = $"Page reopened; {shortfall}."; _shortfallFor = id; }
+        else if (_shortfallFor == id) _shortfallFor = null;
+    }
+
+    /// <summary>
+    /// The tab a restore message is about. A message like "previous position unavailable" is about one page; leaving
+    /// it in the status bar after the user moves to another tab makes it read as a statement about that tab instead.
+    /// </summary>
+    private ResourceId? _shortfallFor;
+
+    private void ClearStaleRestoreMessage()
+    {
+        if (_shortfallFor is not { } id || _kernel?.Active?.Id == id) return;
+        _shortfallFor = null;
+        StatusText.Text = "";
     }
 
     private async void OnRestoreRetry(object s, RoutedEventArgs e)
@@ -921,13 +940,16 @@ public sealed partial class MainWindow : Window
         {
             TextWrapping = TextWrapping.Wrap,
             Text = !_brainPolicy.AiEnabled ? "AI is off. Turn it on in the Brain panel first."
-                 : cls >= DataClass.Sensitive ? $"This page is {cls}. Its content never leaves the device (hard rule)."
+                 : !cls.MayLeaveDeviceOnExplicitRequest() ? (cls == DataClass.Unknown
+                     ? "This page is Not assessed — we have no positive evidence it is public, so its content stays on the device. "
+                       + "If you know this site is public, tap the class badge and set it, then ask again."
+                     : $"This page is {ClassLabel(cls)}. Its content never leaves the device (hard rule).")
                  : provider is null ? "No AI provider is configured (set OPENROUTER_API_KEY or JEV_API_KEY in the environment)."
                  : $"Send {redacted.Text.Length:N0} characters of this {cls} page to {provider.Kind} ({provider.Model})?\n" +
                    $"{redacted.Count} item(s) were redacted first{(redacted.Count > 0 ? ": " + string.Join(", ", redacted.Kinds) : "")}.\n" +
                    "The page URL and your identity are not sent.",
         };
-        var canSend = _brainPolicy.AiEnabled && cls < DataClass.Sensitive && provider is not null;
+        var canSend = _brainPolicy.AiEnabled && cls.MayLeaveDeviceOnExplicitRequest() && provider is not null;
         var dlg = new ContentDialog { Title = "Ask: summarize this page", Content = preview, PrimaryButtonText = "Send", CloseButtonText = "Cancel", IsPrimaryButtonEnabled = canSend, XamlRoot = Content.XamlRoot };
         if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
 

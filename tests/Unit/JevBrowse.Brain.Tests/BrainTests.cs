@@ -38,6 +38,27 @@ public class BrainRouterTests
         new(task, "Some page text with contact me@example.com and card 4111 1111 1111 1111.", cls, c, explicitAction, new Uri("https://x.test/"));
 
     [Fact]
+    public async Task A_page_we_could_not_assess_is_never_sent_even_on_an_explicit_request()
+    {
+        // Both routing paths used `cls <= DataClass.Authenticated`, which started including UNKNOWN the moment
+        // Unknown was inserted at 1. AI on, cloud on, providers configured, user explicitly asking: still refused.
+        var (r, or, jev, _, _) = Make();
+        var chat = await r.DecideAsync(Req(BrainTask.SummarizePage, DataClass.Unknown, explicitAction: true), default);
+        Assert.True(chat.WasDenied);
+        Assert.Equal("policy:cloud_not_permitted_for_class", chat.Rule);
+        Assert.Empty(or.Received);
+        Assert.Empty(jev.Received);
+
+        // The typed-decision path is a separate gate and had the same hole.
+        var decisions = new FakeDecisionProvider();
+        var typed = new BrainRouter(new DefaultTrustPolicy(), new BrainPolicy { AiEnabled = true, CloudEnabled = true }, [], null, () => T0, decisions);
+        var answers = await typed.JudgeAsync("classify", "page text", new Dictionary<string, Question>(), DataClass.Unknown,
+            IdentityContainer.Personal, default, automatic: false);
+        Assert.Null(answers);
+        Assert.Empty(decisions.Calls);
+    }
+
+    [Fact]
     public async Task Kill_switch_stops_everything_and_still_logs()
     {
         var (r, or, _, log, _) = Make(ai: false);

@@ -22,10 +22,41 @@ public enum CaptureOutcome
     Failed,
 }
 
-public sealed record CaptureResult(Checkpoint? Checkpoint, CaptureOutcome Outcome, string Detail)
+/// <summary>
+/// Which parts of a page actually survived. "Partial" alone is not enough to speak accurately: losing the preview
+/// image and losing the user's scroll position are different losses, and only the second one changes what the user
+/// sees when the page comes back. The UI states what is true from these flags, not from the outcome.
+/// </summary>
+[Flags]
+public enum PreservedParts
 {
-    /// <summary>True when the checkpoint is good enough to promise the user their place was kept.</summary>
+    None = 0,
+    /// <summary>Address and title: without this there is nothing to reopen.</summary>
+    Address = 1 << 0,
+    /// <summary>Scroll position. Missing means the page reopens at the top.</summary>
+    Position = 1 << 1,
+    /// <summary>Preview image. Missing means the restore panel has no picture to show; the page is unaffected.</summary>
+    Preview = 1 << 2,
+}
+
+public sealed record CaptureResult(Checkpoint? Checkpoint, CaptureOutcome Outcome, string Detail, PreservedParts Preserved = PreservedParts.None)
+{
+    /// <summary>True when the checkpoint is good enough to promise the user their page was kept.</summary>
     public bool IsUsable => Checkpoint is not null && Outcome is CaptureOutcome.Captured or CaptureOutcome.Partial;
+
+    /// <summary>The address survived, so reopening lands on the right page even if the place within it was lost.</summary>
+    public bool HasAddress => Preserved.HasFlag(PreservedParts.Address);
+
+    /// <summary>What to tell the user when this page comes back. Empty when nothing needs saying.</summary>
+    public string Shortfall => Outcome switch
+    {
+        CaptureOutcome.Captured => "",
+        CaptureOutcome.Partial when !Preserved.HasFlag(PreservedParts.Position) => "previous position unavailable",
+        CaptureOutcome.Partial => "",   // only the preview was lost; the page itself comes back intact
+        CaptureOutcome.TimedOut => "the page did not respond in time, so it reopens from the start",
+        CaptureOutcome.Cancelled => "saving was interrupted",
+        _ => "this page could not be saved",
+    };
 }
 
 /// <summary>How a restore ended, so the UI can say what is true rather than assuming success.</summary>

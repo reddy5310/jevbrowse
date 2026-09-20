@@ -56,8 +56,9 @@ public sealed class BrainRouter : IBrainRouter
     public bool HasDecisionProvider => _decisions?.IsConfigured == true;
 
     /// <summary>
-    /// Layer 4: a typed judgement from Jev. Same gates as any cloud call (AI on, Cloud on, class ≤ AUTHENTICATED,
-    /// never SECRET/EPHEMERAL), state is redacted, and the numeric answers are logged. Returns null when refused.
+    /// Layer 4: a typed judgement from Jev. Same gates as any cloud call (AI on, Cloud on, a class an explicit
+    /// request may extend to, never SECRET/EPHEMERAL/UNKNOWN), state is redacted, and the numeric answers are
+    /// logged. Returns null when refused.
     /// </summary>
     public async Task<DecisionAnswers?> JudgeAsync(string task, string state, IReadOnlyDictionary<string, Question> questions, DataClass cls, IdentityContainer container, CancellationToken ct, bool automatic = true)
     {
@@ -72,11 +73,11 @@ public sealed class BrainRouter : IBrainRouter
         // Consent: AI on means the user may ASK; a background call needs its own switch.
         if (automatic && !_policy.AutomaticJudgments) { Deny("policy:automatic_judgments_off"); return null; }
 
-        // Trust OS decides which classes may go to the cloud at all; an explicit user action may extend that to
-        // AUTHENTICATED pages only (Table A.8), never above.
+        // Trust OS decides which classes may go to the cloud at all; an explicit user action may extend that to the
+        // enumerated set only (Table A.8) — never to a page we could not assess.
         var ctx = new ResourceContext(new Uri("about:blank"), cls, container);
         bool trustAllows = _trust.Evaluate(ctx, DataOperation.SendToCloudAI).Allowed;
-        bool explicitException = !automatic && cls <= DataClass.Authenticated;
+        bool explicitException = !automatic && cls.MayLeaveDeviceOnExplicitRequest();
         if (!trustAllows && !explicitException) { Deny("policy:cloud_not_permitted_for_class"); return null; }
         if (_decisions is null || !_decisions.IsConfigured) { Deny("policy:no_decision_provider"); return null; }
 
@@ -135,7 +136,7 @@ public sealed class BrainRouter : IBrainRouter
         var ctx = new ResourceContext(req.Url ?? new Uri("about:blank"), req.DataClass, req.Container);
         bool cloudAllowed = _policy.CloudEnabled &&
             (_trust.Evaluate(ctx, DataOperation.SendToCloudAI).Allowed ||
-             (req.ExplicitUserAction && req.DataClass <= DataClass.Authenticated));
+             (req.ExplicitUserAction && req.DataClass.MayLeaveDeviceOnExplicitRequest()));
         bool needsExplicit = req.Task is BrainTask.SummarizePage or BrainTask.ExplainError;
         if (needsExplicit && !req.ExplicitUserAction) return Deny("policy:task_requires_explicit_user_action");
 

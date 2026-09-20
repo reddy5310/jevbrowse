@@ -5,9 +5,10 @@ namespace JevBrowse.TrustOS;
 /// <summary>
 /// Deterministic data-class assignment (layer 2 of §11). Order of precedence, highest first:
 ///   container ephemeral → EPHEMERAL; user override per site; page signals (password/payment → SECRET);
-///   URL heuristics (banking/health/payroll → SENSITIVE; login/account/mail → AUTHENTICATED); else PUBLIC.
-/// Heuristics only ever raise the class; nothing here lowers a user override. Sensitive pages default to
-/// less persistence, never more (Constitution rule 9).
+///   URL heuristics (banking/health/payroll → SENSITIVE; login/account/mail → AUTHENTICATED); else UNKNOWN,
+///   unless the host is structurally public.
+/// Heuristics only ever raise the class; nothing here lowers a user override. PUBLIC is never inferred from the
+/// absence of evidence. Sensitive pages default to less persistence, never more (Constitution rule 9).
 /// </summary>
 public sealed class DataClassifier
 {
@@ -30,9 +31,11 @@ public sealed class DataClassifier
 
         if (known > DataClass.Public) return known;     // something concrete points at sensitivity
 
-        // Nothing does. That is not the same as knowing the page is public: say so, and only call it PUBLIC on
-        // positive evidence (a recognisably public URL, or a page with no sign-in affordances at all).
-        return signals.HasFlag(PageSignals.PublicEvidence) || IsKnownPublic(url) ? DataClass.Public : DataClass.Unknown;
+        // Nothing does. That is not the same as knowing the page is public. Absence of a sign-in affordance is not
+        // evidence of public availability — an authenticated document or single-page app satisfies it just as well —
+        // so no page-side signal promotes to PUBLIC. Only a structurally public host does; everything else is
+        // UNKNOWN until the user decides for that site (the class badge writes the override).
+        return IsKnownPublic(url) ? DataClass.Public : DataClass.Unknown;
     }
 
     private static DataClass? FromSignals(PageSignals s)
@@ -54,7 +57,8 @@ public sealed class DataClassifier
 
     /// <summary>
     /// URLs whose public nature is structural rather than guessed: reference and documentation sites that serve the
-    /// same content to everyone. Deliberately short; everything else must earn PUBLIC from the page itself.
+    /// same content to everyone, signed in or not. Deliberately short, and the only automatic route to PUBLIC —
+    /// every other site stays UNKNOWN until its owner tells us otherwise.
     /// </summary>
     private static bool IsKnownPublic(Uri url)
     {

@@ -4,12 +4,26 @@ namespace JevBrowse.Domain;
 /// Table A.10. Higher = more sensitive. Persistence and AI defaults get stricter as the class rises.
 /// <para>
 /// <see cref="Unknown"/> is the default for a page we have no positive evidence about: it is NOT a claim that the
-/// page is public. PUBLIC must be earned (recognisable public URL, or the page showing no sign-in affordances).
-/// Numeric order matters — the policy matrix and every Math.Max combination depend on it, and stored user
-/// overrides are migrated when it changes (BrowserDb v8).
+/// page is public. PUBLIC must be earned by a scoped rule (a structurally public host) or an informed user choice
+/// for that site. Numeric order matters — the policy matrix and every Math.Max combination depend on it, and stored
+/// user overrides are migrated when it changes (BrowserDb v8).
 /// </para>
 /// </summary>
 public enum DataClass { Public = 0, Unknown = 1, Authenticated = 2, Sensitive = 3, Secret = 4, Ephemeral = 5 }
+
+public static class DataClassExtensions
+{
+    /// <summary>
+    /// Classes an explicit user action may extend a cloud call to, when Trust OS alone would not (Table A.8).
+    /// <para>
+    /// Enumerated deliberately, never <c>cls &lt;= Authenticated</c>: an ordinal test silently widens what may leave
+    /// the device the moment a class is inserted into the enum, which is exactly how UNKNOWN became sendable when
+    /// <see cref="DataClass.Unknown"/> was added at 1. A page we could not assess is not a page the user can
+    /// knowingly consent to send, so it is not on this list.
+    /// </para>
+    /// </summary>
+    public static bool MayLeaveDeviceOnExplicitRequest(this DataClass c) => c is DataClass.Public or DataClass.Authenticated;
+}
 
 /// <summary>§10.1 identity containers. Each maps to its own WebView2 user-data folder (cookies/storage/permissions).</summary>
 public enum IdentityContainer { Personal, Work, Dev, Disposable, Private }
@@ -46,8 +60,10 @@ public enum PageSignals
     PaymentField = 1 << 1,    // autocomplete=cc-number etc.
     Authenticated = 1 << 2,   // heuristics: logout link / account menu; conservative
     /// <summary>
-    /// Positive evidence that the page is public: no password/payment input and no sign-out affordance. Weak on its
-    /// own, which is why it only ever moves a page from UNKNOWN to PUBLIC and never overrides stronger evidence.
+    /// The page has real rendered content (not an empty app shell) and shows no sign-in affordance. This says the
+    /// page is <i>readable</i>, not that it is <i>public</i>: an authenticated document satisfies it exactly as a
+    /// public article does. It therefore never promotes a class — it only tells the UI the assessment is settled
+    /// rather than still loading, so "Not assessed" is not shown for a page that simply has not rendered yet.
     /// </summary>
-    PublicEvidence = 1 << 3,
+    ContentRendered = 1 << 3,
 }

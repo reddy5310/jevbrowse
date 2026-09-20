@@ -91,8 +91,25 @@ public class HibernationTests : IDisposable
 
         var last = _k.LastCapture(a.Id)!;
         Assert.Equal(CaptureOutcome.Partial, last.Outcome);
-        Assert.Contains("did not report its position", last.Detail);
         Assert.Equal(0, _k.GetCheckpoint(a.Id)!.ScrollY);                        // and we do not pretend we have it
+
+        // "Partial" alone does not say what was lost. The parts do, and the message names the loss the user will
+        // actually notice: the page reopens at the top.
+        Assert.True(last.HasAddress);
+        Assert.False(last.Preserved.HasFlag(PreservedParts.Position));
+        Assert.Equal("previous position unavailable", last.Shortfall);
+    }
+
+    [Fact]
+    public async Task Losing_only_the_preview_is_not_reported_as_a_failed_restore()
+    {
+        // The preview is a picture in the restore panel. Losing it changes nothing about the page that comes back,
+        // so saying "we could not restore your page" would be false.
+        var kept = new CaptureResult(new Checkpoint(new ResourceId(Guid.NewGuid()), new Uri("https://a.test/"), "A", 0, 900, null, null, DateTimeOffset.UnixEpoch),
+            CaptureOutcome.Partial, "no preview image", PreservedParts.Address | PreservedParts.Position);
+        Assert.Equal("", kept.Shortfall);
+        Assert.True(kept.IsUsable);
+        await Task.CompletedTask;
     }
 
     [Fact]

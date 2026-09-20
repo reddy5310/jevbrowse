@@ -106,7 +106,10 @@ public sealed class FakeLease(ResourceId id, Uri url, FakeLeaseManager owner) : 
         var partial = NextCaptureOutcome == CaptureOutcome.Partial;
         NextCaptureOutcome = null;
         var cp = new Checkpoint(id, Url, "t", 0, partial ? 0 : ScrollY, null, thumb, DateTimeOffset.UnixEpoch);
-        return Task.FromResult(new CaptureResult(cp, partial ? CaptureOutcome.Partial : CaptureOutcome.Captured, partial ? "the page did not report its position in time" : "address, position and preview"));
+        // A partial capture here is the scroll-extraction failure: the address survived, the position did not.
+        return Task.FromResult(partial
+            ? new CaptureResult(cp, CaptureOutcome.Partial, "position unavailable", PreservedParts.Address | PreservedParts.Preview)
+            : new CaptureResult(cp, CaptureOutcome.Captured, "address, position and preview", PreservedParts.Address | PreservedParts.Position | PreservedParts.Preview));
     }
 
     public void ApplyCheckpoint(Checkpoint cp) { Applied = cp; ScrollY = cp.ScrollY; }
