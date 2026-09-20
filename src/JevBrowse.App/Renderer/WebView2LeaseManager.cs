@@ -1,6 +1,7 @@
 using System.Text.Json;
 using JevBrowse.Domain;
 using JevBrowse.Renderer.Abstractions;
+using JevBrowse.Storage;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.Web.WebView2.Core;
@@ -20,14 +21,20 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
     private readonly Panel _host;
     private readonly string _profilesDir;
     private readonly string _thumbnailDir;
-    private readonly string _sessionTag = Environment.ProcessId.ToString();
+    private readonly EphemeralProfileStore _ephemeral;
+    private readonly Dictionary<string, string> _ephemeralPaths = [];
+    private readonly Dictionary<ResourceId, string> _identities = [];
+    private readonly HashSet<string> _endedIdentities = [];
+    private readonly Dictionary<string, HashSet<uint>> _runningBrowsers = [];
+    private bool _shutdown;
 
     public WebView2LeaseManager(Panel host, string profilesDir, string thumbnailDir)
     {
         _host = host;
         _profilesDir = profilesDir;
         _thumbnailDir = thumbnailDir;
-        SweepEphemeral();
+        _ephemeral = new EphemeralProfileStore(Path.Combine(profilesDir, "ephemeral"));
+        _ephemeral.Sweep();
     }
 
     public int MaxLive { get; set; } = 5;
@@ -49,13 +56,20 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
     /// </summary>
     public async Task<CoreWebView2Environment> GetEnvironmentAsync(IdentityContainer container, ContextId isolationKey)
     {
-        var key = container.IsEphemeral() ? $"{container}:{isolationKey}" : container.ToString();
+        var key = IdentityKey(container, isolationKey);
+        ThrowIfEnded(key);
         if (_envs.TryGetValue(key, out var env)) return env;
         var udf = container.IsEphemeral()
-            ? Path.Combine(_profilesDir, "ephemeral", $"{container.ToString().ToLowerInvariant()}-{_sessionTag}-{isolationKey.ToString()[..8]}")
+            ? _ephemeralPaths.GetValueOrDefault(key) ?? (_ephemeralPaths[key] = _ephemeral.Create())
             : Path.Combine(_profilesDir, container.ToString().ToLowerInvariant());
         Directory.CreateDirectory(udf);
         env = await CoreWebView2Environment.CreateWithOptionsAsync(null, udf, new CoreWebView2EnvironmentOptions());
+        ThrowIfEnded(key);
+        _runningBrowsers[key] = [];
+        env.BrowserProcessExited += (_, args) =>
+        {
+            if (_runningBrowsers.TryGetValue(key, out var running)) running.Remove(args.BrowserProcessId);
+        };
         _envs[key] = env;
         return env;
     }
@@ -77,48 +91,90 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
 
     public async Task<IRendererLease> AcquireAsync(ResourceId id, Uri initialUrl, RenderIntent intent, IdentityContainer container, ContextId isolationKey, CancellationToken ct)
     {
+        var key = IdentityKey(container, isolationKey);
+        ThrowIfEnded(key);
         var env = await GetEnvironmentAsync(container, isolationKey);
         var view = new WebView2 { Visibility = Visibility.Collapsed };
         _host.Children.Add(view);
-        await view.EnsureCoreWebView2Async(env);
-        if (OnCoreCreated is not null) await OnCoreCreated(view.CoreWebView2, id, container, isolationKey, initialUrl);
-        var lease = await WebView2Lease.CreateAsync(id, view, _thumbnailDir);
-        // In force before the first Navigate below, so an allowed URL that redirects out of scope is stopped.
-        if (_navPolicies.TryGetValue(id, out var policy)) lease.NavigationGuard = policy;
-        _live[id] = lease;
-        if (initialUrl.Scheme == "jev" && LocalPage is not null && LocalPage(initialUrl) is { } html) view.CoreWebView2.NavigateToString(html);
-        else view.CoreWebView2.Navigate(initialUrl.ToString());
-        return lease;
+        WebView2Lease? lease = null;
+        try
+        {
+            await view.EnsureCoreWebView2Async(env);
+            _runningBrowsers[key].Add(view.CoreWebView2.BrowserProcessId);
+            ThrowIfEnded(key);
+            if (OnCoreCreated is not null) await OnCoreCreated(view.CoreWebView2, id, container, isolationKey, initialUrl);
+            lease = await WebView2Lease.CreateAsync(id, view, _thumbnailDir);
+            ThrowIfEnded(key);
+            // In force before the first Navigate below, so an allowed URL that redirects out of scope is stopped.
+            if (_navPolicies.TryGetValue(id, out var policy)) lease.NavigationGuard = policy;
+            _live[id] = lease;
+            _identities[id] = key;
+            if (initialUrl.Scheme == "jev" && LocalPage is not null && LocalPage(initialUrl) is { } html) view.CoreWebView2.NavigateToString(html);
+            else view.CoreWebView2.Navigate(initialUrl.ToString());
+            return lease;
+        }
+        catch
+        {
+            lease?.CleanupHostState();
+            _host.Children.Remove(view);
+            view.Close();
+            _live.Remove(id);
+            _identities.Remove(id);
+            OnCoreDisposed?.Invoke(id);
+            throw;
+        }
     }
 
     public async Task ReleaseAsync(ResourceId id, ReleaseDisposition disposition, CancellationToken ct)
     {
         if (!_live.TryGetValue(id, out var lease)) return;
         if (disposition == ReleaseDisposition.Suspend) { await lease.TrySuspendAsync(); return; }
-        _live.Remove(id);
         lease.CleanupHostState();   // before the view goes: stops the media timer and drops its reference to the lease
         _host.Children.Remove(lease.View);
         lease.View.Close();
+        _live.Remove(id);
+        _identities.Remove(id);
         OnCoreDisposed?.Invoke(id);
+    }
+
+    private static string IdentityKey(IdentityContainer container, ContextId isolation) =>
+        container.IsEphemeral() ? $"{container}:{isolation}" : container.ToString();
+
+    private void ThrowIfEnded(string key)
+    {
+        if (_shutdown || _endedIdentities.Contains(key)) throw new InvalidOperationException("This renderer session has ended.");
+    }
+
+    public sealed record SessionCleanup(bool RenderersClosed, bool ProfileDataDeleted);
+
+    public async Task<SessionCleanup> EndPrivateSessionAsync(ContextId isolation)
+    {
+        var key = IdentityKey(IdentityContainer.Private, isolation);
+        _endedIdentities.Add(key);
+        if (_identities.Values.Contains(key)) return new(false, false);
+        // File deletion alone is insufficient: the engine could still write its final profile updates.
+        // BrowserProcessExited confirms that all associated processes and profile resources were released.
+        for (var attempt = 0; attempt < 30 && _runningBrowsers.TryGetValue(key, out var running) && running.Count > 0; attempt++)
+            await Task.Delay(100);
+        if (_runningBrowsers.TryGetValue(key, out var remaining) && remaining.Count > 0) return new(true, false);
+        _envs.Remove(key);
+        _runningBrowsers.Remove(key);
+        if (!_ephemeralPaths.TryGetValue(key, out var path)) return new(true, true);
+        var deleted = await _ephemeral.EndAsync(path);
+        if (deleted) _ephemeralPaths.Remove(key);
+        return new(true, deleted);
     }
 
     /// <summary>Close every renderer and mark this session's ephemeral profiles for deletion.</summary>
     public void Shutdown()
     {
+        _shutdown = true;
         foreach (var l in _live.Values.ToList()) { l.CleanupHostState(); _host.Children.Remove(l.View); l.View.Close(); }
         _live.Clear();
-        SweepEphemeral(); // best effort now; processes still winding down are caught on next start
-    }
-
-    private void SweepEphemeral()
-    {
-        var dir = Path.Combine(_profilesDir, "ephemeral");
-        if (!Directory.Exists(dir)) return;
-        foreach (var d in Directory.GetDirectories(dir))
-        {
-            try { Directory.Delete(d, recursive: true); }
-            catch (IOException) { } catch (UnauthorizedAccessException) { }
-        }
+        _identities.Clear();
+        _envs.Clear();
+        _navPolicies.Clear();
+        _ephemeral.Dispose(); // failed deletions remain for the next startup sweep
     }
 }
 
@@ -605,6 +661,7 @@ public sealed class WebView2Lease : IRendererLease
 
     /// <summary>True when something we cannot currently confirm might still be capturing.</summary>
     internal bool MediaStatusUncertain => _media.Values.Any(e => e.Uncertain);
+    internal bool HostStateReleased => _disposed && _media.Count == 0 && _mediaSweeper is null && _detach.Count == 0;
 
     /// <summary>
     /// Terminal. Once cleanup has run the lease accepts nothing further: a message already queued on the dispatcher
@@ -671,6 +728,10 @@ public sealed class WebView2Lease : IRendererLease
         _mediaSweeper = null;
         _media.Clear();
         _detected = ProtectionFlags.None;
+        _signals = PageSignals.None;
+        NavigationGuard = null;
+        AllowThumbnails = false;
+        _lastThumbnail = null;
         foreach (var undo in _detach) undo();
         _detach.Clear();
         DetectedProtectionChanged = null;
@@ -717,6 +778,7 @@ public sealed class WebView2Lease : IRendererLease
 
     private void RaiseNavigation()
     {
+        if (_disposed) return;
         var core = View.CoreWebView2;
         if (Uri.TryCreate(core.Source, UriKind.Absolute, out var u))
             NavigationChanged?.Invoke(new NavigationInfo(u, core.DocumentTitle));

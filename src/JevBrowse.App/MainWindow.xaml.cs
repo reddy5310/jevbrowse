@@ -67,8 +67,22 @@ public sealed partial class MainWindow : Window
         {
             if (_shutdownCheckpointDone || _kernel is null) return;
             e.Cancel = true;
+            if (_shutdownInProgress) return;
+            _shutdownInProgress = true;
+            _tick?.Stop();
+            Root.IsHitTestVisible = false;
             try { await _kernel.CheckpointAllAsync(new CancellationTokenSource(TimeSpan.FromSeconds(4)).Token); }
             catch (Exception) { }
+            await _productModeGate.WaitAsync();
+            try
+            {
+                foreach (var workspace in _kernel.Workspaces.Where(w => w.Container == IdentityContainer.Private).Select(w => w.Id).Concat(_pendingPrivateCleanup).Distinct().ToArray())
+                {
+                    try { await EndPrivateSessionCoreAsync(workspace); }
+                    catch (Exception) { /* shutdown still closes all renderers; remaining files are swept on startup */ }
+                }
+            }
+            finally { _productModeGate.Release(); }
             _shutdownCheckpointDone = true;
             Close();
         };
@@ -77,6 +91,7 @@ public sealed partial class MainWindow : Window
     }
 
     private bool _shutdownCheckpointDone;
+    private bool _shutdownInProgress;
 
     // ---- First run / help ----
 
@@ -236,6 +251,7 @@ public sealed partial class MainWindow : Window
         foreach (var m in Enum.GetValues<ProductMode>()) ProductModeBox.Items.Add(m.ToString());
         // Simple by default: a first-time user gets tabs, Shield and privacy, and grows into Power.
         ProductModeBox.SelectedIndex = (int)(Enum.TryParse<ProductMode>(Environment.GetEnvironmentVariable("JEVBROWSE_MODE"), true, out var pm) ? pm : ProductMode.Simple);
+        await _modeChangeTask;
 
         // Resource OS tick: sample → evaluate → apply. 10 s is coarse on purpose; user actions never wait for it.
         _tick = DispatcherQueue.CreateTimer();
@@ -275,12 +291,13 @@ public sealed partial class MainWindow : Window
             });
         }
 
-        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--agent-check") || args.Contains("--media-check") || args.Contains("--site-sweep") || args.Any(a => a.StartsWith("--join=", StringComparison.Ordinal)))
+        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--private-session-check") || args.Contains("--agent-check") || args.Contains("--media-check") || args.Contains("--site-sweep") || args.Any(a => a.StartsWith("--join=", StringComparison.Ordinal)))
         {
             Directory.CreateDirectory(Path.Combine(DataDir, "benchmarks"));
             try
             {
                 if (args.FirstOrDefault(a => a.StartsWith("--join=", StringComparison.Ordinal)) is { } j) await RunJoinCheckAsync(j["--join=".Length..]);
+                else if (args.Contains("--private-session-check")) await RunPrivateSessionCheckAsync();
                 else if (args.Contains("--site-sweep")) await RunSiteSweepAsync();
                 else if (args.Contains("--media-check")) await RunMediaCheckAsync();
                 else if (args.Contains("--agent-check")) await RunAgentCheckAsync();
@@ -301,8 +318,8 @@ public sealed partial class MainWindow : Window
         }
 
         var firstRun = !FirstRunDone();
-        if (_kernel.Tabs.Count == 0) _kernel.Open(new Uri(firstRun ? WelcomePage.Url : "https://example.com"));
-        await _kernel.ActivateAsync(_kernel.Tabs[0].Id);
+        if (!_kernel.TabsIn(_kernel.ActiveWorkspace).Any()) _kernel.Open(new Uri(firstRun ? WelcomePage.Url : "https://example.com"));
+        await _kernel.ActivateAsync(_kernel.TabsIn(_kernel.ActiveWorkspace).First().Id);
         if (firstRun) { await Task.Delay(800); await ShowFirstRunTipsAsync(); }
     }
 
@@ -310,7 +327,7 @@ public sealed partial class MainWindow : Window
 
     private void OnKernelChanged(KernelEvent e)
     {
-        if (e.Kind is "workspace-created" or "context-restored") RebuildWorkspaces();
+        if (e.Kind is "workspace-created" or "workspace-ended" or "context-restored") RebuildWorkspaces();
         if (e.Kind is "workspace-switched") { SyncWorkspaceBox(); RebuildList(); }
         else if (e.Kind is "opened" or "closed" or "loaded" or "moved" or "context-restored" or "pinned") RebuildList();
         else foreach (var i in Items) i.Refresh();
@@ -328,6 +345,7 @@ public sealed partial class MainWindow : Window
         if (e.Kind is "restored" or "loaded") FinishRestore(e.Id);
         UpdateIdlePanel();
         UpdatePoolText();
+        if (e.Kind is "workspace-switched" or "workspace-ended") UpdatePrivateSessionUi();
         StatusText.Text = $"{e.Kind} {e.Reason}";
     }
 
@@ -608,7 +626,7 @@ public sealed partial class MainWindow : Window
         DataClass.Authenticated => "Looks like you are signed in: kept on this device, not added to search, never sent to AI unless you ask.",
         DataClass.Sensitive => "Only the address and scroll position are kept. No screenshot, no search, no AI.",
         DataClass.Secret => "This page asks for a password or card number. Nothing about it is stored or sent.",
-        _ => "This session is private: nothing is written to disk.",
+        _ => "Private tabs are not saved in history, previews or Browser Memory. Temporary website data is deleted when you end the session; locked files are retried on the next start.",
     };
 
     private async void OnClassBadgeTapped(object s, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)

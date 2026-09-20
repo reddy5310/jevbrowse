@@ -6,7 +6,9 @@ using JevBrowse.ResourceOS;
 using JevBrowse.Shield;
 using JevBrowse.Storage;
 using JevBrowse.TrustOS;
+using JevBrowse.VirtualTabs;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 
@@ -20,6 +22,14 @@ public sealed partial class MainWindow
     public enum ProductMode { Simple, Focus, Power, Developer, Agent, Private }
 
     private ProductMode _mode = ProductMode.Power;
+    private ProductMode _returnMode = ProductMode.Simple;
+    private ContextId _returnWorkspace = ContextId.Default;
+    private ContextId? _privateWorkspace;
+    private readonly SemaphoreSlim _productModeGate = new(1, 1);
+    private bool _syncingProductMode;
+    private Task _modeChangeTask = Task.CompletedTask;
+    private readonly HashSet<ContextId> _pendingPrivateCleanup = [];
+    private bool _privateEndPromptOpen;
 
     private void ApplyProductMode(ProductMode mode)
     {
@@ -40,7 +50,6 @@ public sealed partial class MainWindow
         // Modes are capability switches, not just visibility: what a mode hides it must also stop doing.
         if (_indexer is not null) _indexer.Enabled = mode is not (ProductMode.Simple or ProductMode.Private);
         if (_dev is not null) _dev.SetEnabled(mode == ProductMode.Developer || Environment.GetEnvironmentVariable("JEVBROWSE_DEVSPACE") == "1");
-        if (mode == ProductMode.Private) _ = EnsurePrivateWorkspaceAsync();
         UpdateEnvChrome();
     }
 
@@ -48,18 +57,163 @@ public sealed partial class MainWindow
     {
         if (_kernel is null) return;
         // The container is part of the workspace's identity from birth (it cannot be changed afterwards).
-        var ws = _kernel.Workspaces.FirstOrDefault(w => w.Container == IdentityContainer.Private)
+        var ws = _kernel.Workspaces.FirstOrDefault(w => w.Id == _privateWorkspace)
                  ?? _kernel.CreateWorkspace("Private", IdentityContainer.Private);
+        _privateWorkspace = ws.Id;
         await _kernel.SwitchWorkspaceAsync(ws.Id);
         RebuildWorkspaces();
         UpdateIdlePanel();
     }
 
-    private void OnProductModeChanged(object s, SelectionChangedEventArgs e)
+    private async void OnProductModeChanged(object s, SelectionChangedEventArgs e)
     {
-        if (ProductModeBox.SelectedIndex < 0 || _kernel is null) return;
-        ApplyProductMode((ProductMode)ProductModeBox.SelectedIndex);
-        StatusText.Text = $"mode: {_mode}";
+        if (_syncingProductMode || ProductModeBox.SelectedIndex < 0 || _kernel is null) return;
+        _modeChangeTask = ChangeProductModeAsync((ProductMode)ProductModeBox.SelectedIndex);
+        try { await _modeChangeTask; }
+        catch (Exception) { StatusText.Text = "Could not switch browsing mode. Please try again."; }
+    }
+
+    private async Task ChangeProductModeAsync(ProductMode mode)
+    {
+        await _productModeGate.WaitAsync();
+        try
+        {
+            if (_kernel is null) return;
+            if (mode == ProductMode.Private)
+            {
+                if (_mode != ProductMode.Private)
+                {
+                    _returnMode = _mode;
+                    _returnWorkspace = _kernel.ActiveWorkspace;
+                }
+                await EnsurePrivateWorkspaceAsync();
+            }
+            else if (_mode == ProductMode.Private)
+                await _kernel.SwitchWorkspaceAsync(ReturnWorkspace());
+            ApplyProductMode(mode);
+            UpdatePrivateSessionUi();
+            StatusText.Text = mode == ProductMode.Private
+                ? "Private session open. Return keeps it open in the background; End private session closes it."
+                : $"mode: {mode}";
+        }
+        finally { _productModeGate.Release(); }
+    }
+
+    private ContextId ReturnWorkspace() => _kernel!.Workspaces.Any(w => w.Id == _returnWorkspace && !w.Container.IsEphemeral())
+        ? _returnWorkspace : _kernel.Workspaces.First(w => !w.Container.IsEphemeral()).Id;
+
+    private void UpdatePrivateSessionUi()
+    {
+        if (_kernel is null) return;
+
+        // Where "Return" leads. Recorded whenever the user is in an ordinary workspace, so entering Private by ANY
+        // route (the mode box, the workspace box) still returns them to where they actually were. Ephemeral
+        // workspaces are never a place to return to, and an agent's must not overwrite it.
+        var current = _kernel.Workspaces.FirstOrDefault(w => w.Id == _kernel.ActiveWorkspace);
+        if (current is not null && !current.Container.IsEphemeral()) _returnWorkspace = current.Id;
+
+        var tabs = _privateWorkspace is { } pw ? _kernel.TabsIn(pw).Count() : 0;
+        var view = PrivateSessionPresentation.Describe(_kernel.Workspaces, _kernel.ActiveWorkspace, _privateWorkspace,
+            ReturnWorkspace(), tabs, _pendingPrivateCleanup.Count);
+
+        EndPrivateButton.Visibility = view.ShowEnd ? Visibility.Visible : Visibility.Collapsed;
+        EndPrivateButton.Content = view.EndLabel;
+        ReturnPrivateButton.Visibility = view.ShowReturn ? Visibility.Visible : Visibility.Collapsed;
+        ReturnPrivateButton.Content = view.ReturnLabel;
+        PrivateSessionText.Visibility = view.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        PrivateSessionText.Text = view.Text;
+        AutomationProperties.SetName(EndPrivateButton, view.HasSession ? "End private session and close its tabs" : "Retry private cleanup");
+
+        // The mode box follows the workspace the user is really in. Only THEIR session counts: an agent's Private
+        // workspace becoming active must not flip the user's browser into Private mode.
+        if (view.InSession && _mode != ProductMode.Private) { _returnMode = _mode; ApplyProductMode(ProductMode.Private); }
+        else if (!view.InSession && _mode == ProductMode.Private) ApplyProductMode(_returnMode);
+        _syncingProductMode = true;
+        ProductModeBox.SelectedIndex = (int)_mode;
+        _syncingProductMode = false;
+    }
+
+    /// <summary>Leave the private session WITHOUT ending it: changes what is visible, closes nothing.</summary>
+    private async void OnReturnFromPrivate(object s, RoutedEventArgs e)
+    {
+        if (_kernel is null || _shutdownInProgress) return;
+        var name = _kernel.Workspaces.FirstOrDefault(w => w.Id == ReturnWorkspace())?.Name ?? "your workspace";
+        _modeChangeTask = ChangeProductModeAsync(_returnMode == ProductMode.Private ? ProductMode.Simple : _returnMode);
+        try
+        {
+            await _modeChangeTask;
+            StatusText.Text = $"Back in {name}. Your private session is still open; End private session closes it.";
+        }
+        catch (Exception) { StatusText.Text = "Could not switch back. Please try again."; }
+    }
+
+    private async Task<bool> EndPrivateSessionCoreAsync(ContextId workspace)
+    {
+        _pendingPrivateCleanup.Add(workspace);
+        if (_privateWorkspace == workspace) _privateWorkspace = null;
+        _permissions?.EndSession(IdentityContainer.Private, workspace);
+        await _kernel!.EndPrivateSessionAsync(workspace, ReturnWorkspace());
+        var result = await _leases!.EndPrivateSessionAsync(workspace);
+        if (result.RenderersClosed && result.ProfileDataDeleted) _pendingPrivateCleanup.Remove(workspace);
+        StatusText.Text = !result.RenderersClosed ? "Private tabs are still closing. Retry cleanup."
+            : result.ProfileDataDeleted ? "Private tabs closed. Temporary profile data deleted."
+            : "Private tabs closed. Temporary profile data is still waiting for deletion. Retry cleanup.";
+        return result.RenderersClosed && result.ProfileDataDeleted;
+    }
+
+    private async void OnEndPrivateSession(object s, RoutedEventArgs e)
+    {
+        if (_kernel is null || _privateEndPromptOpen || _shutdownInProgress) return;
+        _privateEndPromptOpen = true;
+        var gateHeld = false;
+        EndPrivateButton.IsEnabled = false;
+        try
+        {
+            // The user's session, by identity. Not "whichever Private workspace is active": that could be an agent's.
+            var mine = _privateWorkspace is { } pw ? _kernel.Workspaces.FirstOrDefault(w => w.Id == pw) : null;
+            if (mine is not null)
+            {
+                var n = _kernel.TabsIn(mine.Id).Count();
+                var dialog = new ContentDialog
+                {
+                    Title = "End private session?",
+                    Content = $"This closes {(n == 1 ? "its 1 tab" : $"its {n} tabs")}, including calls, downloads and unsaved forms, "
+                            + "and deletes the session's cookies and other temporary data once its files are released. "
+                            + "Your other tabs are not affected.",
+                    PrimaryButtonText = "End session", CloseButtonText = "Keep session open", XamlRoot = Content.XamlRoot,
+                };
+                if (await dialog.ShowSerializedAsync() != ContentDialogResult.Primary) return;
+            }
+            if (_shutdownInProgress) return;
+            // Never hold this gate while waiting for a dialog: closing the window also needs it for cleanup.
+            await _productModeGate.WaitAsync();
+            gateHeld = true;
+            var wasInside = mine is not null && _kernel.ActiveWorkspace == mine.Id;
+            var pendingBeforeEnd = _pendingPrivateCleanup.ToArray();
+            if (mine is not null) await EndPrivateSessionCoreAsync(mine.Id);
+            foreach (var pending in pendingBeforeEnd.Where(id => id != mine?.Id)) await EndPrivateSessionCoreAsync(pending);
+            var status = StatusText.Text;
+            // Only move the user if they were inside the session being ended. Ending it from another workspace must
+            // leave them exactly where they are.
+            if (wasInside)
+            {
+                await _kernel.SwitchWorkspaceAsync(ReturnWorkspace());
+                if (_kernel.Active is null && _kernel.TabsIn(_kernel.ActiveWorkspace).LastOrDefault() is { } tab)
+                    await _kernel.ActivateAsync(tab.Id);
+            }
+            // Moving workspaces rewrites the status line; put back the one EndPrivateSessionCoreAsync composed. It
+            // says "deleted" only when the tabs are closed AND the profile data is gone, and offers a retry otherwise.
+            StatusText.Text = status;
+        }
+        catch (Exception) { StatusText.Text = "Private cleanup is incomplete. Retry cleanup to finish closing tabs and deleting temporary data."; }
+        finally
+        {
+            _privateEndPromptOpen = false;
+            EndPrivateButton.IsEnabled = true;
+            RebuildWorkspaces();
+            UpdatePrivateSessionUi();
+            if (gateHeld) _productModeGate.Release();
+        }
     }
 
     // ---- Conventional browser shortcuts ----

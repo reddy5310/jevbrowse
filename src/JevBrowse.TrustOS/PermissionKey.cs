@@ -11,7 +11,7 @@ public static class PermissionKey
 {
     public static string For(IdentityContainer container, ContextId isolation, Uri origin)
     {
-        var who = container.IsEphemeral() ? $"{container}:{isolation.ToString()[..8]}" : container.ToString();
+        var who = container.IsEphemeral() ? $"{container}:{isolation}" : container.ToString();
         var where = $"{origin.Scheme}://{origin.Host.ToLowerInvariant()}:{origin.Port}";
         return $"{who}|{where}";
     }

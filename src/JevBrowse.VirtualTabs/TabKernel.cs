@@ -40,6 +40,13 @@ public sealed class TabKernel
     private readonly Dictionary<ResourceId, DataClass> _advisory = [];
     private readonly Dictionary<ResourceId, CaptureResult> _lastCapture = [];
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly HashSet<ContextId> _endedPrivateSessions = [];
+
+    private void RequireOpenWorkspace(ContextId id)
+    {
+        if (_endedPrivateSessions.Contains(id)) throw new InvalidOperationException("This private session has ended.");
+        if (_workspaceList.All(w => w.Id != id)) throw new KeyNotFoundException($"workspace {id}");
+    }
 
     public TabKernel(IRendererLeaseManager leases, TabRepository repo, CheckpointRepository checkpoints, string thumbnailDir,
         Func<DateTimeOffset>? clock = null, WorkspaceRepository? workspaces = null, ITrustPolicy? trust = null, DataClassifier? classifier = null)
@@ -163,8 +170,10 @@ public sealed class TabKernel
     /// </summary>
     public async Task<VirtualTab> MoveToWorkspaceAsync(ResourceId id, ContextId dest, CancellationToken ct = default)
     {
+        RequireOpenWorkspace(dest);
         var t = Find(id);
         var src = _workspaceList.First(w => w.Id == t.WorkspaceId);
+        RequireOpenWorkspace(src.Id);
         var dst = _workspaceList.FirstOrDefault(w => w.Id == dest) ?? throw new KeyNotFoundException($"workspace {dest}");
         if (SameIdentity(src, dst))
         {
@@ -194,6 +203,7 @@ public sealed class TabKernel
 
     private async Task SwitchWorkspaceCoreAsync(ContextId ws, CancellationToken ct)
     {
+        RequireOpenWorkspace(ws);
         if (ws == ActiveWorkspace) return;
         RecordContextCheckpoint();
         if (Active is not null && Active.State == ResourceState.Hot)
@@ -234,6 +244,7 @@ public sealed class TabKernel
     public Task<int> RestoreContextAsync(ContextCheckpoint cp, CancellationToken ct = default) =>
         SerializedAsync(async () =>
         {
+            if (_endedPrivateSessions.Contains(cp.WorkspaceId)) throw new InvalidOperationException("This private session has ended.");
             int recreated = 0;
             foreach (var e in cp.Resources)
             {
@@ -283,6 +294,7 @@ public sealed class TabKernel
 
     public VirtualTab Open(Uri url)
     {
+        RequireOpenWorkspace(ActiveWorkspace);
         var t = new VirtualTab(ResourceId.New(), url, "", ActiveWorkspace);
         _tabs.Add(t);
         Persist(t);
@@ -325,7 +337,8 @@ public sealed class TabKernel
                 if (r.Allowed) applied++;
                 Changed?.Invoke(new("decision", a.Id, r.Allowed ? "virtualized" : "vetoed at execution: " + r.Reason));
             }
-            foreach (var s in plan.Skipped) _lastDecision[s.Id] = s;
+            foreach (var s in plan.Skipped)
+                if (_tabs.Any(t => t.Id == s.Id && !_endedPrivateSessions.Contains(t.WorkspaceId))) _lastDecision[s.Id] = s;
             return applied;
         }, ct);
 
@@ -335,6 +348,7 @@ public sealed class TabKernel
     private async Task ActivateCoreAsync(ResourceId id, CancellationToken ct)
     {
         var tab = Find(id);
+        RequireOpenWorkspace(tab.WorkspaceId);
         var now = _clock();
         if (tab.WorkspaceId != ActiveWorkspace) { ActiveWorkspace = tab.WorkspaceId; Changed?.Invoke(new("workspace-switched", default, ActiveWorkspace.ToString())); }
 
@@ -359,8 +373,11 @@ public sealed class TabKernel
             var ws = _workspaceList.FirstOrDefault(w => w.Id == tab.WorkspaceId);
             lease = await _leases.AcquireAsync(id, tab.Url, RenderIntent.Foreground, ContainerOf(tab), tab.WorkspaceId, ct);
             lease.AllowThumbnails = May(tab, DataOperation.PersistThumbnail).Allowed;
+            bool IsCurrent() => !_endedPrivateSessions.Contains(tab.WorkspaceId)
+                && _tabs.Contains(tab) && _leases.TryGet(id, out var current) && ReferenceEquals(current, lease);
             lease.NavigationChanged += n =>
             {
+                if (!IsCurrent()) return;
                 // about:blank is never a destination the user chose. Locally rendered pages (jev://) report it
                 // because the content was pushed into the renderer rather than fetched, and treating that as a
                 // navigation would overwrite the tab's real address and discard its checkpoint.
@@ -377,15 +394,17 @@ public sealed class TabKernel
                 Persist(tab);
                 Changed?.Invoke(new("navigated", tab.Id, n.Title));
             };
-            lease.DetectedProtectionChanged += f => { tab.SetDetected(f); Changed?.Invoke(new("protection", tab.Id, f.ToString())); };
+            lease.DetectedProtectionChanged += f => { if (!IsCurrent()) return; tab.SetDetected(f); Changed?.Invoke(new("protection", tab.Id, f.ToString())); };
             lease.PageSignalsChanged += s =>
             {
+                if (!IsCurrent()) return;
                 _signals[tab.Id] = s;
                 EnforcePolicy(tab); // a password field appearing must purge what was allowed a moment ago
                 Changed?.Invoke(new("signals", tab.Id, ClassOf(tab).ToString()));
             };
             lease.Loaded += () =>
             {
+                if (!IsCurrent()) return;
                 if (_restoreTimers.Remove(id, out var timer))
                 {
                     RestoreTimingsMs.Add(timer.Elapsed.TotalMilliseconds);
@@ -439,6 +458,7 @@ public sealed class TabKernel
     {
         var tab = _tabs.FirstOrDefault(t => t.Id == id);
         if (tab is null) return new(false, ResourceState.Virtual, "tab_closed");
+        if (_endedPrivateSessions.Contains(tab.WorkspaceId)) return new(false, tab.State, "private_session_ended");
         if (!tab.State.HasLiveRenderer()) return new(true, tab.State, "already virtual");
         if (cause != Cause.User && tab.IsDemotionVetoed)
             return new(false, tab.State, $"vetoed by protection: {tab.Protection}");
@@ -519,21 +539,60 @@ public sealed class TabKernel
         }, ct);
 
     public Task CloseAsync(ResourceId id, CancellationToken ct = default) =>
+        SerializedAsync(() => CloseCoreAsync(id, ct), ct);
+
+    private async Task CloseCoreAsync(ResourceId id, CancellationToken ct)
+    {
+        var tab = Find(id);
+        if (_leases.TryGet(id, out _)) await _leases.ReleaseAsync(id, ReleaseDisposition.Dispose, ct);
+        _leases.SetNavigationPolicy(id, null);
+        _tabs.Remove(tab);
+        _lastActive.Remove(id);
+        _signals.Remove(id);
+        _advisory.Remove(id);
+        _restoreTimers.Remove(id);
+        _visits.Remove(id);
+        _lastDecision.Remove(id);
+        _lastCapture.Remove(id);
+        if (Active?.Id == id) Active = null;
+        var thumb = _checkpoints.Get(id)?.ThumbnailPath;
+        _repo.Delete(id); // cascades to checkpoints
+        DeleteThumb(thumb);
+        DeleteThumb(ThumbPath(id));
+        DeleteThumb(ThumbPath(id) + ".tmp");
+        Reorder();
+        Changed?.Invoke(new("closed", id, ""));
+    }
+
+    /// <summary>
+    /// Terminal user action, serialized with acquisition and scheduling. Protection never vetoes closing.
+    /// This closes tabs and host state only; the shell must separately confirm deletion of engine profile data.
+    /// A failed release leaves its tab available for another cleanup attempt, but never for browsing again.
+    /// </summary>
+    public Task EndPrivateSessionAsync(ContextId workspace, ContextId returnWorkspace, CancellationToken ct = default) =>
         SerializedAsync(async () =>
         {
-            var tab = Find(id);
-            if (_leases.TryGet(id, out _)) await _leases.ReleaseAsync(id, ReleaseDisposition.Dispose, ct);
-            _tabs.Remove(tab);
-            _lastActive.Remove(id);
-            _signals.Remove(id);
-            _advisory.Remove(id);
-            if (Active?.Id == id) Active = null;
-            var thumb = _checkpoints.Get(id)?.ThumbnailPath;
-            _repo.Delete(id); // cascades to checkpoints
-            DeleteThumb(thumb);
-            DeleteThumb(ThumbPath(id));
-            Reorder();
-            Changed?.Invoke(new("closed", id, ""));
+            var ws = _workspaceList.FirstOrDefault(w => w.Id == workspace);
+            if (ws is null && _endedPrivateSessions.Contains(workspace)) return;
+            if (ws?.Container != IdentityContainer.Private) throw new InvalidOperationException("Not a private session.");
+            RequireOpenWorkspace(returnWorkspace);
+            if (workspace == returnWorkspace) throw new InvalidOperationException("Choose another workspace to return to.");
+            _endedPrivateSessions.Add(workspace); // before any await: late callbacks cannot recreate state
+            if (ActiveWorkspace == workspace)
+            {
+                Active = null;
+                ActiveWorkspace = returnWorkspace;
+                Changed?.Invoke(new("workspace-switched", default, returnWorkspace.ToString()));
+            }
+            List<Exception> failures = [];
+            foreach (var tab in TabsIn(workspace).ToList())
+            {
+                try { await CloseCoreAsync(tab.Id, CancellationToken.None); }
+                catch (Exception ex) { failures.Add(ex); }
+            }
+            if (failures.Count > 0) throw new AggregateException("Private renderer cleanup is incomplete. Retry ending the session.", failures);
+            _workspaceList.Remove(ws!);
+            Changed?.Invoke(new("workspace-ended", default, workspace.ToString()));
         }, ct);
 
     public void SetProtection(ResourceId id, ProtectionFlags flags)

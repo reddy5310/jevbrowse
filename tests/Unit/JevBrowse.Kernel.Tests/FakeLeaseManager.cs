@@ -13,6 +13,7 @@ public sealed class FakeLeaseManager : IRendererLeaseManager
     public int Suspends { get; private set; }
     /// <summary>Set to make the next capture throw (simulates a renderer crash mid-checkpoint).</summary>
     public bool FailNextCapture { get; set; }
+    public bool FailNextRelease { get; set; }
     public IReadOnlyCollection<ResourceId> LiveResources => _live.Keys;
 
     private readonly Dictionary<ResourceId, Func<Uri, bool>> _navPolicies = [];
@@ -56,6 +57,7 @@ public sealed class FakeLeaseManager : IRendererLeaseManager
 
     public Task ReleaseAsync(ResourceId id, ReleaseDisposition d, CancellationToken ct)
     {
+        if (FailNextRelease) { FailNextRelease = false; throw new IOException("Simulated renderer release failure"); }
         if (d == ReleaseDisposition.Dispose) { _live.Remove(id); Disposes++; }
         else { _live[id].IsSuspended = true; Suspends++; }
         return Task.CompletedTask;

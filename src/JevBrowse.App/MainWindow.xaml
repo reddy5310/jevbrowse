@@ -55,6 +55,9 @@
                         <Button Content="&#xE897;" FontFamily="Segoe MDL2 Assets" Click="OnHelp" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Welcome / help (F1)"/>
                     </StackPanel>
                     <ComboBox x:Name="ProductModeBox" HorizontalAlignment="Stretch" Style="{StaticResource JevCombo}" SelectionChanged="OnProductModeChanged" ToolTipService.ToolTip="Product mode: which features are shown"/>
+                    <TextBlock x:Name="PrivateSessionText" TextWrapping="Wrap" Visibility="Collapsed" FontSize="12"/>
+                    <Button x:Name="ReturnPrivateButton" Content="Return" Click="OnReturnFromPrivate" Visibility="Collapsed" Style="{StaticResource JevToolButton}" ToolTipService.ToolTip="Leave the private session but keep it open"/>
+                    <Button x:Name="EndPrivateButton" Content="End private session" Click="OnEndPrivateSession" Visibility="Collapsed" Style="{StaticResource JevToolButton}"/>
                     <ComboBox x:Name="ModeBox" HorizontalAlignment="Stretch" Style="{StaticResource JevCombo}" SelectionChanged="OnModeChanged" ToolTipService.ToolTip="Memory budget mode (Resource OS)"/>
                     <Grid ColumnSpacing="6">
                         <Grid.ColumnDefinitions>

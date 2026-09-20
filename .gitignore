@@ -9,3 +9,6 @@ data/
 *.db
 *.db-wal
 *.db-shm
+
+# local SDK / NuGet home created by sandboxed builds
+.dotnet-home/

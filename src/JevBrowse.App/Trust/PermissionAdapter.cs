@@ -30,6 +30,16 @@ public sealed class PermissionAdapter
     private readonly Func<string, PermissionKind, Task<Choice>> _prompt;
     private readonly Dictionary<(string Key, PermissionKind Kind), PermissionGrant> _memory = [];
     private readonly Func<DateTimeOffset> _clock;
+    private readonly HashSet<(IdentityContainer Container, ContextId Isolation)> _ended = [];
+
+    public void EndSession(IdentityContainer container, ContextId isolation)
+    {
+        if (!container.IsEphemeral()) throw new InvalidOperationException("Only ephemeral permissions can be ended.");
+        _ended.Add((container, isolation));
+        var prefix = $"{container}:{isolation}|";
+        foreach (var key in _memory.Keys.Where(k => k.Key.StartsWith(prefix, StringComparison.Ordinal)).ToArray())
+            _memory.Remove(key);
+    }
 
     public PermissionAdapter(SitePermissionsRepository repo, Func<string, PermissionKind, Task<Choice>> prompt, Func<DateTimeOffset>? clock = null)
     {
@@ -55,45 +65,55 @@ public sealed class PermissionAdapter
     /// <summary>Explicit block from the UI (palette): same key, same storage rules as a prompt answer.</summary>
     public bool Block(IdentityContainer container, ContextId isolation, Uri origin, PermissionKind kind)
     {
+        if (_ended.Contains((container, isolation))) return false;
         Store(container, PermissionKey.For(container, isolation, origin), kind, false, null);
         return PermissionKey.MayPersist(container);
     }
 
     public void Attach(CoreWebView2 core, IdentityContainer container, ContextId isolation)
     {
-        var policy = PolicyFor(container);
         core.PermissionRequested += async (_, e) =>
         {
             e.SavesInProfile = false;   // never let the engine keep its own copy of our decision
             var deferral = e.GetDeferral();
             try
             {
+                if (_ended.Contains((container, isolation))) { e.State = CoreWebView2PermissionState.Deny; return; }
                 if (!Uri.TryCreate(e.Uri, UriKind.Absolute, out var origin)) { e.State = CoreWebView2PermissionState.Deny; return; }
-                var key = PermissionKey.For(container, isolation, origin);
-                var kind = Map(e.PermissionKind);
-                var verdict = policy.Decide(key, kind);
-                if (verdict == PermissionVerdict.Ask)
-                {
-                    var label = $"{origin.Scheme}://{origin.Host}{(origin.IsDefaultPort ? "" : ":" + origin.Port)} ({container})";
-                    // Failing to ASK must fail closed. A prompt that throws must deny this one request, not take the app down and
-                    // not leave the page's request hanging.
-                    Choice choice;
-                    try { choice = await _prompt(label, kind); }
-                    catch (Exception) { choice = Choice.BlockOnce; }
-                    var now = _clock();
-                    switch (choice)
-                    {
-                        case Choice.AllowForHour: Store(container, key, kind, true, now.AddHours(1)); break;
-                        case Choice.AllowAlways: Store(container, key, kind, true, null); break;
-                        case Choice.Block: Store(container, key, kind, false, null); break;
-                        // AllowOnce stores nothing: the next request asks again.
-                    }
-                    verdict = choice is Choice.Block or Choice.BlockOnce ? PermissionVerdict.Deny : PermissionVerdict.Allow;
-                }
+                var verdict = await DecideAsync(container, isolation, origin, Map(e.PermissionKind));
                 e.State = verdict == PermissionVerdict.Allow ? CoreWebView2PermissionState.Allow : CoreWebView2PermissionState.Deny;
             }
-            finally { deferral.Complete(); }
+            catch (Exception)
+            {
+                // The session can close its CoreWebView2 while a queued prompt is awaiting an answer.
+                try { e.State = CoreWebView2PermissionState.Deny; } catch (Exception) { }
+            }
+            finally { try { deferral.Complete(); } catch (Exception) { } }
         };
+    }
+
+    internal int SessionGrantCount(IdentityContainer container, ContextId isolation) =>
+        _memory.Keys.Count(k => k.Key.StartsWith($"{container}:{isolation}|", StringComparison.Ordinal));
+
+    internal async Task<PermissionVerdict> DecideAsync(IdentityContainer container, ContextId isolation, Uri origin, PermissionKind kind)
+    {
+        if (_ended.Contains((container, isolation))) return PermissionVerdict.Deny;
+        var key = PermissionKey.For(container, isolation, origin);
+        var verdict = PolicyFor(container).Decide(key, kind);
+        if (verdict != PermissionVerdict.Ask) return verdict;
+        var label = $"{origin.Scheme}://{origin.Host}{(origin.IsDefaultPort ? "" : ":" + origin.Port)} ({container})";
+        Choice choice;
+        try { choice = await _prompt(label, kind); }
+        catch (Exception) { choice = Choice.BlockOnce; }
+        if (_ended.Contains((container, isolation))) return PermissionVerdict.Deny;
+        var now = _clock();
+        switch (choice)
+        {
+            case Choice.AllowForHour: Store(container, key, kind, true, now.AddHours(1)); break;
+            case Choice.AllowAlways: Store(container, key, kind, true, null); break;
+            case Choice.Block: Store(container, key, kind, false, null); break;
+        }
+        return choice is Choice.Block or Choice.BlockOnce ? PermissionVerdict.Deny : PermissionVerdict.Allow;
     }
 
     private static PermissionKind Map(CoreWebView2PermissionKind k) => k switch

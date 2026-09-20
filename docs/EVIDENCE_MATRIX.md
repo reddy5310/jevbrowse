@@ -7,7 +7,7 @@ Every claim JevBrowse makes, and the strongest evidence behind it today. Levels,
 - **Real engine**: a benchmark/check drives actual WebView2 renderers and inspects real disk/DB state (`--privacy-check`, `--restore-bench`, …).
 - **Release-validated**: verified on the packaged, signed build on more than one machine. **Nothing is at this level yet** (builds are unsigned and tested on one machine).
 
-Last updated 2026-09-20 after the third independent review (ADR 0017, ADR 0018). 234 unit tests.
+Last updated 2026-09-20 after Private session cleanup (ADR 0019). 245 unit tests.
 
 | Claim | Level | Evidence | Known gap |
 |---|---|---|---|
@@ -20,6 +20,7 @@ Last updated 2026-09-20 after the third independent review (ADR 0017, ADR 0018).
 | A stricter class removes what the looser class stored | Unit | `Stricter_class_purges_thumbnail_checkpoint…`, `Tightening_a_pages_class_removes_it_from_the_index` | Not yet driven end-to-end in a real renderer |
 | Identity boundaries are real (moving across identities creates a new tab; agents never touch personal identities) | Unit | `Moving_across_identities…`, `A_session_can_never_name_its_way_into_an_existing_identity…` | Cookie separation between profiles relies on WebView2 user-data folders (engine guarantee, not re-tested by us) |
 | Permission grants are temporary and scoped to container + exact origin | Unit (key + policy) | `PermissionKeyTests` | `SavesInProfile=false` is set in the WebView2 adapter but not covered by an automated real-engine test |
+| Ending a Private session closes its tabs and separately verifies profile deletion | Real engine + unit | [ADR 0019](adr/0019-private-session-end.md), [16-check probe](performance/private-session-check.json): cookies isolated, session reusable until ended, fresh identity afterward; late media and permission callbacks rejected. Unit: release failure, file locks, startup retry | One machine. Media and delayed permission answers injected; confirmation dialog and window shutdown not exercised by the probe |
 | Page classification combines evidence by the stricter result | Unit | `Independent_evidence_combines_by_the_stricter_result` | — |
 | **PUBLIC is earned, not assumed; "Not assessed" is honest** | Unit + real engine | `Public_must_be_earned_and_is_never_assumed`: the only routes to PUBLIC are a structurally public host or the user's per-site choice. No page-side signal promotes — absence of a sign-in affordance is not evidence of public availability | The host list is short and hand-maintained, so most sites sit at Not assessed until the user decides. That is the intended direction of error |
 | **Nothing we could not assess leaves the device** | Unit | `A_page_we_could_not_assess_is_never_sent_even_on_an_explicit_request` covers both the chat and typed-decision routers with AI on, cloud on, providers configured and the user explicitly asking; `…MayLeaveDeviceOnExplicitRequest` is an enumerated set, not an ordinal test | Not driven through the real Ask dialog by an automated check |

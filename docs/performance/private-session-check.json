@@ -1,0 +1,24 @@
+{
+  "pass": true,
+  "checks": {
+    "privateStartsWithoutNormalCookie": true,
+    "privateTabsShareSessionCookie": true,
+    "leaveReturnsToNormalWorkspaceAndTab": true,
+    "normalCookieUnchanged": true,
+    "returnKeepsSessionAndCookie": true,
+    "probeMediaProtectedBeforeEnd": true,
+    "permissionAnswerWasPending": true,
+    "latePermissionAnswerDeniedAndForgotten": true,
+    "privateRenderersClosed": true,
+    "privateProfileDeleted": true,
+    "privateTabsAndWorkspaceRemoved": true,
+    "lateMediaCannotReviveHostTracking": true,
+    "normalRendererSurvivedEnd": true,
+    "freshSessionHasNewIdentityAndNoCookie": true,
+    "freshSessionCleanupComplete": true,
+    "allProbeRenderersClosed": true
+  },
+  "elapsedMs": 4719,
+  "error": null,
+  "scope": "Real WebViews and cookie profiles; product-mode handlers and explicit session cleanup. Media host heartbeats and delayed permission answers are injected. This does not test device capture or click the confirmation dialog. Use an isolated data directory."
+}
