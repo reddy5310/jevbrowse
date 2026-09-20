@@ -29,6 +29,7 @@
 .PARAMETER Root            Fixed test root. Each run gets its own new subdirectory under it.
 .PARAMETER MaxTabPresses   Upper bound on Tab presses; running out is INCONCLUSIVE, never a pass.
 .PARAMETER Theme           dark (default), light or system: which theme the app starts in, for the accessibility checks and the captures.
+.PARAMETER Sidebar         open (default) or hidden: the sidebar state the app starts in. Narrow-width layout has to be right in both.
 .PARAMETER Shots           Also open each menu and dialog and save a true screen capture of it. Never changes the verdict.
 #>
 param(
@@ -37,6 +38,7 @@ param(
     [int]$Width = 1422,
     [int]$MaxTabPresses = 45,
     [ValidateSet('dark', 'light', 'system')][string]$Theme = 'dark',
+    [ValidateSet('open', 'hidden')][string]$Sidebar = 'open',
     [switch]$Shots
 )
 $ErrorActionPreference = 'Stop'
@@ -69,7 +71,7 @@ try {
 }
 catch {
     # A refused path is an ERROR (3), never a FAIL (1): the two must not share an exit code.
-    [ordered]@{ verdict = 'ERROR'; pass = $false; error = $_.Exception.Message } | ConvertTo-Json
+    [ordered]@{ verdict = 'ERROR'; pass = $false; error = $_.Exception.Message; at = "line $($_.InvocationInfo.ScriptLineNumber): $($_.InvocationInfo.Line.Trim())" } | ConvertTo-Json
     exit 3
 }
 
@@ -77,6 +79,7 @@ $env:JEVBROWSE_DATA_DIR = $Out
 $env:JEVBROWSE_THEME = $Theme
 $env:JEVBROWSE_NO_FILTER_UPDATE = '1'; $env:JEVBROWSE_AI = '0'; $env:JEVBROWSE_MODE = 'Power'; $env:JEVBROWSE_DEVSPACE = '0'
 '{"firstRunDone":true}' | Set-Content "$Out\settings.json" -Encoding ascii
+if ($Sidebar -eq 'hidden') { '{"sidebarCollapsed":true,"theme":"dark"}' | Set-Content "$Out\ui-prefs.json" -Encoding ascii }
 
 # ---- launch, and remember exactly what we launched ----
 $exe = Join-Path $PSScriptRoot "..\artifacts\bin\JevBrowse.App\${Configuration}_win-x64\JevBrowse.App.exe"
@@ -119,7 +122,7 @@ try {
             $c = New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $t)
             foreach ($e in $win.FindAll($Scope::Descendants, $c)) {
                 if ($e.Current.IsOffscreen) { continue }
-                [pscustomobject]@{ type = $t.ProgrammaticName.Replace('ControlType.', ''); id = $e.Current.AutomationId; name = $e.Current.Name; focusable = $e.Current.IsKeyboardFocusable }
+                [pscustomobject]@{ type = $t.ProgrammaticName.Replace('ControlType.', ''); id = $e.Current.AutomationId; name = $e.Current.Name; focusable = $e.Current.IsKeyboardFocusable; rect = $e.Current.BoundingRectangle }
             }
         }
     }
@@ -133,8 +136,32 @@ try {
         if ($e.name -match '[\uE000-\uF8FF]') { $failures.Add("GLYPH-NAMED: $($e.type) $label -> a private-use symbol") }
     }
 
-    $required = @('Back', 'Forward', 'Reload', 'Hide sidebar', 'Press to change how this site is treated', 'Shield: blocked requests and site repair',
-                  'Explain why this tab is awake or asleep', 'Receipt: what this site did', 'This tab menu', 'Tools menu', 'Command palette', 'Help and welcome')
+    # ---- layout: nothing interactive may hang off the window or be squeezed to nothing ----
+    # A control clipped by a container reports a rectangle that extends past the window (or is empty); a control that is not
+    # drawn at all is dropped by Interactive and is caught by MISSING below. $Width was applied above, so this is the narrow case.
+    # The window's own rectangle can be empty (infinite) for a moment while it is being moved and resized; wait it out, and
+    # if it never settles say so as an error rather than judge every control against nothing.
+    $wb = $win.Current.BoundingRectangle
+    for ($k = 0; $k -lt 20 -and ([double]::IsInfinity($wb.Width) -or [double]::IsInfinity($wb.Left)); $k++) { Start-Sleep -Milliseconds 500; $wb = $win.Current.BoundingRectangle }
+    if ([double]::IsInfinity($wb.Width) -or [double]::IsInfinity($wb.Left)) { throw 'the window never reported a rectangle, so layout could not be checked' }
+    foreach ($e in $all) {
+        $r = $e.rect
+        if ($e.name -in @('Minimize', 'Maximize', 'Close')) { continue }
+        $label = if ($e.id) { $e.id } else { "$($e.type) '$($e.name)'" }
+        # UI Automation reports an empty rectangle as infinite: it has no drawn bounds, which is itself the defect.
+        if ([double]::IsInfinity($r.Width) -or [double]::IsInfinity($r.Left) -or [double]::IsNaN($r.Width)) { $failures.Add("NO BOUNDS: $label reports no drawn rectangle"); continue }
+        if ($r.Width -lt 8 -or $r.Height -lt 8) { $failures.Add("SQUEEZED: $label is $([int]$r.Width)x$([int]$r.Height)"); continue }
+        if ([double]::IsInfinity($r.Right) -or [double]::IsInfinity($r.Bottom)) { $failures.Add("NO BOUNDS: $label reports no drawn rectangle"); continue }
+        if ($r.Left -lt $wb.Left - 1 -or $r.Top -lt $wb.Top - 1 -or $r.Right -gt $wb.Right + 1 -or $r.Bottom -gt $wb.Bottom + 1) {
+            $failures.Add("CLIPPED: $label spans x=$([int]$r.Left)..$([int]$r.Right) but the window is x=$([int]$wb.Left)..$([int]$wb.Right)")
+        }
+    }
+
+    # The toggle names what the next press does; the palette and help buttons live in the sidebar, so with it hidden they are
+    # reached by Ctrl+K and F1 (a finding recorded in docs/EVIDENCE_MATRIX.md, not something this list can pretend away).
+    $required = @('Back', 'Forward', 'Reload', $(if ($Sidebar -eq 'hidden') { 'Show sidebar' } else { 'Hide sidebar' }), 'Press to change how this site is treated',
+                  'Shield: blocked requests and site repair', 'Explain why this tab is awake or asleep', 'Receipt: what this site did', 'This tab menu', 'Tools menu')
+    if ($Sidebar -eq 'open') { $required += @('Command palette', 'Help and welcome') }
     $have = @($all | ForEach-Object { $_.name })
     foreach ($r in $required) {
         if (-not ($have | Where-Object { $_ -eq $r -or $_ -like "*$r*" })) { $failures.Add("MISSING: '$r'") }
@@ -218,7 +245,7 @@ try {
 }
 catch {
     $script:exitCode = 3
-    [ordered]@{ verdict = 'ERROR'; pass = $false; runDirectory = $Out; error = $_.Exception.Message } | ConvertTo-Json | Tee-Object -FilePath "$Out\ui-a11y-report.json"
+    [ordered]@{ verdict = 'ERROR'; pass = $false; runDirectory = $Out; error = $_.Exception.Message; at = "line $($_.InvocationInfo.ScriptLineNumber): $($_.InvocationInfo.Line.Trim())" } | ConvertTo-Json | Tee-Object -FilePath "$Out\ui-a11y-report.json"
 }
 finally { Stop-OurTree }
 exit $script:exitCode

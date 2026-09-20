@@ -120,13 +120,15 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*" MinWidth="180"/>
+                    <ColumnDefinition x:Name="AddressColumn" Width="*" MinWidth="180"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <Button x:Name="SidebarToggle" Grid.Column="0" Content="&#xE700;" FontFamily="Segoe MDL2 Assets" Click="OnToggleSidebar" Style="{StaticResource JevToolButton}"
@@ -188,6 +190,8 @@
                     </Button>
                 </StackPanel>
                 </ScrollViewer>
+                <!-- Empty until the window is narrow enough that the two menu buttons would run off the row. -->
+                <StackPanel x:Name="TrustBarMore" Grid.Row="3" Grid.ColumnSpan="6" Orientation="Horizontal" Spacing="{StaticResource JevSpace6}"/>
             </Grid>
             <Border local:Elevation.Level="Surface" x:Name="PageSurface" Grid.Row="1" CornerRadius="{StaticResource JevRadiusPanel}" BorderBrush="{ThemeResource JevBorderSubtleBrush}" BorderThickness="1" Background="{ThemeResource JevBackdropBrush}">
                 <Grid>

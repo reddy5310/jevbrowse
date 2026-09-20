@@ -226,21 +226,37 @@ public sealed partial class MainWindow
     private void OnNewTabAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); OnNewTab(s, new RoutedEventArgs()); }
     // Below this the address bar would be squeezed under its useful width beside all five controls.
     private const double ToolbarWrapWidth = 760;
-    private bool _toolbarWrapped;
+    // Below this the address bar itself needs a row: four buttons and the trust badge leave it less than a URL's worth.
+    private const double AddressWrapWidth = 560;
+    private bool _toolbarWrapped, _addressWrapped;
 
     /// <summary>
-    /// Narrow windows put the trust and tab controls on their own row under the address bar. Nothing is hidden or
-    /// moved into a menu: Explain, Receipt and Shield are exactly as reachable as when the window is wide.
+    /// Narrow windows put the trust and tab controls on their own row under the address bar, and narrower still (a 700 px
+    /// window with the sidebar open) give the address bar a full-width row of its own. Nothing is hidden or moved into
+    /// a menu: Explain, Receipt and Shield are exactly as reachable as when the window is wide.
     /// The toolbar's own width comes from its container, not its content, so wrapping cannot make it oscillate.
     /// </summary>
     private void OnToolbarSizeChanged(object s, SizeChangedEventArgs e)
     {
         var wrap = e.NewSize.Width < ToolbarWrapWidth;
-        if (wrap == _toolbarWrapped) return;
+        var wrapAddress = e.NewSize.Width < AddressWrapWidth;
+        if (wrap == _toolbarWrapped && wrapAddress == _addressWrapped) return;
         _toolbarWrapped = wrap;
-        Grid.SetRow(TrustScroll, wrap ? 1 : 0);
+        _addressWrapped = wrapAddress;
+        // On its own row the pill spans the toolbar; a minimum on its old column would still make the grid wider than the window.
+        AddressColumn.MinWidth = wrapAddress ? 0 : 180;
+        Grid.SetRow(AddressPill, wrapAddress ? 1 : 0);
+        Grid.SetColumn(AddressPill, wrapAddress ? 0 : 4);
+        Grid.SetColumnSpan(AddressPill, wrapAddress ? 6 : 1);
+        Grid.SetRow(TrustScroll, wrap ? (wrapAddress ? 2 : 1) : 0);
         Grid.SetColumn(TrustScroll, wrap ? 0 : 5);
         Grid.SetColumnSpan(TrustScroll, wrap ? 6 : 1);
+        // Same buttons, same order, one more row: nothing behind a scroll bar at the narrowest width.
+        var from = wrapAddress ? TrustBar : TrustBarMore;
+        var to = wrapAddress ? TrustBarMore : TrustBar;
+        foreach (var b in new UIElement[] { TabMenuButton, ToolsButton })
+            if (from.Children.Remove(b)) to.Children.Add(b);
+        UpdateClassBadge();
     }
 
     // ---- Sidebar ----

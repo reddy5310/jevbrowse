@@ -274,7 +274,9 @@ public sealed partial class MainWindow : Window
             if (args.FirstOrDefault(a => a.StartsWith("--ui-width=", StringComparison.Ordinal)) is { } uw
                 && int.TryParse(uw["--ui-width=".Length..], out var uiWidth))
                 DispatcherQueue.TryEnqueue(() => AppWindow.Resize(new Windows.Graphics.SizeInt32(uiWidth, 780)));
+            // The saved preference would otherwise decide which state a review screenshot shows.
             if (args.Contains("--ui-sidebar=hidden")) DispatcherQueue.TryEnqueue(() => ApplySidebar(true, remember: false));
+            if (args.Contains("--ui-sidebar=open")) DispatcherQueue.TryEnqueue(() => ApplySidebar(false, remember: false));
             _ = Task.Run(async () =>
             {
                 await Task.Delay(9000);
@@ -630,7 +632,11 @@ public sealed partial class MainWindow : Window
         var cls = _kernel.ClassOf(t);
         // The badge states the identity and what we know about the page. "Not assessed" is an honest answer and is
         // never dressed up as a safety verdict.
-        ClassBadgeText.Text = $"{_kernel.ContainerOf(t).ToString().ToUpperInvariant()} • {ClassLabel(cls).ToUpperInvariant()}";
+        // On a row of its own the address bar needs the width, so the badge keeps the identity and drops the second
+        // half; the full state stays in the accessible name and the tooltip, and the colour still says it.
+        var full = $"{_kernel.ContainerOf(t).ToString().ToUpperInvariant()} • {ClassLabel(cls).ToUpperInvariant()}";
+        ClassBadgeText.Text = _addressWrapped ? _kernel.ContainerOf(t).ToString().ToUpperInvariant() : full;
+        ToolTipService.SetToolTip(ClassBadge, full);
         // What a screen reader says: the state, then what pressing does. The visible text is capitals and a bullet.
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(ClassBadge,
             $"{_kernel.ContainerOf(t)} profile, {ClassLabel(cls)}. Press to change how this site is treated.");
