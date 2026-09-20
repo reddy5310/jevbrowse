@@ -354,7 +354,7 @@ public sealed partial class MainWindow : Window
             });
         }
 
-        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--private-session-check") || args.Contains("--agent-check") || args.Contains("--agent-window-check") || args.Contains("--agent-screenshot-stage-check") || args.Contains("--agent-frame-secret-check") || args.Contains("--media-check") || args.Contains("--site-sweep") || args.Any(a => a.StartsWith("--join=", StringComparison.Ordinal)))
+        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--private-session-check") || args.Contains("--agent-check") || args.Contains("--agent-window-check") || args.Contains("--agent-screenshot-stage-check") || args.Contains("--agent-frame-secret-check") || args.Contains("--agent-show-during-capture-check") || args.Contains("--media-check") || args.Contains("--site-sweep") || args.Any(a => a.StartsWith("--join=", StringComparison.Ordinal)))
         {
             Directory.CreateDirectory(Path.Combine(DataDir, "benchmarks"));
             try
@@ -367,6 +367,7 @@ public sealed partial class MainWindow : Window
                 else if (args.Contains("--agent-window-check")) await RunAgentWindowCheckAsync();
                 else if (args.Contains("--agent-screenshot-stage-check")) await RunAgentScreenshotStageCheckAsync();
                 else if (args.Contains("--agent-frame-secret-check")) await RunAgentFrameSecretCheckAsync();
+                else if (args.Contains("--agent-show-during-capture-check")) await RunAgentShowDuringCaptureCheckAsync();
                 else if (args.Contains("--privacy-check")) await RunPrivacyCheckAsync();
                 else if (args.Contains("--memory-lab")) await RunMemoryLabAsync();
                 else if (args.Contains("--restore-bench")) await RunRestoreBenchAsync();
@@ -1608,6 +1609,61 @@ public sealed partial class MainWindow : Window
         await host.StopAsync(session);
         var result = new { pass = cases.All(c => c.ok), cases };
         await File.WriteAllTextAsync(Path.Combine(dir, "frame-secret-check.json"), JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    private sealed record ShowDuringCapture(int clickAfterMs, bool agentPageActive, bool agentPageShown, bool personsPageHidden, bool layoutRestored, string geometry, bool captureDelivered, string captureMessage, bool afterwardsCaptureWorks, bool ok);
+
+    /// <summary>
+    /// "Show its page" pressed while a screenshot has the page staged off-canvas. The kernel's wish (show it) must win, and the control
+    /// must end up exactly as a normal shown page: on canvas, at the size of its host, clickable, not left at the staged 1280x800 or
+    /// stranded outside the window. Sampled at several moments across the staging and the capture, because it is a race.
+    /// </summary>
+    private async Task RunAgentShowDuringCaptureCheckAsync()
+    {
+        var k = _kernel!;
+        var dir = Path.Combine(DataDir, "benchmarks"); Directory.CreateDirectory(dir);
+        var mine = k.Open(new Uri("https://example.com/"));
+        await k.ActivateAsync(mine.Id);
+        await Task.Delay(4000);
+        var ceiling = new AgentCeiling { Limits = new AgentManifest { Agent = "ceiling", AllowDomains = ["example.org"], Actions = [AgentAction.Navigate, AgentAction.Read, AgentAction.Screenshot], SessionMinutes = 10, MaxLivePages = 2, MaxActions = 200, MaxScreenshots = 40 } };
+        using var host = new LocalAgentHost(_agents!, ceiling, approveScreenshots: _ => Task.FromResult(true));   // a check with nobody present: approval given on purpose
+        var (session, _) = await host.GrantAsync(new AgentManifest { Agent = "show-probe", AllowDomains = ["example.org"], Actions = [AgentAction.Navigate, AgentAction.Read, AgentAction.Screenshot], SessionMinutes = 10, MaxLivePages = 2, MaxScreenshots = 40 });
+        await _agents!.ExecuteAsync(session, new AgentRequest(AgentAction.Navigate, "https://example.org/"), default);
+        await Task.Delay(3000);
+        var agentTab = k.Tabs.First(t => session.Pages.Contains(t.Id));
+        var rows = new List<ShowDuringCapture>();
+        foreach (var clickAfter in new[] { 20, 80, 140, 190, 230, 300 })
+        {
+            // Back to the starting position: the person on their own page, the agent's page hidden.
+            if (k.Active?.Id != mine.Id) { await k.ActivateAsync(mine.Id); RebuildWorkspaces(); await Task.Delay(500); }
+            var taking = _agents.ExecuteAsync(session, new AgentRequest(AgentAction.Screenshot), default);
+            await Task.Delay(clickAfter);
+            await k.ActivateAsync(agentTab.Id);                     // what the panel's "Show its page" does
+            RebuildWorkspaces();
+            var shot = await taking;
+            await Task.Delay(1200);
+            _leases!.TryGet(agentTab.Id, out var l);
+            var lease = (WebView2Lease)l!;
+            var view = lease.View; var mineLease = _leases.TryGet(mine.Id, out var ml) ? (WebView2Lease)ml : null;
+            var host2 = (Microsoft.UI.Xaml.FrameworkElement)view.Parent;
+            var atOrigin = view.TransformToVisual(host2).TransformPoint(new Windows.Foundation.Point(0, 0));
+            var sizeOk = Math.Abs(view.ActualWidth - host2.ActualWidth) < 3 && Math.Abs(view.ActualHeight - host2.ActualHeight) < 3;
+            var onCanvas = Math.Abs(atOrigin.X) < 3 && Math.Abs(atOrigin.Y) < 3;
+            var normal = double.IsNaN(view.Width) && double.IsNaN(view.Height) && view.Margin.Left == 0 && view.Margin.Top == 0
+                         && view.HorizontalAlignment == Microsoft.UI.Xaml.HorizontalAlignment.Stretch && view.VerticalAlignment == Microsoft.UI.Xaml.VerticalAlignment.Stretch && view.IsHitTestVisible;
+            var active = k.Active?.Id == agentTab.Id;
+            var shown = view.Visibility == Microsoft.UI.Xaml.Visibility.Visible && lease.IsVisible;
+            var hidden = mineLease is null || mineLease.View.Visibility == Microsoft.UI.Xaml.Visibility.Collapsed;
+            // A picture of the now-shown page still works through the ordinary (shown) path.
+            var again = await _agents.ExecuteAsync(session, new AgentRequest(AgentAction.Screenshot), default);
+            var delivered = shot.Screenshot is { Length: > 0 };
+            var layout = sizeOk && onCanvas && normal;
+            rows.Add(new ShowDuringCapture(clickAfter, active, shown, hidden, layout, $"origin=({atOrigin.X:0.#},{atOrigin.Y:0.#}) size={view.ActualWidth:0}x{view.ActualHeight:0} host={host2.ActualWidth:0}x{host2.ActualHeight:0} width={view.Width} margin={view.Margin.Left}", delivered,
+                shot.Message, again.Screenshot is { Length: > 0 }, active && shown && hidden && layout && again.Screenshot is { Length: > 0 }));
+        }
+        await host.StopAsync(session);
+        var result = new { pass = rows.All(r => r.ok), rows };
+        await File.WriteAllTextAsync(Path.Combine(dir, "show-during-capture.json"), JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
     }
 
     /// <summary>
