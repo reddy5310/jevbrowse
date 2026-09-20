@@ -42,11 +42,12 @@ public class AgentScreenshotTests : IDisposable
         Actions = actions.Length == 0 ? [AgentAction.Navigate, AgentAction.Read, AgentAction.Screenshot] : [.. actions],
     };
 
-    private async Task<(AgentSession Session, VirtualTab Mine, VirtualTab Page, FakeLease Lease)> Ready(AgentManifest? m = null)
+    private async Task<(AgentSession Session, VirtualTab Mine, VirtualTab Page, FakeLease Lease)> Ready(AgentManifest? m = null, bool approve = true)
     {
         var mine = _k.Open(new Uri("https://example.com/"));
         await _k.ActivateAsync(mine.Id);
         var s = await _gw.OpenAsync(m ?? Manifest(), default);
+        if (approve) _gw.ApproveScreenshots(s);   // the person's per-session approval; without it Screenshot is refused
         Assert.True((await _gw.ExecuteAsync(s, new(AgentAction.Navigate, "https://github.com/reddy5310/jevbrowse"), default)).Ok);
         var page = _k.Tabs.Single(t => s.Pages.Contains(t.Id));
         return (s, mine, page, _leases[page.Id]);
@@ -219,13 +220,15 @@ public class AgentScreenshotTests : IDisposable
     public async Task Over_the_local_endpoint_the_picture_arrives_as_base64_in_the_response_and_no_file_exists()
     {
         var ceiling = new AgentCeiling { Limits = new AgentManifest { Agent = "c", AllowDomains = ["github.com"], Actions = [AgentAction.Navigate, AgentAction.Read, AgentAction.Screenshot], MaxLivePages = 3, SessionMinutes = 60, MaxActions = 100, MaxScreenshots = 5 } };
-        using var host = new LocalAgentHost(_gw, ceiling);
+        var asked = new List<AgentManifest>();
+        using var host = new LocalAgentHost(_gw, ceiling, approveScreenshots: m => { asked.Add(m); return Task.FromResult(true); });   // the person said yes
         host.Start();
         using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{host.Port}/") };
         http.DefaultRequestHeaders.Authorization = new("Bearer", host.Token);
         var open = await http.PostAsJsonAsync("sessions", Manifest());
         open.EnsureSuccessStatusCode();
         var id = (await open.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString();
+        Assert.Single(asked);                                    // asked exactly once, about this session
         Assert.Equal(System.Net.HttpStatusCode.OK, (await http.PostAsJsonAsync($"sessions/{id}/actions", new { action = "Navigate", url = "https://github.com/" })).StatusCode);
         var mine = _k.Tabs.Single(t => t.Url.Host == "github.com");
         _leases[mine.Id].ScreenshotBytes = FakeLease.TinyPng(120, 80);
@@ -241,6 +244,125 @@ public class AgentScreenshotTests : IDisposable
         Assert.True(body.EnumerateObject().All(p => !string.Equals(p.Name, "screenshotPath", StringComparison.OrdinalIgnoreCase) || p.Value.ValueKind == JsonValueKind.Null));
         Assert.False(Directory.Exists(_shotDir));
         Assert.Equal(System.Net.HttpStatusCode.OK, (await http.DeleteAsync($"sessions/{id}")).StatusCode);
+    }
+
+    // ---- experimental: off unless the person approved it for this session ----
+
+    [Fact]
+    public async Task Screenshot_is_off_by_default_even_when_the_session_manifest_lists_it()
+    {
+        var (s, _, _, lease) = await Ready(approve: false);
+        var r = await _gw.ExecuteAsync(s, new(AgentAction.Screenshot), default);
+        Assert.False(r.Ok);
+        Assert.Equal("screenshots_not_approved", r.Message);
+        Assert.Null(r.Screenshot);
+        Assert.Equal(0, lease.Screenshots);                     // the engine was never asked
+    }
+
+    [Fact]
+    public async Task An_agent_asking_for_screenshots_over_the_endpoint_does_not_get_them_unless_the_person_says_yes()
+    {
+        var ceiling = new AgentCeiling { Limits = new AgentManifest { Agent = "c", AllowDomains = ["github.com"], Actions = [AgentAction.Navigate, AgentAction.Read, AgentAction.Screenshot], MaxLivePages = 3, SessionMinutes = 60, MaxActions = 100 } };
+        using var host = new LocalAgentHost(_gw, ceiling);       // nobody to ask: the safe answer is no
+        host.Start();
+        using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{host.Port}/") };
+        http.DefaultRequestHeaders.Authorization = new("Bearer", host.Token);
+
+        var open = await http.PostAsJsonAsync("sessions", Manifest());
+        open.EnsureSuccessStatusCode();
+        var body = await open.Content.ReadFromJsonAsync<JsonElement>();
+        var id = body.GetProperty("id").GetString();
+        Assert.DoesNotContain("Screenshot", body.GetProperty("granted").GetProperty("Actions").EnumerateArray().Select(a => a.GetString()));
+        await http.PostAsJsonAsync($"sessions/{id}/actions", new { action = "Navigate", url = "https://github.com/" });
+        var shot = await http.PostAsJsonAsync($"sessions/{id}/actions", new { action = "Screenshot" });
+        Assert.Equal(System.Net.HttpStatusCode.Forbidden, shot.StatusCode);
+    }
+
+    [Fact]
+    public async Task The_person_saying_no_drops_screenshots_and_saying_yes_grants_them_for_that_session_only()
+    {
+        var ceiling = new AgentCeiling { Limits = new AgentManifest { Agent = "c", AllowDomains = ["github.com"], Actions = [AgentAction.Navigate, AgentAction.Read, AgentAction.Screenshot], MaxLivePages = 3, SessionMinutes = 60, MaxActions = 100 } };
+        var answer = false;
+        using var host = new LocalAgentHost(_gw, ceiling, approveScreenshots: _ => Task.FromResult(answer));
+
+        var (no, adjustments) = await host.GrantAsync(Manifest());
+        Assert.DoesNotContain(AgentAction.Screenshot, no.Manifest.Actions);
+        Assert.Contains(adjustments, a => a.Contains("screenshots", StringComparison.OrdinalIgnoreCase));
+        Assert.False(no.ScreenshotsApproved);
+
+        answer = true;
+        var (yes, _) = await host.GrantAsync(Manifest());
+        Assert.Contains(AgentAction.Screenshot, yes.Manifest.Actions);
+        Assert.True(yes.ScreenshotsApproved);
+        Assert.False(no.ScreenshotsApproved);                    // the earlier session did not inherit it
+    }
+
+    [Fact]
+    public async Task The_person_is_not_asked_about_screenshots_when_the_session_did_not_ask_for_them()
+    {
+        var ceiling = new AgentCeiling { Limits = new AgentManifest { Agent = "c", AllowDomains = ["github.com"], Actions = [AgentAction.Navigate, AgentAction.Read, AgentAction.Screenshot], MaxLivePages = 3, SessionMinutes = 60, MaxActions = 100 } };
+        var asked = 0;
+        using var host = new LocalAgentHost(_gw, ceiling, approveScreenshots: _ => { asked++; return Task.FromResult(true); });
+        var (s, _) = await host.GrantAsync(Manifest(actions: [AgentAction.Navigate, AgentAction.Read]));
+        Assert.Equal(0, asked);
+        Assert.False(s.ScreenshotsApproved);
+    }
+
+    // ---- finding 1: a picture must not be delivered after the session expired, swept or not ----
+
+    [Fact]
+    public async Task A_picture_that_finishes_after_the_session_expired_is_not_delivered_even_though_nobody_swept()
+    {
+        var (s, _, _, lease) = await Ready();
+        var finish = new TaskCompletionSource();
+        lease.ScreenshotGate = () => finish.Task;
+        var pending = _gw.ExecuteAsync(s, new(AgentAction.Screenshot), default);   // begun before expiry
+        await Task.Delay(30);
+
+        _now = s.ExpiresAt.AddSeconds(1);                       // the clock passes expiry; SweepExpiredAsync is NOT called
+        finish.SetResult();
+
+        var r = await pending;
+        Assert.False(r.Ok);
+        Assert.Null(r.Screenshot);
+        Assert.DoesNotContain(s.Audit, e => e.Action == "screenshot" && e.Allowed);
+    }
+
+    // ---- finding 2: the document must be the same one at the end as at the start ----
+
+    [Fact]
+    public async Task A_picture_is_discarded_when_the_page_navigates_to_another_permitted_page_during_the_capture()
+    {
+        var (s, _, _, lease) = await Ready();
+        lease.ScreenshotGate = () => { lease.RaiseNavigation(new Uri("https://github.com/reddy5310/another-page"), "another"); return Task.CompletedTask; };
+
+        var r = await _gw.ExecuteAsync(s, new(AgentAction.Screenshot), default);   // same domain, same class: only the document changed
+
+        Assert.False(r.Ok);
+        Assert.Null(r.Screenshot);
+        Assert.StartsWith("screenshot_discarded", r.Message);
+        Assert.DoesNotContain(s.Audit, e => e.Action == "screenshot" && e.Allowed);
+    }
+
+    [Fact]
+    public async Task A_picture_is_discarded_when_the_same_address_is_reloaded_during_the_capture()
+    {
+        var (s, _, _, lease) = await Ready();
+        lease.ScreenshotGate = () => { lease.RaiseReload(); return Task.CompletedTask; };   // same URL, same class: URL equality would not notice
+
+        var r = await _gw.ExecuteAsync(s, new(AgentAction.Screenshot), default);
+
+        Assert.False(r.Ok);
+        Assert.Null(r.Screenshot);
+        Assert.StartsWith("screenshot_discarded", r.Message);
+    }
+
+    [Fact]
+    public async Task A_picture_of_a_page_that_did_not_change_is_still_delivered()
+    {
+        var (s, _, _, lease) = await Ready();
+        lease.ScreenshotGate = () => Task.CompletedTask;
+        Assert.True((await _gw.ExecuteAsync(s, new(AgentAction.Screenshot), default)).Ok);
     }
 
     [Fact]

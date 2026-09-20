@@ -867,6 +867,36 @@ public sealed partial class MainWindow : Window
         return tcs.Task;
     }
 
+    /// <summary>
+    /// The separate, explicit question for screenshots: experimental, per session, and answered No by Esc, Enter and the close button
+    /// alike. Nothing an agent sends can answer it. It is a decision, so it stays a dialog.
+    /// </summary>
+    private Task<bool> ApproveScreenshotsAsync(AgentManifest effective)
+    {
+        var tcs = new TaskCompletionSource<bool>();
+        DispatcherQueue.TryEnqueue(async () =>
+        {
+            var body = new TextBlock
+            {
+                TextWrapping = TextWrapping.Wrap,
+                Text = $"{effective.Agent} asked to take pictures of the pages it opens.\n\n"
+                     + "Screenshots are EXPERIMENTAL and off unless you allow them for this session. If you allow them: pictures are taken of "
+                     + "pages the agent opened (not the page you are looking at), kept in memory, and handed only to the agent. Pages with a "
+                     + "password or payment field are refused, including inside frames where that can be detected. A picture shows everything "
+                     + "visible on the page and may contain personal information.\n\n"
+                     + "What happens to a picture afterwards is up to " + effective.Agent + "; JevBrowse cannot follow it.",
+            };
+            var dlg = new ContentDialog
+            {
+                Title = "Allow screenshots for this session? (experimental)", Content = body,
+                PrimaryButtonText = "Allow screenshots for this session", CloseButtonText = "No screenshots",
+                DefaultButton = ContentDialogButton.Close, XamlRoot = Content.XamlRoot,
+            };
+            tcs.TrySetResult(await dlg.ShowSerializedAsync() == ContentDialogResult.Primary);
+        });
+        return tcs.Task;
+    }
+
     private string SessionLine(AgentGateway.AgentSession ses) =>
         $"{ses.Manifest.Agent} [{ses.Id}] {(ses.CleanedUp ? "stopped" : ses.Closed ? "closing" : "open")} • {ses.ActionsUsed}/{ses.Manifest.MaxActions} actions • {_agents!.LiveAgentPages(ses)}/{ses.Manifest.MaxLivePages} live • expires {ses.ExpiresAt.ToLocalTime():HH:mm}\n"
         + string.Join("\n", ses.Audit.TakeLast(6).Select(a => $"   {(a.Allowed ? "✓" : "✕")} {a.Action} {a.Target} — {a.Reason}"));
@@ -879,7 +909,7 @@ public sealed partial class MainWindow : Window
         // The ceiling is the user's decision, made BEFORE the endpoint exists. Agents can request less, never more.
         var domains = new TextBox { Header = "Approved domains (comma-separated)", Text = "localhost, 127.0.0.1, github.com, learn.microsoft.com", IsEnabled = !running };
         var actionBoxes = new[] { AgentAction.Navigate, AgentAction.Read, AgentAction.Click, AgentAction.TypeNonSecret, AgentAction.Screenshot }
-            .Select(a => new CheckBox { Content = a.ToString(), Tag = a, IsChecked = a is AgentAction.Navigate or AgentAction.Read, IsEnabled = !running }).ToList();
+            .Select(a => new CheckBox { Content = a == AgentAction.Screenshot ? "Screenshot (experimental: still asked for each session)" : a.ToString(), Tag = a, IsChecked = a is AgentAction.Navigate or AgentAction.Read, IsEnabled = !running }).ToList();
         var actionRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = Tokens.Space(8) };
         foreach (var b in actionBoxes) actionRow.Children.Add(b);
         var minutes = new NumberBox { Header = "Max minutes per session", Value = 60, Minimum = 1, Maximum = 480, IsEnabled = !running };
@@ -933,7 +963,7 @@ public sealed partial class MainWindow : Window
                 },
             };
             if (ceiling.Limits.AllowDomains.Count == 0 || ceiling.Limits.Actions.Count == 0) { StatusText.Text = "agent endpoint not started: approve at least one domain and one action"; return; }
-            _agentHost = new LocalAgentHost(_agents, ceiling, ApproveAgentSessionAsync);
+            _agentHost = new LocalAgentHost(_agents, ceiling, ApproveAgentSessionAsync, approveScreenshots: ApproveScreenshotsAsync);
             _agentHost.Start();
             StatusText.Text = $"agent endpoint listening on 127.0.0.1:{_agentHost.Port} (token in Agents panel); grant limited to {string.Join(", ", ceiling.Limits.AllowDomains)}";
         }
@@ -1290,7 +1320,7 @@ public sealed partial class MainWindow : Window
         foreach (var t in k.Tabs.ToList()) await k.CloseAsync(t.Id);
 
         var ceiling = new AgentCeiling { Limits = new AgentManifest { Agent = "ceiling", AllowDomains = ["youtu.be", "example.com"], Actions = [AgentAction.Navigate, AgentAction.Read], SessionMinutes = 10, MaxLivePages = 2, MaxActions = 50 } };
-        using var host = new LocalAgentHost(_agents!, ceiling);
+        using var host = new LocalAgentHost(_agents!, ceiling, approveScreenshots: _ => Task.FromResult(true));   // a check with nobody present: approval is given here, on purpose
         var (session, _) = await host.GrantAsync(new AgentManifest { Agent = "redirect-probe", AllowDomains = ["youtu.be"], Actions = [AgentAction.Navigate, AgentAction.Read], SessionMinutes = 10, MaxLivePages = 2 });
 
         var nav = await _agents!.ExecuteAsync(session, new AgentRequest(AgentAction.Navigate, "https://youtu.be/dQw4w9WgXcQ"), default);
@@ -1345,7 +1375,7 @@ public sealed partial class MainWindow : Window
         var workspaceBefore = k.ActiveWorkspace;
 
         var ceiling = new AgentCeiling { Limits = new AgentManifest { Agent = "ceiling", AllowDomains = ["example.org", "example.com"], Actions = [AgentAction.Navigate, AgentAction.Read, AgentAction.Screenshot], SessionMinutes = 10, MaxLivePages = 2, MaxActions = 50 } };
-        using var host = new LocalAgentHost(_agents!, ceiling);
+        using var host = new LocalAgentHost(_agents!, ceiling, approveScreenshots: _ => Task.FromResult(true));   // a check with nobody present: approval is given here, on purpose
         var (session, _) = await host.GrantAsync(new AgentManifest { Agent = "window-probe", AllowDomains = ["example.org"], Actions = [AgentAction.Navigate, AgentAction.Read, AgentAction.Screenshot], SessionMinutes = 10, MaxLivePages = 2 });
 
         // The person's OWN restore is in flight (their page put to sleep, then woken) while the agent's page comes live at the same moment.
@@ -1448,7 +1478,7 @@ public sealed partial class MainWindow : Window
         var dir = Path.Combine(DataDir, "benchmarks"); Directory.CreateDirectory(dir);
         await Task.Delay(4000);
         var ceiling = new AgentCeiling { Limits = new AgentManifest { Agent = "ceiling", AllowDomains = ["example.org"], Actions = [AgentAction.Navigate, AgentAction.Read, AgentAction.Screenshot], SessionMinutes = 10, MaxLivePages = 2, MaxActions = 60, MaxScreenshots = 20 } };
-        using var host = new LocalAgentHost(_agents!, ceiling);
+        using var host = new LocalAgentHost(_agents!, ceiling, approveScreenshots: _ => Task.FromResult(true));   // a check with nobody present: approval is given here, on purpose
         var (session, _) = await host.GrantAsync(new AgentManifest { Agent = "stage-probe", AllowDomains = ["example.org"], Actions = [AgentAction.Navigate, AgentAction.Read, AgentAction.Screenshot], SessionMinutes = 10, MaxLivePages = 2, MaxScreenshots = 20 });
         var nav = await _agents!.ExecuteAsync(session, new AgentRequest(AgentAction.Navigate, "https://example.org/"), default);
         await Task.Delay(3000);

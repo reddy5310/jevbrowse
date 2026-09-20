@@ -1,3 +1,4 @@
+using JevBrowse.Domain;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
@@ -21,6 +22,23 @@ public sealed class LocalAgentHost : IDisposable
     private readonly IAgentGateway _gateway;
     private readonly AgentCeiling? _ceiling;
     private readonly Func<AgentManifest, AgentManifest, IReadOnlyList<string>, Task<bool>>? _approve;
+    private readonly Func<AgentManifest, Task<bool>>? _approveScreenshots;
+
+    /// <summary>
+    /// Screenshots are experimental and default OFF. A request that names Screenshot, even within the approved ceiling, does not get it
+    /// unless the person answers a separate question for this session. With no way to ask, it is dropped, never granted by default.
+    /// </summary>
+    private async Task<bool> GateScreenshotsAsync(AgentManifest effective, List<string> adjustments)
+    {
+        if (!effective.Actions.Contains(AgentAction.Screenshot)) return false;
+        var approved = _approveScreenshots is not null && await _approveScreenshots(effective);
+        if (!approved)
+        {
+            effective.Actions = effective.Actions.Where(a => a != AgentAction.Screenshot).ToList();
+            adjustments.Add("screenshots (experimental) were not approved for this session: dropped");
+        }
+        return approved;
+    }
     private readonly HttpListener _listener = new();
     private readonly Dictionary<string, AgentSession> _sessions = [];
     private readonly Func<AgentSession, Task>? _onOpened;
@@ -32,11 +50,12 @@ public sealed class LocalAgentHost : IDisposable
     /// host refuses every session: possessing the token is not authority.
     /// </param>
     /// <param name="approve">Optional per-session human approval, shown the requested and the effective manifest.</param>
-    public LocalAgentHost(IAgentGateway gateway, AgentCeiling? ceiling = null, Func<AgentManifest, AgentManifest, IReadOnlyList<string>, Task<bool>>? approve = null, Func<AgentSession, Task>? onSessionOpened = null)
+    public LocalAgentHost(IAgentGateway gateway, AgentCeiling? ceiling = null, Func<AgentManifest, AgentManifest, IReadOnlyList<string>, Task<bool>>? approve = null, Func<AgentSession, Task>? onSessionOpened = null, Func<AgentManifest, Task<bool>>? approveScreenshots = null)
     {
         _gateway = gateway;
         _ceiling = ceiling;
         _approve = approve;
+        _approveScreenshots = approveScreenshots;
         _onOpened = onSessionOpened;
         Token = Convert.ToBase64String(RandomNumberGenerator.GetBytes(24)).Replace('+', '-').Replace('/', '_').TrimEnd('=');
     }
@@ -49,10 +68,13 @@ public sealed class LocalAgentHost : IDisposable
     {
         if (_ceiling is null) throw new InvalidOperationException("no agent ceiling configured");
         var clamped = _ceiling.Clamp(requested);
+        var adjustments = clamped.Adjustments.ToList();
+        var shots = await GateScreenshotsAsync(clamped.Effective, adjustments);
         var s = await _gateway.OpenAsync(clamped.Effective, ct);
+        if (shots) _gateway.ApproveScreenshots(s);
         lock (_sessions) _sessions[s.Id] = s;
         if (_onOpened is not null) await _onOpened(s);
-        return (s, clamped.Adjustments);
+        return (s, adjustments);
     }
 
     /// <summary>Closes sessions past their expiry, and retries any whose pages did not release, even when the agent never calls again.</summary>
@@ -129,7 +151,12 @@ public sealed class LocalAgentHost : IDisposable
                     { await Write(res, 403, new { error = "nothing in the request is covered by the approved grant", adjustments = clamped.Adjustments }); return; }
                     if (_approve is not null && !await _approve(requested, clamped.Effective, clamped.Adjustments))
                     { await Write(res, 403, new { error = "the user declined this session" }); return; }
+                    var adjustments = clamped.Adjustments.ToList();
+                    var shots = await GateScreenshotsAsync(clamped.Effective, adjustments);
+                    if (clamped.Effective.Actions.Count == 0)
+                    { await Write(res, 403, new { error = "nothing in the request is covered once screenshots (experimental) were not approved", adjustments }); return; }
                     var s = await _gateway.OpenAsync(clamped.Effective, ct);
+                    if (shots) _gateway.ApproveScreenshots(s);
                     lock (_sessions) _sessions[s.Id] = s;
                     if (_onOpened is not null) await _onOpened(s);
                     await Write(res, 200, new { id = s.Id, expiresAt = s.ExpiresAt, workspace = s.WorkspaceId.ToString(), granted = new { clamped.Effective.AllowDomains, clamped.Effective.Actions, clamped.Effective.MaxLivePages, clamped.Effective.SessionMinutes }, adjustments = clamped.Adjustments });

@@ -65,6 +65,7 @@ public static class AgentActivity
             "domain_not_allowed" => $"{detail} is not on the approved list",
             "live_page_quota_unsatisfiable" => "it would have needed more open pages than allowed",
             "hard:secret_on_screen" => "the page shows a password or payment field, so a picture of it is never taken",
+            "screenshots_not_approved" => "screenshots are experimental and the person did not approve them for this session",
             "screenshot_quota_exhausted" => "it had taken all the pictures it was allowed",
             "screenshot_discarded" => "the page changed while the picture was being taken, so the picture was thrown away",
             "screenshot_too_large" => "the picture was larger than the limit, so it was not sent",

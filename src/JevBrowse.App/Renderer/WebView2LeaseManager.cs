@@ -306,12 +306,15 @@ public sealed class WebView2Lease : IRendererLease
     {
         var lease = new WebView2Lease(id, view, thumbnailDir);
         var core = view.CoreWebView2;
-        core.SourceChanged += (_, _) => lease.RaiseNavigation();
+        core.SourceChanged += (_, _) => { lease.BumpDocument(); lease.RaiseNavigation(); };
+        core.ContentLoading += (_, _) => lease.BumpDocument();   // a commit, including a reload of the same address
         core.DocumentTitleChanged += (_, _) => lease.RaiseNavigation();
         core.NavigationStarting += (_, e) =>
         {
             // Agent scope is enforced HERE, on every navigation the page attempts (link clicks, redirects, scripts).
             if (lease.NavigationGuard is { } guard && Uri.TryCreate(e.Uri, UriKind.Absolute, out var dest) && dest.Scheme is "http" or "https" && !guard(dest)) { e.Cancel = true; return; }
+            if (e.Cancel) return;
+            lease.BumpDocument();
             if (!e.IsRedirected) lease.SetSignals(PageSignals.None);
         };
         core.NavigationCompleted += (_, _) => { lease.ClearDetected(ProtectionFlags.DirtyForm); lease.Loaded?.Invoke(); };
@@ -452,6 +455,9 @@ public sealed class WebView2Lease : IRendererLease
     /// path (which Trust OS refuses for private and disposable containers, and which this deliberately does not enable).
     /// </summary>
     private bool _captureStaged;
+    private long _documentGeneration;
+    public long DocumentGeneration => Interlocked.Read(ref _documentGeneration);
+    private void BumpDocument() => Interlocked.Increment(ref _documentGeneration);
 
     /// <summary>
     /// Told, while a capture has the control staged, where it actually is: its rectangle relative to the window's content, the window's

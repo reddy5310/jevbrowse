@@ -178,7 +178,11 @@ public sealed class FakeLease(ResourceId id, Uri url, FakeLeaseManager owner) : 
     public event Action? Loaded;
     public event Action<ProtectionFlags>? DetectedProtectionChanged;
     public event Action<PageSignals>? PageSignalsChanged;
-    public void RaiseNavigation(Uri u, string t) { Url = u; NavigationChanged?.Invoke(new(u, t)); }
+    /// <summary>Counts documents: every navigation, and every reload of the SAME url, is a new one. What the real engine reports as a commit.</summary>
+    public long DocumentGeneration { get; private set; }
+    public void RaiseNavigation(Uri u, string t) { DocumentGeneration++; Url = u; NavigationChanged?.Invoke(new(u, t)); }
+    /// <summary>The same address loaded again: same URL, same class, but not the document a picture was started on.</summary>
+    public void RaiseReload() { DocumentGeneration++; NavigationChanged?.Invoke(new(Url, "t")); }
     public void RaiseLoaded() => Loaded?.Invoke();
     public void RaiseDetected(ProtectionFlags f) => DetectedProtectionChanged?.Invoke(f);
     public void RaiseSignals(PageSignals s) => PageSignalsChanged?.Invoke(s);

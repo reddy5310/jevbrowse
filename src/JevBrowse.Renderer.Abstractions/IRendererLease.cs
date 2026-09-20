@@ -49,6 +49,11 @@ public interface IRendererLease
     /// only takes it. Must not throw except for cancellation.
     /// </summary>
     Task<ScreenshotResult> CaptureScreenshotAsync(CancellationToken ct);
+    /// <summary>
+    /// Counts committed documents in this renderer: it rises on every navigation, on a reload of the SAME address, and when the address
+    /// changes without a new page. Two readings that are equal mean the same document was showing throughout; equal URLs do not.
+    /// </summary>
+    long DocumentGeneration { get; }
 
     // ---- Agent Gateway surface (§12). Structured and narrow: no script evaluation, no raw DOM. ----
     Task<PageMap?> GetPageMapAsync(CancellationToken ct);

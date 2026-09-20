@@ -39,6 +39,8 @@ public sealed class AgentSession : IDisposable
     public required ContextId WorkspaceId { get; init; }
     public int ActionsUsed { get; internal set; }
     public int ScreenshotsTaken { get; internal set; }
+    /// <summary>Screenshots are experimental and off by default. True only when the person approved them for THIS session; an agent asking for them changes nothing.</summary>
+    public bool ScreenshotsApproved { get; internal set; }
     public bool Closed { get; internal set; }
     /// <summary>Cleanup has actually run. Distinct from <see cref="Closed"/>: a session can be refused (closed) before its pages are released.</summary>
     public bool CleanedUp { get; internal set; }
@@ -62,6 +64,11 @@ public interface IAgentGateway
     Task<AgentSession> OpenAsync(AgentManifest manifest, CancellationToken ct);
     Task<AgentResponse> ExecuteAsync(AgentSession session, AgentRequest request, CancellationToken ct);
     Task CloseAsync(AgentSession session, CancellationToken ct);
+    /// <summary>
+    /// Records that the PERSON approved screenshots (experimental) for this session. Only the host calls this, and only after a
+    /// dialog the person answered; nothing an agent sends can reach it. Without it every Screenshot request is refused.
+    /// </summary>
+    void ApproveScreenshots(AgentSession session);
 }
 
 /// <summary>
@@ -121,6 +128,12 @@ public sealed partial class AgentGateway : IAgentGateway
             n++;
         }
         return n;
+    }
+
+    public void ApproveScreenshots(AgentSession s)
+    {
+        s.ScreenshotsApproved = true;
+        Record(s, "approve", "screenshots", true, "the person approved screenshots (experimental) for this session");
     }
 
     public async Task<AgentResponse> ExecuteAsync(AgentSession s, AgentRequest r, CancellationToken ct)
@@ -245,8 +258,10 @@ public sealed partial class AgentGateway : IAgentGateway
                 // A picture shows everything on screen, including what Read is careful not to hand over, so it has checks of its own on
                 // top of the session, domain and data-class checks above: nothing with a password or payment field on it, a budget, a size
                 // cap, and a second look after the capture in case the session ended or the page changed while the engine was drawing.
+                if (!s.ScreenshotsApproved) return Deny("screenshots_not_approved");   // experimental: off unless the person said yes for this session
                 if (SecretOnScreen(current)) return Deny("hard:secret_on_screen");
                 if (s.ScreenshotsTaken >= s.Manifest.MaxScreenshots) return Deny("screenshot_quota_exhausted");
+                var document = lease.DocumentGeneration;      // which document this picture is of
                 var pending = lease.CaptureScreenshotAsync(ct);
                 // The engine cannot be told to stop, but nothing it produces later is used: if the session ends first we stop waiting, and
                 // whatever it eventually returns is dropped unread. Its failure, if any, is observed so it cannot surface later.
@@ -259,6 +274,17 @@ public sealed partial class AgentGateway : IAgentGateway
                     throw;
                 }
                 if (s.Closed || ct.IsCancellationRequested) { Record(s, "screenshot", current.Url.ToString(), false, "discarded: the session ended while the picture was being taken"); return new(false, "session_closed"); }
+                // Expiry is a fact about the clock, not about whether anything has swept yet: a picture finished after the deadline is not delivered.
+                if (_clock() > s.ExpiresAt)
+                {
+                    Record(s, "screenshot", current.Url.ToString(), false, "discarded: the session expired while the picture was being taken");
+                    await CloseAsync(s, CancellationToken.None);
+                    return new(false, "session_expired");
+                }
+                // The same DOCUMENT, not merely the same address: a reload or a navigation to another allowed page in the same class changes nothing
+                // a URL, domain or classification comparison could see, and the picture would be of something the checks never looked at.
+                if (!_leases.TryGet(cur, out var leaseNow) || !ReferenceEquals(leaseNow, lease) || lease.DocumentGeneration != document)
+                    return Deny("screenshot_discarded:page_changed");
                 var after = _kernel.Tabs.FirstOrDefault(t => t.Id == cur);
                 if (after is null || !DomainAllowed(s.Manifest, after.Url.Host) || SecretOnScreen(after) || s.Manifest.DenyDataClasses.Contains(_kernel.ContentClassOf(after)))
                     return Deny("screenshot_discarded:page_changed");
