@@ -96,6 +96,35 @@ public class TrustPolicyTests
     }
 }
 
+public class PermissionKeyTests
+{
+    private static readonly ContextId W1 = new(Guid.Parse("11111111-1111-1111-1111-111111111111"));
+    private static readonly ContextId W2 = new(Guid.Parse("22222222-2222-2222-2222-222222222222"));
+
+    [Fact]
+    public void A_grant_applies_to_one_exact_origin_in_one_identity()
+    {
+        var k = PermissionKey.For(IdentityContainer.Work, W1, new Uri("https://a.example.com/page?x=1"));
+        Assert.Equal(k, PermissionKey.For(IdentityContainer.Work, W2, new Uri("https://A.EXAMPLE.com/other")));            // path/case/workspace don't matter for a persistent container
+        Assert.NotEqual(k, PermissionKey.For(IdentityContainer.Personal, W1, new Uri("https://a.example.com/")));          // another identity
+        Assert.NotEqual(k, PermissionKey.For(IdentityContainer.Work, W1, new Uri("http://a.example.com/")));               // scheme
+        Assert.NotEqual(k, PermissionKey.For(IdentityContainer.Work, W1, new Uri("https://a.example.com:8443/")));         // port
+        Assert.NotEqual(k, PermissionKey.For(IdentityContainer.Work, W1, new Uri("https://b.example.com/")));             // sibling subdomain
+        Assert.NotEqual(k, PermissionKey.For(IdentityContainer.Work, W1, new Uri("https://example.com/")));               // parent domain
+    }
+
+    [Fact]
+    public void Ephemeral_identities_are_per_workspace_and_never_persisted()
+    {
+        var a = PermissionKey.For(IdentityContainer.Private, W1, new Uri("https://x.test/"));
+        var b = PermissionKey.For(IdentityContainer.Private, W2, new Uri("https://x.test/"));
+        Assert.NotEqual(a, b);                                                     // two private sessions never share a grant
+        Assert.False(PermissionKey.MayPersist(IdentityContainer.Private));
+        Assert.False(PermissionKey.MayPersist(IdentityContainer.Disposable));
+        Assert.True(PermissionKey.MayPersist(IdentityContainer.Personal));
+    }
+}
+
 public class PermissionPolicyTests
 {
     private static readonly DateTimeOffset T0 = DateTimeOffset.UnixEpoch.AddDays(1);

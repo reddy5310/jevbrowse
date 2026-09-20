@@ -19,3 +19,13 @@ public sealed record PageMap(
     string TextExcerpt);
 
 public sealed record ActionResult(bool Ok, string Message);
+
+/// <summary>
+/// What an element IS, resolved in the page, so the gateway judges the real target (button text, label, form method)
+/// rather than trusting the caller's selector string. Never contains input values.
+/// </summary>
+public sealed record ElementInfo(string Tag, string Type, string Text, string Label, string Name, string Href, string FormMethod)
+{
+    public string Describe() => $"{Tag} {Type} {Text} {Label} {Name} {Href}".Trim();
+    public bool IsSubmit => Type.Equals("submit", StringComparison.OrdinalIgnoreCase) || (Tag.Equals("button", StringComparison.OrdinalIgnoreCase) && Type.Length == 0 && FormMethod.Length > 0);
+}

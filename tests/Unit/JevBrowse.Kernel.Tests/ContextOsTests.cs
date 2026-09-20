@@ -81,7 +81,7 @@ public class ContextOsTests : IDisposable
     {
         var dev = _k.CreateWorkspace("Dev");
         var t = _k.Open(new Uri("https://github.com"));
-        _k.MoveToWorkspace(t.Id, dev.Id);
+        await _k.MoveToWorkspaceAsync(t.Id, dev.Id);
         var k2 = new TabKernel(new FakeLeaseManager(), new TabRepository(_db), new CheckpointRepository(_db), Path.GetTempPath(), null, new WorkspaceRepository(_db));
         k2.Load();
         Assert.Equal(dev.Id, k2.Tabs.Single().WorkspaceId);

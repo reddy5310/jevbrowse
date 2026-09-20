@@ -110,8 +110,7 @@ public class MemoryIndexerTests : IDisposable
 
     private async Task<VirtualTab> Open(string url, IdentityContainer c = IdentityContainer.Personal)
     {
-        var ws = _k.Workspaces.FirstOrDefault(w => w.Container == c) ?? _k.CreateWorkspace(c.ToString());
-        ws.Container = c;
+        var ws = _k.Workspaces.FirstOrDefault(w => w.Container == c) ?? _k.CreateWorkspace(c.ToString(), c);
         await _k.SwitchWorkspaceAsync(ws.Id);
         var t = _k.Open(new Uri(url));
         await _k.ActivateAsync(t.Id);

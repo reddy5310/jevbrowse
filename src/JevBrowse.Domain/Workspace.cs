@@ -19,8 +19,12 @@ public sealed class Workspace
     /// <summary>Scheduling weight when this workspace is NOT active. 1.0 = same as active; 0.3 = default background.</summary>
     public double BackgroundPriority { get; set; } = 0.3;
     public bool NotificationsMuted { get; set; }
-    /// <summary>Trust OS binding (§10.1): which cookie/storage/permission silo this workspace's tabs render in.</summary>
-    public IdentityContainer Container { get; set; } = IdentityContainer.Personal;
+    /// <summary>
+    /// Trust OS binding (§10.1): which cookie/storage/permission silo this workspace's tabs render in.
+    /// Immutable: a live renderer cannot change profile, so relabelling would make the label lie. Crossing an
+    /// identity boundary means creating a new tab (see TabKernel.MoveToWorkspaceAsync).
+    /// </summary>
+    public IdentityContainer Container { get; init; } = IdentityContainer.Personal;
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
 }
 

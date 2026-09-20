@@ -1,4 +1,4 @@
-using JevBrowse.Shield;
+using JevBrowse.Domain;
 using JevBrowse.Storage;
 using JevBrowse.TrustOS;
 using Microsoft.Web.WebView2.Core;
@@ -6,47 +6,76 @@ using Microsoft.Web.WebView2.Core;
 namespace JevBrowse.App.Trust;
 
 /// <summary>
-/// WebView2 PermissionRequested → Trust OS PermissionPolicy. Denies and stored grants are answered without UI;
-/// "Ask" is routed to a single prompt owned by the window (Table A.4: no ad-hoc prompts scattered through the app).
+/// WebView2 PermissionRequested → Trust OS PermissionPolicy.
+///
+/// Decisions are owned by JevBrowse, not by WebView2's profile: <c>SavesInProfile</c> is always false, otherwise the
+/// engine would remember a "for 1 hour" or "once" answer indefinitely and skip our prompt next time. Grants are
+/// keyed by container + EXACT origin (see PermissionKey). Ephemeral containers keep grants in memory only.
+///
+/// What "1 hour" means: it governs future *prompts*. A camera/microphone stream already granted is not revoked
+/// mid-call; it ends when the page stops it or the tab is closed.
 /// </summary>
 public sealed class PermissionAdapter
 {
     public enum Choice { AllowOnce, AllowForHour, AllowAlways, Block }
 
     private readonly SitePermissionsRepository _repo;
-    private readonly PermissionPolicy _policy;
     private readonly Func<string, PermissionKind, Task<Choice>> _prompt;
+    private readonly Dictionary<(string Key, PermissionKind Kind), PermissionGrant> _memory = [];
+    private readonly Func<DateTimeOffset> _clock;
 
-    public PermissionAdapter(SitePermissionsRepository repo, Func<string, PermissionKind, Task<Choice>> prompt)
+    public PermissionAdapter(SitePermissionsRepository repo, Func<string, PermissionKind, Task<Choice>> prompt, Func<DateTimeOffset>? clock = null)
     {
         _repo = repo;
         _prompt = prompt;
-        _policy = new PermissionPolicy((site, kind) =>
-        {
-            var r = repo.Get(site, (int)kind);
-            return r is null ? null : new PermissionGrant(site, kind, r.Allowed, r.ExpiresAt);
-        });
+        _clock = clock ?? (() => DateTimeOffset.UtcNow);
     }
 
-    public void Attach(CoreWebView2 core)
+    private PermissionPolicy PolicyFor(IdentityContainer container) => new((key, kind) =>
     {
+        if (!PermissionKey.MayPersist(container)) return _memory.TryGetValue((key, kind), out var g) ? g : null;
+        var r = _repo.Get(key, (int)kind);
+        return r is null ? null : new PermissionGrant(key, kind, r.Allowed, r.ExpiresAt);
+    }, _clock);
+
+    private void Store(IdentityContainer container, string key, PermissionKind kind, bool allowed, DateTimeOffset? expires)
+    {
+        var now = _clock();
+        if (PermissionKey.MayPersist(container)) _repo.Set(key, (int)kind, allowed, expires, now);
+        else _memory[(key, kind)] = new PermissionGrant(key, kind, allowed, expires);
+    }
+
+    /// <summary>Explicit block from the UI (palette): same key, same storage rules as a prompt answer.</summary>
+    public bool Block(IdentityContainer container, ContextId isolation, Uri origin, PermissionKind kind)
+    {
+        Store(container, PermissionKey.For(container, isolation, origin), kind, false, null);
+        return PermissionKey.MayPersist(container);
+    }
+
+    public void Attach(CoreWebView2 core, IdentityContainer container, ContextId isolation)
+    {
+        var policy = PolicyFor(container);
         core.PermissionRequested += async (_, e) =>
         {
+            e.SavesInProfile = false;   // never let the engine keep its own copy of our decision
             var deferral = e.GetDeferral();
             try
             {
-                var site = Uri.TryCreate(e.Uri, UriKind.Absolute, out var u) ? NetworkRequest.SiteOf(u.Host) : e.Uri;
+                if (!Uri.TryCreate(e.Uri, UriKind.Absolute, out var origin)) { e.State = CoreWebView2PermissionState.Deny; return; }
+                var key = PermissionKey.For(container, isolation, origin);
                 var kind = Map(e.PermissionKind);
-                var verdict = _policy.Decide(site, kind);
+                var verdict = policy.Decide(key, kind);
                 if (verdict == PermissionVerdict.Ask)
                 {
-                    var choice = await _prompt(site, kind);
-                    var now = DateTimeOffset.UtcNow;
+                    var label = $"{origin.Scheme}://{origin.Host}{(origin.IsDefaultPort ? "" : ":" + origin.Port)} ({container})";
+                    var choice = await _prompt(label, kind);
+                    var now = _clock();
                     switch (choice)
                     {
-                        case Choice.AllowForHour: _repo.Set(site, (int)kind, true, now.AddHours(1), now); break;
-                        case Choice.AllowAlways: _repo.Set(site, (int)kind, true, null, now); break;
-                        case Choice.Block: _repo.Set(site, (int)kind, false, null, now); break;
+                        case Choice.AllowForHour: Store(container, key, kind, true, now.AddHours(1)); break;
+                        case Choice.AllowAlways: Store(container, key, kind, true, null); break;
+                        case Choice.Block: Store(container, key, kind, false, null); break;
+                        // AllowOnce stores nothing: the next request asks again.
                     }
                     verdict = choice == Choice.Block ? PermissionVerdict.Deny : PermissionVerdict.Allow;
                 }

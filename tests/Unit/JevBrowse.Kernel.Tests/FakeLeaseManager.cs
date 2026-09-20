@@ -23,14 +23,23 @@ public sealed class FakeLeaseManager : IRendererLeaseManager
     }
 
     public readonly Dictionary<ResourceId, IdentityContainer> Containers = [];
+    public readonly Dictionary<ResourceId, ContextId> IsolationKeys = [];
+    /// <summary>Simulated acquisition latency so tests can interleave concurrent lifecycle calls.</summary>
+    public TimeSpan AcquireDelay { get; set; }
+    private int _inFlight;
+    public int MaxConcurrentAcquires { get; private set; }
 
-    public Task<IRendererLease> AcquireAsync(ResourceId id, Uri url, RenderIntent intent, IdentityContainer container, CancellationToken ct)
+    public async Task<IRendererLease> AcquireAsync(ResourceId id, Uri url, RenderIntent intent, IdentityContainer container, ContextId isolationKey, CancellationToken ct)
     {
         Acquires++;
+        MaxConcurrentAcquires = Math.Max(MaxConcurrentAcquires, ++_inFlight);
+        try { if (AcquireDelay > TimeSpan.Zero) await Task.Delay(AcquireDelay, ct); }
+        finally { _inFlight--; }
         Containers[id] = container;
+        IsolationKeys[id] = isolationKey;
         var l = new FakeLease(id, url, this);
         _live[id] = l;
-        return Task.FromResult<IRendererLease>(l);
+        return l;
     }
 
     public Task ReleaseAsync(ResourceId id, ReleaseDisposition d, CancellationToken ct)
@@ -51,7 +60,19 @@ public sealed class FakeLease(ResourceId id, Uri url, FakeLeaseManager owner) : 
     public bool IsVisible { get; private set; }
     public double ScrollY { get; set; }
     public Checkpoint? Applied { get; private set; }
-    public void SetVisible(bool v) => IsVisible = v;
+    public bool AllowThumbnails { get; set; }
+    /// <summary>Directory the fake writes to when it "captures" a deactivation thumbnail (mirrors WebView2Lease.SetVisible).</summary>
+    public string? ThumbnailDir { get; set; }
+    public void SetVisible(bool v)
+    {
+        // Real adapter: leaving the foreground captures a screenshot, but only if the kernel allowed it.
+        if (!v && IsVisible && AllowThumbnails && ThumbnailDir is not null && ThumbnailToWrite is not null)
+        {
+            Directory.CreateDirectory(ThumbnailDir);
+            File.WriteAllBytes(Path.Combine(ThumbnailDir, ThumbnailToWrite), [1, 2, 3]);
+        }
+        IsVisible = v;
+    }
     public void Navigate(Uri u) => Url = u;
     public Task<bool> TrySuspendAsync() { IsSuspended = true; return Task.FromResult(true); }
     public void Resume() => IsSuspended = false;
@@ -62,13 +83,20 @@ public sealed class FakeLease(ResourceId id, Uri url, FakeLeaseManager owner) : 
     {
         if (owner.FailNextCapture) { owner.FailNextCapture = false; throw new InvalidOperationException("renderer gone"); }
         string? thumb = null;
-        if (ThumbnailToWrite is not null) { thumb = Path.Combine(dir, ThumbnailToWrite); File.WriteAllBytes(thumb, [1, 2, 3]); }
+        if (AllowThumbnails && ThumbnailToWrite is not null) { thumb = Path.Combine(dir, ThumbnailToWrite); Directory.CreateDirectory(dir); File.WriteAllBytes(thumb, [1, 2, 3]); }
         return Task.FromResult(new Checkpoint(id, Url, "t", 0, ScrollY, null, thumb, DateTimeOffset.UnixEpoch));
     }
 
     public void ApplyCheckpoint(Checkpoint cp) { Applied = cp; ScrollY = cp.ScrollY; }
     public string? ReadableText { get; set; }
     public Task<string?> ExtractReadableTextAsync(CancellationToken ct) => Task.FromResult(ReadableText);
+
+    public Func<Uri, bool>? NavigationGuard { get; set; }
+    /// <summary>Simulates the page/redirect/click attempting to navigate: returns whether the renderer would allow it.</summary>
+    public bool TryNavigate(Uri to) => NavigationGuard?.Invoke(to) ?? true;
+    public Dictionary<string, ElementInfo> Elements { get; } = [];
+    public Task<ElementInfo?> DescribeAsync(string selector, CancellationToken ct) =>
+        Task.FromResult(Elements.TryGetValue(selector, out var e) ? e : null);
 
     public PageMap? Map { get; set; }
     public List<string> Clicked { get; } = [];

@@ -74,18 +74,33 @@ public sealed partial class AgentGateway : IAgentGateway
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
     }
 
+    /// <summary>
+    /// Every session gets its OWN fresh, throwaway workspace and profile. The requested workspace name is a label
+    /// only: it is never looked up, so an agent cannot name its way into the user's Personal or Work identity, and
+    /// two agent sessions never share cookies. (Callers should clamp the manifest with AgentCeiling first.)
+    /// </summary>
     public Task<AgentSession> OpenAsync(AgentManifest m, CancellationToken ct)
     {
-        var ws = _kernel.Workspaces.FirstOrDefault(w => w.Name == m.Workspace);
-        if (ws is null)
-        {
-            ws = _kernel.CreateWorkspace(m.Workspace);
-            ws.Container = m.Container;
-        }
+        var container = AgentCeiling.GrantableContainers.Contains(m.Container) ? m.Container : IdentityContainer.Disposable;
+        var id = Guid.NewGuid().ToString("N")[..8];
+        var ws = _kernel.CreateWorkspace($"{(string.IsNullOrWhiteSpace(m.Workspace) ? "Agent" : m.Workspace)} · {id}", container);
         var now = _clock();
         var s = new AgentSession { Manifest = m, OpenedAt = now, ExpiresAt = now.AddMinutes(m.SessionMinutes), WorkspaceId = ws.Id };
         Record(s, "open", m.Agent, true, $"workspace '{ws.Name}' ({ws.Container}), {m.Actions.Count} actions, {m.AllowDomains.Count} domains, {m.MaxLivePages} live pages, {m.SessionMinutes} min");
         return Task.FromResult(s);
+    }
+
+    /// <summary>Close every session that has run past its expiry: pages are virtualized even if the agent never calls again.</summary>
+    public async Task<int> SweepExpiredAsync(IEnumerable<AgentSession> sessions, CancellationToken ct)
+    {
+        int n = 0;
+        foreach (var s in sessions.Where(s => !s.Closed && _clock() > s.ExpiresAt).ToList())
+        {
+            Record(s, "expire", s.Manifest.Agent, true, "session time elapsed: closing pages");
+            await CloseAsync(s, ct);
+            n++;
+        }
+        return n;
     }
 
     public async Task<AgentResponse> ExecuteAsync(AgentSession s, AgentRequest r, CancellationToken ct)
@@ -104,8 +119,9 @@ public sealed partial class AgentGateway : IAgentGateway
         {
             if (!Uri.TryCreate(r.Url, UriKind.Absolute, out var url) || url.Scheme is not ("http" or "https")) return Deny("bad_url");
             if (!DomainAllowed(s.Manifest, url.Host)) return Deny($"domain_not_allowed:{url.Host}");
-            await EnsureQuotaAsync(s, ct);
             var tab = _kernel.TabsIn(s.WorkspaceId).FirstOrDefault(t => s.Pages.Contains(t.Id) && t.Url == url);
+            // The live-page limit is a HARD limit: if it cannot be met (everything is protected) we refuse rather than exceed it.
+            if ((tab is null || !tab.State.HasLiveRenderer()) && !await EnsureQuotaAsync(s, ct)) return Deny("live_page_quota_unsatisfiable");
             if (tab is null)
             {
                 await _kernel.SwitchWorkspaceAsync(s.WorkspaceId, ct);
@@ -113,6 +129,7 @@ public sealed partial class AgentGateway : IAgentGateway
                 s.Pages.Add(tab.Id);
             }
             await ActivateAndWaitAsync(tab.Id, ct);
+            if (_leases.TryGet(tab.Id, out var navLease)) Guard(navLease, s);
             s.Current = tab.Id;
             Record(s, "navigate", url.ToString(), true, $"live={LiveAgentPages(s)}/{s.Manifest.MaxLivePages}");
             return new(true, "navigated");
@@ -127,8 +144,18 @@ public sealed partial class AgentGateway : IAgentGateway
         if (s.Manifest.DenyDataClasses.Contains(cls)) return Deny($"data_class_denied:{cls}");
         if (!DomainAllowed(s.Manifest, current.Url.Host)) return Deny($"domain_not_allowed:{current.Url.Host}"); // page navigated away
 
-        if (!_leases.TryGet(cur, out var lease)) { await EnsureQuotaAsync(s, ct); await ActivateAndWaitAsync(cur, ct); _leases.TryGet(cur, out lease); }
+        if (!_leases.TryGet(cur, out var lease))
+        {
+            if (!await EnsureQuotaAsync(s, ct)) return Deny("live_page_quota_unsatisfiable");
+            await ActivateAndWaitAsync(cur, ct);
+            _leases.TryGet(cur, out lease);
+        }
         if (lease is null) return Deny("renderer_unavailable");
+        Guard(lease, s);
+        // The restore above awaited: the page may have navigated or been reclassified while we waited. Re-check.
+        current = _kernel.Tabs.FirstOrDefault(t => t.Id == cur) ?? current;
+        if (!DomainAllowed(s.Manifest, current.Url.Host)) return Deny($"domain_not_allowed:{current.Url.Host}");
+        if (_kernel.ContentClassOf(current) is var cls2 && (cls2 == DataClass.Secret || s.Manifest.DenyDataClasses.Contains(cls2))) return Deny($"data_class_denied:{cls2}");
 
         switch (r.Action)
         {
@@ -141,7 +168,11 @@ public sealed partial class AgentGateway : IAgentGateway
             case AgentAction.Click:
             {
                 if (string.IsNullOrWhiteSpace(r.Selector)) return Deny("missing_selector");
-                if (LooksDestructive(r.Selector, r.Text))
+                // Judge what the selector actually hits (its text, label, href, form method), not just the caller's words:
+                // "#confirm-delete" and a generic "button.primary" that says "Delete repository" are the same click.
+                var target2 = await lease.DescribeAsync(r.Selector, ct);
+                var looksDestructive = LooksDestructive(r.Selector, r.Text) || (target2 is not null && (LooksDestructive(target2.Describe(), null) || (target2.IsSubmit && target2.FormMethod == "post")));
+                if (looksDestructive)
                 {
                     if (s.Manifest.DestructiveActions == "deny") return Deny("destructive_denied_by_manifest");
                     if (s.Manifest.DestructiveActions != "allow" && !await _confirm(s, r)) return Deny("destructive_not_confirmed_by_user");
@@ -179,8 +210,15 @@ public sealed partial class AgentGateway : IAgentGateway
 
     public int LiveAgentPages(AgentSession s) => _kernel.Tabs.Count(t => s.Pages.Contains(t.Id) && t.State.HasLiveRenderer());
 
-    /// <summary>Lazy by design (§12): never more than MaxLivePages of the agent's pages hold a renderer.</summary>
-    private async Task EnsureQuotaAsync(AgentSession s, CancellationToken ct)
+    /// <summary>Every navigation these pages attempt, from any cause, must stay inside the session's allowed domains.</summary>
+    private void Guard(IRendererLease lease, AgentSession s) =>
+        lease.NavigationGuard = u => !s.Closed && _clock() <= s.ExpiresAt && DomainAllowed(s.Manifest, u.Host);
+
+    /// <summary>
+    /// Lazy by design (§12): never more than MaxLivePages of the agent's pages hold a renderer. Returns false when the
+    /// limit cannot be satisfied (all live pages are protected); callers must then refuse, not exceed it.
+    /// </summary>
+    private async Task<bool> EnsureQuotaAsync(AgentSession s, CancellationToken ct)
     {
         while (LiveAgentPages(s) >= s.Manifest.MaxLivePages)
         {
@@ -188,11 +226,12 @@ public sealed partial class AgentGateway : IAgentGateway
                 .Where(x => s.Pages.Contains(x.Id) && x.State.HasLiveRenderer() && !x.IsActive && x.Protection == ProtectionFlags.None)
                 .OrderBy(x => x.LastActive).FirstOrDefault()
                 ?? _kernel.Snapshot().Where(x => s.Pages.Contains(x.Id) && x.State.HasLiveRenderer() && x.Protection == ProtectionFlags.None).OrderBy(x => x.LastActive).FirstOrDefault();
-            if (victim is null) break;
+            if (victim is null) return false;
             var r = await _kernel.VirtualizeAsync(victim.Id, Cause.Scheduler, ct);
-            if (!r.Allowed) break;
+            if (!r.Allowed) return false;
             Record(s, "quota", victim.Id.ToString(), true, "virtualized LRU agent page");
         }
+        return true;
     }
 
     private async Task ActivateAndWaitAsync(ResourceId id, CancellationToken ct)

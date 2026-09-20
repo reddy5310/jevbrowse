@@ -22,8 +22,7 @@ public class TrustOsIntegrationTests : IDisposable
 
     private async Task<VirtualTab> Live(string url, IdentityContainer container = IdentityContainer.Personal)
     {
-        var ws = _k.Workspaces.FirstOrDefault(w => w.Container == container) ?? _k.CreateWorkspace(container.ToString());
-        ws.Container = container;
+        var ws = _k.Workspaces.FirstOrDefault(w => w.Container == container) ?? _k.CreateWorkspace(container.ToString(), container);
         await _k.SwitchWorkspaceAsync(ws.Id);
         var t = _k.Open(new Uri(url));
         await _k.ActivateAsync(t.Id);

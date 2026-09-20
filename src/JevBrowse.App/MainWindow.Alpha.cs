@@ -45,8 +45,9 @@ public sealed partial class MainWindow
     private async Task EnsurePrivateWorkspaceAsync()
     {
         if (_kernel is null) return;
-        var ws = _kernel.Workspaces.FirstOrDefault(w => w.Container == IdentityContainer.Private);
-        if (ws is null) { ws = _kernel.CreateWorkspace("Private"); ws.Container = IdentityContainer.Private; }
+        // The container is part of the workspace's identity from birth (it cannot be changed afterwards).
+        var ws = _kernel.Workspaces.FirstOrDefault(w => w.Container == IdentityContainer.Private)
+                 ?? _kernel.CreateWorkspace("Private", IdentityContainer.Private);
         await _kernel.SwitchWorkspaceAsync(ws.Id);
         RebuildWorkspaces();
         VirtualPlaceholder.Visibility = _kernel.Active is null ? Visibility.Visible : Visibility.Collapsed;
@@ -116,11 +117,26 @@ public sealed partial class MainWindow
         {
             var id = w.Id;
             cmds.Add(new($"Switch workspace: {w.Name}", async () => { await k.SwitchWorkspaceAsync(id); RebuildWorkspaces(); }));
-            if (k.Active is { } a && a.WorkspaceId != w.Id) cmds.Add(new($"Move this tab to: {w.Name}", () => { k.MoveToWorkspace(a.Id, id); RebuildWorkspaces(); return Task.CompletedTask; }));
+            if (k.Active is { } a && a.WorkspaceId != w.Id) cmds.Add(new($"Move this tab to: {w.Name}", async () => { await MoveActiveAsync(a, id, w.Name); }));
         }
         foreach (var m in Enum.GetValues<MemoryMode>()) cmds.Add(new($"Memory mode: {m}", () => { ModeBox.SelectedIndex = (int)m; return Task.CompletedTask; }));
         foreach (var m in Enum.GetValues<ProductMode>()) cmds.Add(new($"Product mode: {m}", () => { ProductModeBox.SelectedIndex = (int)m; return Task.CompletedTask; }));
         return cmds;
+    }
+
+    /// <summary>
+    /// Move a tab. Within one identity it just moves; across identities the kernel opens a NEW tab in the destination
+    /// (fresh cookies/storage) and closes the original, and we say so plainly.
+    /// </summary>
+    private async Task MoveActiveAsync(VirtualTab tab, ContextId dest, string destName)
+    {
+        var from = _kernel!.ContainerOf(tab);
+        var moved = await _kernel.MoveToWorkspaceAsync(tab.Id, dest);
+        RebuildWorkspaces();
+        var crossed = moved.Id != tab.Id;
+        StatusText.Text = crossed
+            ? $"opened in '{destName}' as a new tab ({_kernel.ContainerOf(moved)} identity: none of the {from} cookies or logins come along); the original was closed"
+            : $"moved to {destName}";
     }
 
     private async Task ShowMemoryUsageAsync()
@@ -137,18 +153,17 @@ public sealed partial class MainWindow
 
     private Task BlockNotificationsAsync()
     {
-        if (_kernel?.Active is not { } t) return Task.CompletedTask;
-        var site = NetworkRequest.SiteOf(t.Url.Host);
-        new SitePermissionsRepository(_db!).Set(site, (int)PermissionKind.Notifications, false, null, DateTimeOffset.UtcNow);
-        StatusText.Text = $"notifications blocked for {site}";
+        if (_kernel?.Active is not { } t || _permissions is null) return Task.CompletedTask;
+        var persisted = _permissions.Block(_kernel.ContainerOf(t), t.WorkspaceId, t.Url, PermissionKind.Notifications);
+        StatusText.Text = $"notifications blocked for {t.Url.Scheme}://{t.Url.Host}{(t.Url.IsDefaultPort ? "" : ":" + t.Url.Port)} in {_kernel.ContainerOf(t)}" + (persisted ? "" : " (this private session only; nothing is stored)");
         return Task.CompletedTask;
     }
 
     private async Task OpenInDisposableAsync()
     {
         if (_kernel?.Active is not { } t) return;
-        var ws = _kernel.Workspaces.FirstOrDefault(w => w.Container == IdentityContainer.Disposable);
-        if (ws is null) { ws = _kernel.CreateWorkspace("Disposable"); ws.Container = IdentityContainer.Disposable; new WorkspaceRepository(_db!).Upsert(ws); }
+        // A fresh disposable workspace each time: its own profile, gone at shutdown, never persisted.
+        var ws = _kernel.CreateWorkspace($"Disposable {DateTime.Now:HH:mm}", IdentityContainer.Disposable);
         await _kernel.SwitchWorkspaceAsync(ws.Id);
         var nt = _kernel.Open(t.Url);
         await _kernel.ActivateAsync(nt.Id);
@@ -175,9 +190,15 @@ public sealed partial class MainWindow
         manifest.Agent = "Claude Code";
         manifest.AllowDomains = ["localhost", "127.0.0.1", "github.com"];
         manifest.SessionMinutes = minutes;
-        if (_agentHost is null || !_agentHost.IsRunning) { _agentHost = new LocalAgentHost(_agents); _agentHost.Start(); }
-        var s = await _agents.OpenAsync(manifest, default);
-        var text = $"Session {s.Id} for {manifest.Agent}: {string.Join(", ", manifest.AllowDomains)} until {s.ExpiresAt.ToLocalTime():HH:mm}.\n\n" +
+        // The user chose this palette command, which is the approval. The ceiling is exactly this grant.
+        if (_agentHost is null || !_agentHost.IsRunning)
+        {
+            var ceiling = new AgentCeiling { Limits = new AgentManifest { Agent = "ceiling", AllowDomains = [.. manifest.AllowDomains], Actions = [.. manifest.Actions], SessionMinutes = minutes, MaxLivePages = manifest.MaxLivePages, MaxActions = manifest.MaxActions, DestructiveActions = "confirm", Container = IdentityContainer.Disposable } };
+            _agentHost = new LocalAgentHost(_agents, ceiling, ApproveAgentSessionAsync);
+            _agentHost.Start();
+        }
+        var (s, _) = await _agentHost.GrantAsync(manifest);   // registered with the host, so the HTTP routes below can find it
+        var text = $"Session {s.Id} for {manifest.Agent}: {string.Join(", ", s.Manifest.AllowDomains)} until {s.ExpiresAt.ToLocalTime():HH:mm}.\n\n" +
                    $"Base URL: http://127.0.0.1:{_agentHost.Port}/\nToken:    {_agentHost.Token}\n\n" +
                    $"Example:\ncurl -H \"Authorization: Bearer {_agentHost.Token}\" -X POST http://127.0.0.1:{_agentHost.Port}/sessions/{s.Id}/actions -d '{{\"action\":\"Navigate\",\"url\":\"https://github.com/reddy5310/jevbrowse\"}}'";
         await new ContentDialog { Title = "Agent grant", Content = new TextBlock { Text = text, IsTextSelectionEnabled = true, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap }, CloseButtonText = "Close", XamlRoot = Content.XamlRoot }.ShowAsync();

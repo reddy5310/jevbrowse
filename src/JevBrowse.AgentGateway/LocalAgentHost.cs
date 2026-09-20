@@ -19,16 +19,47 @@ public sealed class LocalAgentHost : IDisposable
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true, Converters = { new JsonStringEnumConverter() }, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
 
     private readonly IAgentGateway _gateway;
+    private readonly AgentCeiling? _ceiling;
+    private readonly Func<AgentManifest, AgentManifest, IReadOnlyList<string>, Task<bool>>? _approve;
     private readonly HttpListener _listener = new();
     private readonly Dictionary<string, AgentSession> _sessions = [];
     private readonly Func<AgentSession, Task>? _onOpened;
     private CancellationTokenSource? _cts;
+    private System.Threading.Timer? _sweeper;
 
-    public LocalAgentHost(IAgentGateway gateway, Func<AgentSession, Task>? onSessionOpened = null)
+    /// <param name="ceiling">
+    /// What the user has approved. Requests are clamped to it (agents can narrow, never widen). With no ceiling the
+    /// host refuses every session: possessing the token is not authority.
+    /// </param>
+    /// <param name="approve">Optional per-session human approval, shown the requested and the effective manifest.</param>
+    public LocalAgentHost(IAgentGateway gateway, AgentCeiling? ceiling = null, Func<AgentManifest, AgentManifest, IReadOnlyList<string>, Task<bool>>? approve = null, Func<AgentSession, Task>? onSessionOpened = null)
     {
         _gateway = gateway;
+        _ceiling = ceiling;
+        _approve = approve;
         _onOpened = onSessionOpened;
         Token = Convert.ToBase64String(RandomNumberGenerator.GetBytes(24)).Replace('+', '-').Replace('/', '_').TrimEnd('=');
+    }
+
+    /// <summary>
+    /// A grant made by the user directly (e.g. from the command palette): clamped to the ceiling, opened, and
+    /// REGISTERED so the HTTP routes can find it. (Previously such sessions existed only in the gateway.)
+    /// </summary>
+    public async Task<(AgentSession Session, IReadOnlyList<string> Adjustments)> GrantAsync(AgentManifest requested, CancellationToken ct = default)
+    {
+        if (_ceiling is null) throw new InvalidOperationException("no agent ceiling configured");
+        var clamped = _ceiling.Clamp(requested);
+        var s = await _gateway.OpenAsync(clamped.Effective, ct);
+        lock (_sessions) _sessions[s.Id] = s;
+        if (_onOpened is not null) await _onOpened(s);
+        return (s, clamped.Adjustments);
+    }
+
+    /// <summary>Closes sessions past their expiry even when the agent never calls again.</summary>
+    public Task<int> SweepExpiredAsync(CancellationToken ct = default)
+    {
+        List<AgentSession> snapshot; lock (_sessions) snapshot = [.. _sessions.Values];
+        return _gateway is AgentGateway gw ? gw.SweepExpiredAsync(snapshot, ct) : Task.FromResult(0);
     }
 
     public string Token { get; }
@@ -43,10 +74,12 @@ public sealed class LocalAgentHost : IDisposable
         _listener.Start();
         _cts = new CancellationTokenSource();
         _ = LoopAsync(_cts.Token);
+        _sweeper = new System.Threading.Timer(async _ => { try { await SweepExpiredAsync(); } catch (Exception) { } }, null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
     }
 
     public void Stop()
     {
+        _sweeper?.Dispose();
         _cts?.Cancel();
         if (_listener.IsListening) _listener.Stop();
     }
@@ -74,11 +107,18 @@ public sealed class LocalAgentHost : IDisposable
             {
                 if (parts.Length == 1 && req.HttpMethod == "POST")
                 {
-                    var manifest = await ReadAsync<AgentManifest>(req) ?? new AgentManifest();
-                    var s = await _gateway.OpenAsync(manifest, ct);
+                    // The caller REQUESTS a manifest; it never chooses its own authority.
+                    if (_ceiling is null) { await Write(res, 403, new { error = "no agent grant is configured: enable a ceiling in the Agents panel" }); return; }
+                    var requested = await ReadAsync<AgentManifest>(req) ?? new AgentManifest();
+                    var clamped = _ceiling.Clamp(requested);
+                    if (clamped.Effective.AllowDomains.Count == 0 || clamped.Effective.Actions.Count == 0)
+                    { await Write(res, 403, new { error = "nothing in the request is covered by the approved grant", adjustments = clamped.Adjustments }); return; }
+                    if (_approve is not null && !await _approve(requested, clamped.Effective, clamped.Adjustments))
+                    { await Write(res, 403, new { error = "the user declined this session" }); return; }
+                    var s = await _gateway.OpenAsync(clamped.Effective, ct);
                     lock (_sessions) _sessions[s.Id] = s;
                     if (_onOpened is not null) await _onOpened(s);
-                    await Write(res, 200, new { id = s.Id, expiresAt = s.ExpiresAt, workspace = s.WorkspaceId.ToString() });
+                    await Write(res, 200, new { id = s.Id, expiresAt = s.ExpiresAt, workspace = s.WorkspaceId.ToString(), granted = new { clamped.Effective.AllowDomains, clamped.Effective.Actions, clamped.Effective.MaxLivePages, clamped.Effective.SessionMinutes }, adjustments = clamped.Adjustments });
                     return;
                 }
                 if (parts.Length >= 2)

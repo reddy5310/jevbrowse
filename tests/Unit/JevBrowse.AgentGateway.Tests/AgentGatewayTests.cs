@@ -28,6 +28,16 @@ public class AgentGatewayTests : IDisposable
 
     public void Dispose() => _db.Dispose();
 
+    private static AgentCeiling Ceiling(int pages = 3) => new()
+    {
+        Limits = new AgentManifest
+        {
+            Agent = "ceiling", AllowDomains = ["localhost", "github.com", "learn.microsoft.com"],
+            Actions = [AgentAction.Navigate, AgentAction.Read, AgentAction.Click, AgentAction.TypeNonSecret, AgentAction.Screenshot],
+            MaxLivePages = pages, SessionMinutes = 60, MaxActions = 200, DestructiveActions = "confirm",
+        },
+    };
+
     private static AgentManifest Manifest(params AgentAction[] actions) => new()
     {
         Agent = "Claude Code", Workspace = "JevBrowse Development",
@@ -41,7 +51,7 @@ public class AgentGatewayTests : IDisposable
     {
         var s = await _gw.OpenAsync(Manifest(), default);
         var ws = _k.Workspaces.Single(w => w.Id == s.WorkspaceId);
-        Assert.Equal("JevBrowse Development", ws.Name);
+        Assert.StartsWith("JevBrowse Development · ", ws.Name);   // the requested name is a label; every session gets its own workspace
         Assert.Equal(IdentityContainer.Disposable, ws.Container);
         Assert.Single(_audit);
         Assert.Equal("open", _audit[0].Action);
@@ -179,7 +189,7 @@ public class AgentGatewayTests : IDisposable
     [Fact]
     public async Task Local_host_requires_token_and_forwards_to_gateway()
     {
-        using var host = new LocalAgentHost(_gw);
+        using var host = new LocalAgentHost(_gw, Ceiling());
         host.Start();
         using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{host.Port}/") };
 

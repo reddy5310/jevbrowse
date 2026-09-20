@@ -46,15 +46,22 @@ public class HibernationTests : IDisposable
     }
 
     [Fact]
-    public async Task Capture_failure_still_virtualizes_and_never_loses_the_tab()
+    public async Task Capture_failure_keeps_the_renderer_for_automatic_demotion_but_the_user_may_override()
     {
         var a = await OpenAndActivate("a.test");
         _leases.FailNextCapture = true;
-        var r = await _k.VirtualizeAsync(a.Id, Cause.User);
-        Assert.True(r.Allowed);
+        var auto = await _k.VirtualizeAsync(a.Id, Cause.Scheduler);
+        Assert.False(auto.Allowed);
+        Assert.Equal("checkpoint_failed: renderer kept", auto.Reason);
+        Assert.Equal(ResourceState.Hot, a.State);
+        Assert.Equal(1, _k.LiveCount);                      // the unfinished page was NOT thrown away by a scheduler
+
+        _leases.FailNextCapture = true;
+        var manual = await _k.VirtualizeAsync(a.Id, Cause.User);   // explicit request: proceeds without a checkpoint
+        Assert.True(manual.Allowed);
         Assert.Equal(ResourceState.Virtual, a.State);
         Assert.Null(_k.GetCheckpoint(a.Id));
-        Assert.Single(new TabRepository(_db).LoadAll()); // durable row intact
+        Assert.Single(new TabRepository(_db).LoadAll());    // durable row intact
     }
 
     [Fact]

@@ -56,6 +56,14 @@ public sealed class VirtualTab
     public DateTimeOffset LastStateChange { get; private set; } = DateTimeOffset.UtcNow;
 
     public void UpdateNavigation(Uri url, string title) { Url = url; Title = title; }
+
+    /// <summary>Roll back after a failed commit so the model never claims a state the durable store/renderer did not reach.</summary>
+    public void RestoreState(ResourceState state, DateTimeOffset when, ProtectionFlags detected)
+    {
+        State = state;
+        LastStateChange = when;
+        DetectedProtection = detected;
+    }
     public void SetProtection(ProtectionFlags flags) => UserProtection = flags;
     public void SetDetected(ProtectionFlags flags) => DetectedProtection = flags;
 

@@ -16,7 +16,7 @@ namespace JevBrowse.App.Renderer;
 public sealed class WebView2LeaseManager : IRendererLeaseManager
 {
     private readonly Dictionary<ResourceId, WebView2Lease> _live = [];
-    private readonly Dictionary<IdentityContainer, CoreWebView2Environment> _envs = [];
+    private readonly Dictionary<string, CoreWebView2Environment> _envs = [];
     private readonly Panel _host;
     private readonly string _profilesDir;
     private readonly string _thumbnailDir;
@@ -38,20 +38,25 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
     /// Called once per new CoreWebView2 and awaited BEFORE its first navigation, so document-start scripts are
     /// registered in time. Shield and Trust OS attach here.
     /// </summary>
-    public Func<CoreWebView2, ResourceId, IdentityContainer, Uri, Task>? OnCoreCreated { get; set; }
+    public Func<CoreWebView2, ResourceId, IdentityContainer, ContextId, Uri, Task>? OnCoreCreated { get; set; }
     public Action<ResourceId>? OnCoreDisposed { get; set; }
     /// <summary>Resolves jev:// URLs to locally generated HTML (welcome/help). No network involved.</summary>
     public Func<Uri, string?>? LocalPage { get; set; }
 
-    public async Task<CoreWebView2Environment> GetEnvironmentAsync(IdentityContainer container)
+    /// <summary>
+    /// One profile per identity. Persistent containers share one profile each; EPHEMERAL containers get a profile per
+    /// workspace, so two Private tabs sessions or two agent sessions never share cookies or storage.
+    /// </summary>
+    public async Task<CoreWebView2Environment> GetEnvironmentAsync(IdentityContainer container, ContextId isolationKey)
     {
-        if (_envs.TryGetValue(container, out var env)) return env;
+        var key = container.IsEphemeral() ? $"{container}:{isolationKey}" : container.ToString();
+        if (_envs.TryGetValue(key, out var env)) return env;
         var udf = container.IsEphemeral()
-            ? Path.Combine(_profilesDir, "ephemeral", $"{container.ToString().ToLowerInvariant()}-{_sessionTag}")
+            ? Path.Combine(_profilesDir, "ephemeral", $"{container.ToString().ToLowerInvariant()}-{_sessionTag}-{isolationKey.ToString()[..8]}")
             : Path.Combine(_profilesDir, container.ToString().ToLowerInvariant());
         Directory.CreateDirectory(udf);
         env = await CoreWebView2Environment.CreateWithOptionsAsync(null, udf, new CoreWebView2EnvironmentOptions());
-        _envs[container] = env;
+        _envs[key] = env;
         return env;
     }
 
@@ -62,13 +67,13 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
         return ok;
     }
 
-    public async Task<IRendererLease> AcquireAsync(ResourceId id, Uri initialUrl, RenderIntent intent, IdentityContainer container, CancellationToken ct)
+    public async Task<IRendererLease> AcquireAsync(ResourceId id, Uri initialUrl, RenderIntent intent, IdentityContainer container, ContextId isolationKey, CancellationToken ct)
     {
-        var env = await GetEnvironmentAsync(container);
+        var env = await GetEnvironmentAsync(container, isolationKey);
         var view = new WebView2 { Visibility = Visibility.Collapsed };
         _host.Children.Add(view);
         await view.EnsureCoreWebView2Async(env);
-        if (OnCoreCreated is not null) await OnCoreCreated(view.CoreWebView2, id, container, initialUrl);
+        if (OnCoreCreated is not null) await OnCoreCreated(view.CoreWebView2, id, container, isolationKey, initialUrl);
         var lease = await WebView2Lease.CreateAsync(id, view, _thumbnailDir);
         _live[id] = lease;
         if (initialUrl.Scheme == "jev" && LocalPage is not null && LocalPage(initialUrl) is { } html) view.CoreWebView2.NavigateToString(html);
@@ -153,7 +158,12 @@ public sealed class WebView2Lease : IRendererLease
         var core = view.CoreWebView2;
         core.SourceChanged += (_, _) => lease.RaiseNavigation();
         core.DocumentTitleChanged += (_, _) => lease.RaiseNavigation();
-        core.NavigationStarting += (_, e) => { if (!e.IsRedirected) lease.SetSignals(PageSignals.None); };
+        core.NavigationStarting += (_, e) =>
+        {
+            // Agent scope is enforced HERE, on every navigation the page attempts (link clicks, redirects, scripts).
+            if (lease.NavigationGuard is { } guard && Uri.TryCreate(e.Uri, UriKind.Absolute, out var dest) && dest.Scheme is "http" or "https" && !guard(dest)) { e.Cancel = true; return; }
+            if (!e.IsRedirected) lease.SetSignals(PageSignals.None);
+        };
         core.NavigationCompleted += (_, _) => { lease.ClearDetected(ProtectionFlags.DirtyForm); lease.Loaded?.Invoke(); };
         core.IsDocumentPlayingAudioChanged += (_, _) => lease.SetDetected(ProtectionFlags.Audible, core.IsDocumentPlayingAudio);
         core.DownloadStarting += (_, e) =>
@@ -191,15 +201,19 @@ public sealed class WebView2Lease : IRendererLease
     /// A collapsed WebView2 cannot be screenshotted (CapturePreviewAsync never completes), so the thumbnail is taken
     /// at the moment the tab leaves the foreground, while it is still rendering.
     /// </summary>
+    public bool AllowThumbnails { get; set; }
+
     public void SetVisible(bool visible)
     {
-        if (!visible && IsVisible && View.CoreWebView2 is not null)
+        // Pixels are only ever captured with the kernel's permission for the CURRENT class and container.
+        if (!visible && IsVisible && AllowThumbnails && View.CoreWebView2 is not null)
             _pendingThumbnail = CaptureThumbnailAsync();
         View.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private async Task CaptureThumbnailAsync()
     {
+        if (!AllowThumbnails) return;
         try
         {
             Directory.CreateDirectory(_thumbnailDir);
@@ -212,6 +226,7 @@ public sealed class WebView2Lease : IRendererLease
             mem.Seek(0);
             using var input = mem.AsStreamForRead();
             using (var file = File.Create(tmp)) await input.CopyToAsync(file);
+            if (!AllowThumbnails) { try { File.Delete(tmp); } catch (IOException) { } return; } // class tightened while capturing
             File.Move(tmp, path, overwrite: true); // atomic replace: never a half-written thumbnail
             _lastThumbnail = path;
         }
@@ -221,7 +236,7 @@ public sealed class WebView2Lease : IRendererLease
     public async Task<bool> TrySuspendAsync()
     {
         if (View.CoreWebView2 is null) return false;
-        SetVisible(false); // WebView2 refuses to suspend a visible view
+        SetVisible(false); // WebView2 refuses to suspend a visible view (captures only if AllowThumbnails)
         try { return await View.CoreWebView2.TrySuspendAsync(); }
         catch (Exception) { return false; }
     }
@@ -246,11 +261,11 @@ public sealed class WebView2Lease : IRendererLease
         catch (Exception) { /* page may be mid-navigation; scroll is best-effort */ }
 
         // Thumbnail: use the one taken on deactivation; if the view is still visible, take a fresh one now.
-        if (IsVisible) _pendingThumbnail = CaptureThumbnailAsync();
+        if (AllowThumbnails && IsVisible) _pendingThumbnail = CaptureThumbnailAsync();
         if (_pendingThumbnail is { } pending) await Task.WhenAny(pending, Task.Delay(CaptureTimeout, ct));
 
         var url = Uri.TryCreate(core.Source, UriKind.Absolute, out var u) ? u : new Uri("about:blank");
-        return new Checkpoint(ResourceId, url, core.DocumentTitle, sx, sy, favicon, _lastThumbnail, DateTimeOffset.UtcNow);
+        return new Checkpoint(ResourceId, url, core.DocumentTitle, sx, sy, favicon, AllowThumbnails ? _lastThumbnail : null, DateTimeOffset.UtcNow);
     }
 
     // Readability-lite: prefer <article>/<main>/role=main, else the densest text container; strip nav/aside/footer/
@@ -320,6 +335,32 @@ public sealed class WebView2Lease : IRendererLease
                 r.GetProperty("links").EnumerateArray().Select(x => new PageLink(x.GetProperty("t").GetString() ?? "", x.GetProperty("h").GetString() ?? "")).ToList(),
                 r.GetProperty("fields").EnumerateArray().Select(x => new PageField(x.GetProperty("n").GetString() ?? "", x.GetProperty("t").GetString() ?? "", x.TryGetProperty("l", out var l) && l.ValueKind == JsonValueKind.String ? l.GetString() : null)).ToList(),
                 r.GetProperty("text").GetString() ?? "");
+        }
+        catch (Exception) { return null; }
+    }
+
+    public Func<Uri, bool>? NavigationGuard { get; set; }
+
+    public async Task<ElementInfo?> DescribeAsync(string selector, CancellationToken ct)
+    {
+        var core = View.CoreWebView2;
+        if (core is null) return null;
+        try
+        {
+            var task = core.ExecuteScriptAsync($$"""
+                (() => { const e = document.querySelector({{JsonSerializer.Serialize(selector)}}); if (!e) return 'null';
+                  const txt = s => (s || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+                  const f = e.form || e.closest('form');
+                  return JSON.stringify({ tag: e.tagName.toLowerCase(), type: (e.type || '').toLowerCase(), text: txt(e.innerText || e.value), label: txt(e.getAttribute('aria-label') || e.title),
+                    name: txt((e.name || '') + ' ' + (e.id || '') + ' ' + (typeof e.className === 'string' ? e.className : '')), href: (e.href || e.getAttribute('formaction') || '').slice(0, 200), formMethod: f ? (f.method || 'get').toLowerCase() : '' }); })()
+                """).AsTask();
+            if (await Task.WhenAny(task, Task.Delay(CaptureTimeout, ct)) != task) return null;
+            var json = JsonSerializer.Deserialize<string>(await task);
+            if (string.IsNullOrEmpty(json) || json == "null") return null;
+            using var doc = JsonDocument.Parse(json);
+            var r = doc.RootElement;
+            string S(string n) => r.TryGetProperty(n, out var v) ? v.GetString() ?? "" : "";
+            return new ElementInfo(S("tag"), S("type"), S("text"), S("label"), S("name"), S("href"), S("formMethod"));
         }
         catch (Exception) { return null; }
     }

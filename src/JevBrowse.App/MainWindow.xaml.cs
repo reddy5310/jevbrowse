@@ -62,9 +62,21 @@ public sealed partial class MainWindow : Window
         SystemBackdrop = new Microsoft.UI.Xaml.Media.MicaBackdrop { Kind = Microsoft.UI.Composition.SystemBackdrops.MicaKind.BaseAlt };
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(TitleBar);
+        // Final semantic checkpoint (bounded to 4 s) so the next start restores the pages the user was on.
+        AppWindow.Closing += async (_, e) =>
+        {
+            if (_shutdownCheckpointDone || _kernel is null) return;
+            e.Cancel = true;
+            try { await _kernel.CheckpointAllAsync(new CancellationTokenSource(TimeSpan.FromSeconds(4)).Token); }
+            catch (Exception) { }
+            _shutdownCheckpointDone = true;
+            Close();
+        };
         Closed += (_, _) => { _agentHost?.Dispose(); _leases?.Shutdown(); _db?.Dispose(); };
         _ = InitAsync();
     }
+
+    private bool _shutdownCheckpointDone;
 
     // ---- First run / help ----
 
@@ -129,7 +141,7 @@ public sealed partial class MainWindow : Window
         // DevSpace: optional module. Off unless JEVBROWSE_DEVSPACE=1 or toggled in the Dev panel; attaches nothing when off.
         _dev = new DevSpaceAdapter(Path.Combine(DataDir, "devspace", "projects.json"));
         _dev.SetEnabled(Environment.GetEnvironmentVariable("JEVBROWSE_DEVSPACE") == "1");
-        _leases.OnCoreCreated = async (core, id, _, url) => { await _shield.AttachAsync(core, id, url); _permissions.Attach(core); _dev.Attach(core, id); };
+        _leases.OnCoreCreated = async (core, id, container, isolation, url) => { await _shield.AttachAsync(core, id, url); _permissions.Attach(core, container, isolation); _dev.Attach(core, id); };
         _shield.WallDetected += id => DispatcherQueue.TryEnqueue(() =>
         {
             var t = _kernel?.Tabs.FirstOrDefault(x => x.Id == id);
@@ -351,9 +363,7 @@ public sealed partial class MainWindow : Window
         container.SelectedIndex = 0;
         var dlg = new ContentDialog { Title = "New workspace", Content = new StackPanel { Spacing = 8, Children = { box, container } }, PrimaryButtonText = "Create", CloseButtonText = "Cancel", XamlRoot = Content.XamlRoot };
         if (await dlg.ShowAsync() != ContentDialogResult.Primary || string.IsNullOrWhiteSpace(box.Text)) return;
-        var w = _kernel!.CreateWorkspace(box.Text.Trim());
-        w.Container = (IdentityContainer)container.SelectedIndex;
-        new WorkspaceRepository(_db!).Upsert(w);
+        var w = _kernel!.CreateWorkspace(box.Text.Trim(), (IdentityContainer)container.SelectedIndex);
         await _kernel.SwitchWorkspaceAsync(w.Id);
         RebuildWorkspaces();
         VirtualPlaceholder.Visibility = Visibility.Visible;
@@ -367,7 +377,7 @@ public sealed partial class MainWindow : Window
         {
             var item = new MenuFlyoutItem { Text = w.Name };
             var target = w.Id;
-            item.Click += (_, _) => { _kernel.MoveToWorkspace(t.Id, target); RebuildWorkspaces(); StatusText.Text = $"moved to {w.Name}"; };
+            item.Click += async (_, _) => await MoveActiveAsync(t, target, w.Name);
             MoveMenu.Items.Add(item);
         }
         if (MoveMenu.Items.Count == 0) MoveMenu.Items.Add(new MenuFlyoutItem { Text = "No other workspaces", IsEnabled = false });
@@ -489,12 +499,38 @@ public sealed partial class MainWindow : Window
         return tcs.Task;
     }
 
+    /// <summary>Shown for every session an external agent requests: what it asked for versus what it gets.</summary>
+    private Task<bool> ApproveAgentSessionAsync(AgentManifest requested, AgentManifest effective, IReadOnlyList<string> adjustments)
+    {
+        var tcs = new TaskCompletionSource<bool>();
+        DispatcherQueue.TryEnqueue(async () =>
+        {
+            var text = $"{effective.Agent} asks for a session.\n\nGranted:\n  domains: {string.Join(", ", effective.AllowDomains)}\n  actions: {string.Join(", ", effective.Actions)}\n  {effective.MaxLivePages} live pages, {effective.SessionMinutes} min, destructive: {effective.DestructiveActions}\n  identity: throwaway ({effective.Container}), not your logins" +
+                       (adjustments.Count > 0 ? "\n\nReduced from the request:\n  • " + string.Join("\n  • ", adjustments) : "");
+            var dlg = new ContentDialog { Title = "Agent session request", Content = new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas") }, PrimaryButtonText = "Allow session", CloseButtonText = "Deny", DefaultButton = ContentDialogButton.Close, XamlRoot = Content.XamlRoot };
+            tcs.TrySetResult(await dlg.ShowAsync() == ContentDialogResult.Primary);
+        });
+        return tcs.Task;
+    }
+
     private async void OnAgents(object s, RoutedEventArgs e)
     {
         if (_agents is null) return;
         var running = _agentHost?.IsRunning == true;
         var toggle = new ToggleSwitch { Header = "Local endpoint for external agents (127.0.0.1, bearer token, this run only)", IsOn = running };
+        // The ceiling is the user's decision, made BEFORE the endpoint exists. Agents can request less, never more.
+        var domains = new TextBox { Header = "Approved domains (comma-separated)", Text = "localhost, 127.0.0.1, github.com, learn.microsoft.com", IsEnabled = !running };
+        var actionBoxes = new[] { AgentAction.Navigate, AgentAction.Read, AgentAction.Click, AgentAction.TypeNonSecret, AgentAction.Screenshot }
+            .Select(a => new CheckBox { Content = a.ToString(), Tag = a, IsChecked = a is AgentAction.Navigate or AgentAction.Read, IsEnabled = !running }).ToList();
+        var actionRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        foreach (var b in actionBoxes) actionRow.Children.Add(b);
+        var minutes = new NumberBox { Header = "Max minutes per session", Value = 60, Minimum = 1, Maximum = 480, IsEnabled = !running };
         var panel = new StackPanel { Spacing = 8, Children = { toggle } };
+        if (!running)
+        {
+            panel.Children.Add(new TextBlock { TextWrapping = TextWrapping.Wrap, Opacity = 0.8, FontSize = 12, Text = "Approve what agents may ever do. A session request is clamped to this; anything wider is dropped, and you are asked about every session. Agents only ever get a throwaway identity, never your logins." });
+            panel.Children.Add(domains); panel.Children.Add(new TextBlock { Text = "Approved actions" }); panel.Children.Add(actionRow); panel.Children.Add(minutes);
+        }
         if (running)
         {
             var url = $"http://127.0.0.1:{_agentHost!.Port}/";
@@ -509,9 +545,21 @@ public sealed partial class MainWindow : Window
         if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
         if (toggle.IsOn && !running)
         {
-            _agentHost = new LocalAgentHost(_agents);
+            var ceiling = new AgentCeiling
+            {
+                Limits = new AgentManifest
+                {
+                    Agent = "ceiling",
+                    AllowDomains = domains.Text.Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries).Select(d => d.Trim().ToLowerInvariant()).Distinct().ToList(),
+                    Actions = actionBoxes.Where(b => b.IsChecked == true).Select(b => (AgentAction)b.Tag).ToList(),
+                    SessionMinutes = (int)Math.Clamp(minutes.Value, 1, 480),
+                    MaxLivePages = 3, MaxActions = 500, DestructiveActions = "confirm", Container = IdentityContainer.Disposable,
+                },
+            };
+            if (ceiling.Limits.AllowDomains.Count == 0 || ceiling.Limits.Actions.Count == 0) { StatusText.Text = "agent endpoint not started: approve at least one domain and one action"; return; }
+            _agentHost = new LocalAgentHost(_agents, ceiling, ApproveAgentSessionAsync);
             _agentHost.Start();
-            StatusText.Text = $"agent endpoint listening on 127.0.0.1:{_agentHost.Port} (token in Agents panel)";
+            StatusText.Text = $"agent endpoint listening on 127.0.0.1:{_agentHost.Port} (token in Agents panel); grant limited to {string.Join(", ", ceiling.Limits.AllowDomains)}";
         }
         else if (!toggle.IsOn && running)
         {
@@ -972,8 +1020,19 @@ public sealed partial class MainWindow : Window
 
     private async void OnHibernateCurrent(object s, RoutedEventArgs e)
     {
-        if (_kernel?.Active is null) return;
-        var r = await _kernel.VirtualizeAsync(_kernel.Active.Id, Cause.User);
+        if (_kernel?.Active is not { } tab) return;
+        // A manual request overrides protections, so say what is being overridden before dropping the renderer.
+        if (tab.IsDemotionVetoed)
+        {
+            var dlg = new ContentDialog
+            {
+                Title = "This tab is protected",
+                Content = new TextBlock { TextWrapping = TextWrapping.Wrap, Text = $"Protection: {tab.Protection}.\nHibernating discards the live page. Anything not saved on the site (a typed form, an upload, a call, a download in progress) will be lost; only the address and scroll position are kept." },
+                PrimaryButtonText = "Hibernate anyway", CloseButtonText = "Keep it live", DefaultButton = ContentDialogButton.Close, XamlRoot = Content.XamlRoot,
+            };
+            if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
+        }
+        var r = await _kernel.VirtualizeAsync(tab.Id, Cause.User);
         StatusText.Text = r.Reason;
     }
 
