@@ -46,6 +46,15 @@ values are now range-checked before the registry is touched, and a run that test
 - At 225% the workspace name and tab titles in the fixed-width sidebar are cut with an ellipsis (the accessible name has them in
   full). Legible, not clipped controls, but not ideal.
 - A gate run is inconclusive by design, for its keyboard steps, while another window holds the foreground.
-- High contrast (a real contrast theme, not just tokens) and reduced transparency: not yet run.
+- **Reduced transparency: done** (`scripts/transparency-check.ps1`, changes only EnableTransparency, restored and confirmed): the
+  window is pixel-identical apart from live digits (122 of 1.1 M pixels), title contrast 16.7:1 dark / 16.5:1 light in both states, gate PASS.
+- **High contrast (a real Windows contrast theme): not run.** It changes the whole desktop's colours; you chose not to authorise it.
+  The tokens are tested to use only system colours, but that is not the same as seeing it.
 - Agent-driven tab switching (an agent's page becomes the visible tab) and the unexplained transient gate failures noted in ADR 0024
   remain **unresolved and tracked**.
+
+## Capture hygiene (a flaw in my own earlier work)
+
+Screen captures used the UI Automation rectangle, which includes the invisible 8 px resize borders, so each image included a thin
+strip of whatever was behind the window (in one case a sliver of another window). The gate's `-Shots` and the new scripts now capture
+the DWM visible frame (verified: 1406x792, exactly the window). Earlier captures under `_ui-check` from before this fix have the strip.

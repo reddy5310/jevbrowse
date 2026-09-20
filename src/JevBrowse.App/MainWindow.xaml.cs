@@ -323,6 +323,7 @@ public sealed partial class MainWindow : Window
                         await File.WriteAllTextAsync(Path.Combine(DataDir, "benchmarks", "motion-report.json"), System.Text.Json.JsonSerializer.Serialize(new
                         {
                             textScaleFactor = new Windows.UI.ViewManagement.UISettings().TextScaleFactor,
+                            transparencyEffects = new Windows.UI.ViewManagement.UISettings().AdvancedEffectsEnabled,
                             animationsEnabled = Motion.Enabled,
                             fadeCompleted = faded.Task.IsCompleted,
                             fadeMilliseconds = watch.ElapsedMilliseconds,

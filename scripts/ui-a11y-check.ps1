@@ -48,6 +48,8 @@ Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Drawing, Sy
 Add-Type @'
 using System; using System.Runtime.InteropServices;
 public static class A11yWin {
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+  [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int attr, out RECT r, int size);
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
@@ -347,9 +349,16 @@ try {
         elseif ($panelStatus -eq 'not started') { if ($failures.Count -eq $before) { $panelProven = $true; $panelStatus = 'complete' } else { $panelStatus = 'FAILED' } }
     }
 
+# The visible frame of a window (DWMWA_EXTENDED_FRAME_BOUNDS). UI Automation's rectangle also covers the invisible resize borders, so a
+# capture of it includes a strip of whatever is behind the window; a capture must be of the window and nothing else.
+function Get-FrameRect([IntPtr]$h, $fallback) {
+    $fr = New-Object A11yWin+RECT
+    if ([A11yWin]::DwmGetWindowAttribute($h, 9, [ref]$fr, 16) -eq 0 -and ($fr.R - $fr.L) -gt 0) { return [pscustomobject]@{ X = $fr.L; Y = $fr.T; W = ($fr.R - $fr.L); H = ($fr.B - $fr.T) } }
+    [pscustomobject]@{ X = [int]$fallback.X; Y = [int]$fallback.Y; W = [int]$fallback.Width; H = [int]$fallback.Height }
+}
     function Shot($name) {
-        $b = $win.Current.BoundingRectangle
-        $bm = New-Object System.Drawing.Bitmap ([int]$b.Width), ([int]$b.Height)
+        $b = Get-FrameRect $h $win.Current.BoundingRectangle
+        $bm = New-Object System.Drawing.Bitmap ([int]$b.W), ([int]$b.H)
         $gr = [System.Drawing.Graphics]::FromImage($bm); $gr.CopyFromScreen([int]$b.X, [int]$b.Y, 0, 0, $bm.Size)
         $bm.Save("$Out\shots\$name.png", [System.Drawing.Imaging.ImageFormat]::Png); $gr.Dispose(); $bm.Dispose()
     }

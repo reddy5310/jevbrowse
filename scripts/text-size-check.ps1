@@ -29,6 +29,8 @@ Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Drawing
 Add-Type @'
 using System; using System.Runtime.InteropServices;
 public static class TextSizeWin {
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+  [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int attr, out RECT r, int size);
   [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
   public static extern IntPtr SendMessageTimeout(IntPtr h, uint msg, IntPtr w, string l, uint flags, uint timeout, out IntPtr result);
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
@@ -71,6 +73,14 @@ $exe = Resolve-Path (Join-Path $PSScriptRoot "..\artifacts\bin\JevBrowse.App\${C
 $gate = Join-Path $PSScriptRoot 'ui-a11y-check.ps1'
 $results = New-Object System.Collections.Generic.List[object]
 $restored = $false; $err = $null
+
+# The visible frame of a window (DWMWA_EXTENDED_FRAME_BOUNDS). UI Automation's rectangle also covers the invisible resize borders, so a
+# capture of it includes a strip of whatever is behind the window; a capture must be of the window and nothing else.
+function Get-FrameRect([IntPtr]$h, $fallback) {
+    $fr = New-Object TextSizeWin+RECT
+    if ([TextSizeWin]::DwmGetWindowAttribute($h, 9, [ref]$fr, 16) -eq 0 -and ($fr.R - $fr.L) -gt 0) { return [pscustomobject]@{ X = $fr.L; Y = $fr.T; W = ($fr.R - $fr.L); H = ($fr.B - $fr.T) } }
+    [pscustomobject]@{ X = [int]$fallback.X; Y = [int]$fallback.Y; W = [int]$fallback.Width; H = [int]$fallback.Height }
+}
 
 function Get-Tree([int]$rootPid) {
     $all = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId); $found = New-Object System.Collections.Generic.List[int]
@@ -128,8 +138,9 @@ function Run-Dialog([string]$which, [int]$width) {
         [TextSizeWin]::SetForegroundWindow($h) | Out-Null; Start-Sleep -Milliseconds 700
         $captured = $null
         if ([TextSizeWin]::GetForegroundWindow() -eq $h) {
-            $bm = New-Object System.Drawing.Bitmap ([int]$wb.Width), ([int]$wb.Height); $g = [System.Drawing.Graphics]::FromImage($bm)
-            $g.CopyFromScreen([int]$wb.X, [int]$wb.Y, 0, 0, $bm.Size); $bm.Save($png, [System.Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $bm.Dispose(); $captured = $png
+            $fr = Get-FrameRect $h $wb
+            $bm = New-Object System.Drawing.Bitmap ([int]$fr.W), ([int]$fr.H); $g = [System.Drawing.Graphics]::FromImage($bm)
+            $g.CopyFromScreen([int]$fr.X, [int]$fr.Y, 0, 0, $bm.Size); $bm.Save($png, [System.Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $bm.Dispose(); $captured = $png
         }
         $verdict = if ($problems.Count) { 'FAIL' } elseif ($found -lt $expect.Count) { 'INCONCLUSIVE' } else { 'PASS' }
         [pscustomobject]@{ dialog = $which; width = $width; verdict = $verdict; appSeesScale = $scale; problems = @($problems); capture = $captured; buttonsSeen = ($seen -join ' | ') }
