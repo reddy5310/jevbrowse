@@ -492,9 +492,12 @@ public sealed partial class MainWindow
 
     // ---- Session receipt (§15) ----
 
-    private async void OnReceipt(object s, RoutedEventArgs e)
+    private void OnReceipt(object s, RoutedEventArgs e) => OpenPanel("receipt", BuildReceipt, ReceiptButton);
+
+    /// <summary>What this site did during the visit, as a panel. Rebuilt when the active tab changes, so it never describes a page that is no longer showing.</summary>
+    private (string Title, UIElement Body)? BuildReceipt()
     {
-        if (_kernel?.Active is not { } t || _shield is null) return;
+        if (_kernel?.Active is not { } t || _shield is null) return null;
         _shield.Stats.TryGetValue(t.Id, out var st);
         var sample = ProcessGroupProbe.Sample(_leases!.ProcessIds);
         var cls = _kernel.ClassOf(t);
@@ -507,7 +510,7 @@ public sealed partial class MainWindow
             ProtectionPhrases.StayAwake(t.Protection));
 
         // Label over value, stacked: reads in order with a screen reader and cannot wrap into misaligned columns.
-        var body = new StackPanel { Spacing = Tokens.Space(10), MinWidth = 440 };
+        var body = new StackPanel { Spacing = Tokens.Space(10) };
         foreach (var (label, value) in ReceiptRows.Build(facts))
         {
             body.Children.Add(new StackPanel
@@ -515,12 +518,12 @@ public sealed partial class MainWindow
                 Spacing = Tokens.Space(2),
                 Children =
                 {
-                    new TextBlock { Text = label, FontSize = 12, Opacity = 0.65 },
+                    new TextBlock { Text = label, FontSize = 12, Foreground = Tokens.Brush("JevTextSecondaryBrush") },
                     new TextBlock { Text = value, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true },
                 },
             });
         }
-        body.Children.Add(new TextBlock { Text = ReceiptRows.Footnote, FontSize = 12, Opacity = 0.65, TextWrapping = TextWrapping.Wrap, Margin = Tokens.Inset("JevInsetNote") });
-        await new ContentDialog { Title = ReceiptRows.Title(facts), Content = new ScrollViewer { Content = body, MaxHeight = 460, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, HorizontalScrollMode = ScrollMode.Disabled }, CloseButtonText = "Close", XamlRoot = Content.XamlRoot }.ShowSerializedAsync();
+        body.Children.Add(new TextBlock { Text = ReceiptRows.Footnote, FontSize = 12, Foreground = Tokens.Brush("JevTextSecondaryBrush"), TextWrapping = TextWrapping.Wrap, Margin = Tokens.Inset("JevInsetNote") });
+        return (ReceiptRows.Title(facts), body);
     }
 }

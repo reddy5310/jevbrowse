@@ -282,6 +282,7 @@ public sealed partial class MainWindow : Window
                 await Task.Delay(9000);
                 DispatcherQueue.TryEnqueue(async () =>
                 {
+                    if (args.FirstOrDefault(a => a.StartsWith("--ui-panel=", StringComparison.Ordinal)) is { } up) { var which = up["--ui-panel=".Length..]; if (which == "receipt") OnReceipt(this, new RoutedEventArgs()); else if (which == "shield") OnShield(this, new RoutedEventArgs()); else if (which == "explain") OnExplain(this, new RoutedEventArgs()); await Task.Delay(700); }
                     try
                     {
                         // What the person's Windows "Show animations" setting did to this run: the decision, and how long a real
@@ -375,6 +376,7 @@ public sealed partial class MainWindow : Window
             AddressBox.Text = _kernel!.Active?.Url.ToString() ?? "";
         }
         if (e.Kind is "activated" or "navigated" or "signals") { UpdateClassBadge(); UpdateEnvChrome(); }
+        if (e.Kind is "activated" or "navigated") RefreshPanel();
         if (e.Kind is "activated" or "pinned" or "protection" or "loaded") UpdateTabControls();
         if (e.Kind == "restoring") ShowRestoring(e.Id, e.Reason.StartsWith("with"));
         if (e.Kind is "restored" or "loaded") FinishRestore(e.Id);
@@ -1167,9 +1169,12 @@ public sealed partial class MainWindow : Window
         StatusText.Text += r.Activated ? " • lists updated" : " • update failed: " + string.Join("; ", r.Details.Select(kv => $"{kv.Key} {kv.Value}"));
     }
 
-    private async void OnShield(object s, RoutedEventArgs e)
+    private void OnShield(object s, RoutedEventArgs e) => OpenPanel("shield", BuildShield, ShieldButton);
+
+    /// <summary>What Shield did here, and the one action most visits are for. A panel, so the page beside it stays visible while you decide.</summary>
+    private (string Title, UIElement Body)? BuildShield()
     {
-        if (_kernel?.Active is not { } t || _shield is null) return;
+        if (_kernel?.Active is not { } t || _shield is null) return null;
         var site = NetworkRequest.SiteOf(t.Url.Host);
         var enabled = _shield.IsEnabledFor(site);
         _shield.Stats.TryGetValue(t.Id, out var st);
@@ -1184,7 +1189,7 @@ public sealed partial class MainWindow : Window
         if (st is not null) lines.AddRange(st.Recent.Reverse().Take(15).Select(x => $"✕ {x.Host}\n    {x.Rule}"));
         // Undo for this document only: put back everything the collapse layers hid, drop the cosmetic sheet.
         var showHidden = new Button { Content = "Show what Shield hid on this page", HorizontalAlignment = HorizontalAlignment.Stretch };
-        var undoNote = new TextBlock { FontSize = 12, Opacity = 0.75, TextWrapping = TextWrapping.Wrap };
+        var undoNote = new TextBlock { FontSize = 12, Foreground = Tokens.Brush("JevTextSecondaryBrush"), TextWrapping = TextWrapping.Wrap };
         showHidden.Click += async (_, _) =>
         {
             if (_leases!.TryGet(t.Id, out var l)) { var n = await _shield.RestoreHiddenAsync(((WebView2Lease)l).View.CoreWebView2, t.Id); undoNote.Text = n > 0 ? $"Restored {n} hidden item(s). Nothing more is hidden until you navigate." : "Nothing on this page was hidden."; }
@@ -1202,7 +1207,7 @@ public sealed partial class MainWindow : Window
                 new TextBlock { Text = "Site not working?", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15 },
                 new TextBlock
                 {
-                    TextWrapping = TextWrapping.Wrap, Opacity = 0.85,
+                    TextWrapping = TextWrapping.Wrap, Foreground = Tokens.Brush("JevTextSecondaryBrush"),
                     Text = enabled
                         ? $"Some sites break when their ads or trackers are blocked. Turn Shield off for {site} and the page reloads with nothing blocked. You can turn it back on here."
                         : $"Shield is off for {site}, so nothing is blocked there. Turn it on to block ads and trackers again.",
@@ -1214,23 +1219,18 @@ public sealed partial class MainWindow : Window
             Header = "Technical details", HorizontalAlignment = HorizontalAlignment.Stretch,
             Content = new ScrollViewer { Content = new TextBlock { Text = string.Join("\n", lines), FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), FontSize = 12, TextWrapping = TextWrapping.Wrap }, MaxHeight = 300 },
         };
-        var dlg = new ContentDialog
-        {
-            Title = "Shield",
-            Content = new StackPanel { Spacing = Tokens.Space(12), Children = { repair, new TextBlock { Text = summary, TextWrapping = TextWrapping.Wrap }, showHidden, undoNote, details } },
-            PrimaryButtonText = enabled ? "Turn off and reload" : "Turn on",
-            SecondaryButtonText = "Update block lists",
-            CloseButtonText = "Close",
-            XamlRoot = Content.XamlRoot,
-        };
-        var result = await dlg.ShowSerializedAsync();
-        if (result == ContentDialogResult.Primary)
+        // Explicit buttons, one click each, named for what they do. Turning Shield off reloads the page, and the label says so.
+        var toggle = new Button { Content = enabled ? "Turn off and reload" : "Turn on", HorizontalAlignment = HorizontalAlignment.Stretch };
+        toggle.Click += async (_, _) =>
         {
             await _shield.SetEnabledForAsync(site, !enabled);   // removes cosmetic + site-module scripts in every open tab of this site
             WithActiveLease(l => l.View.CoreWebView2.Reload());
             StatusText.Text = enabled ? $"Shield is now off for {site}. The page was reloaded without blocking." : $"Shield is back on for {site}.";
-        }
-        else if (result == ContentDialogResult.Secondary) await UpdateFilterListsAsync();
+            RefreshPanel();
+        };
+        var update = new Button { Content = "Update block lists", HorizontalAlignment = HorizontalAlignment.Stretch };
+        update.Click += async (_, _) => await UpdateFilterListsAsync();
+        return ("Shield", new StackPanel { Spacing = Tokens.Space(12), Children = { repair, toggle, new TextBlock { Text = summary, TextWrapping = TextWrapping.Wrap }, showHidden, undoNote, details, update } });
     }
 
     /// <summary>
@@ -2166,30 +2166,26 @@ public sealed partial class MainWindow : Window
         foreach (var i in Items) i.Refresh();
     }
 
-    private async void OnExplain(object s, RoutedEventArgs e)
+    private void OnExplain(object s, RoutedEventArgs e) => OpenPanel("explain", BuildExplain, ExplainButton);
+
+    private (string Title, UIElement Body)? BuildExplain()
     {
-        if (_kernel?.Active is not { } t) return;
+        if (_kernel?.Active is not { } t) return null;
         var view = ExplainText.Build(new ExplainFacts(
             t.State, _kernel.Active?.Id == t.Id, _kernel.LastDecision(t.Id),
             _lastPlan?.Band, _lastPlan?.TargetLiveRenderers ?? 0, _lastPlan?.LiveNow ?? _kernel.LiveCount,
             ProtectionPhrases.StayAwake(t.Protection)));
 
         // Sentences, in the interface font. The scheduler's raw record is not what anyone opened this to read.
-        var body = new StackPanel { Spacing = Tokens.Space(10), MinWidth = 420 };
+        var body = new StackPanel { Spacing = Tokens.Space(10) };
         body.Children.Add(new TextBlock { Text = view.Headline, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
-        foreach (var line in view.Lines) body.Children.Add(new TextBlock { Text = line, TextWrapping = TextWrapping.Wrap, Opacity = 0.9 });
-
-        var dlg = new ContentDialog
-        {
-            Title = ExplainText.Title,
-            Content = body,
-            CloseButtonText = "Close",
-            // The action offered is about sleeping, because that is what this just explained. Placement is the Pin control's job.
-            PrimaryButtonText = t.UserProtection.HasFlag(ProtectionFlags.KeepActive) ? "Let it sleep" : "Keep this tab active",
-            DefaultButton = ContentDialogButton.Close,   // Enter must not change what the tab does; that takes a deliberate click
-            XamlRoot = Content.XamlRoot,
-        };
-        if (await dlg.ShowSerializedAsync() == ContentDialogResult.Primary) OnKeepActiveCurrent(s, e);
+        foreach (var line in view.Lines) body.Children.Add(new TextBlock { Text = line, TextWrapping = TextWrapping.Wrap, Foreground = Tokens.Brush("JevTextSecondaryBrush") });
+        // The action offered is about sleeping, because that is what this just explained. It is a plain button, nothing is the
+        // default, and nothing happens until it is pressed: Enter on the panel's close button cannot change what the tab does.
+        var act = new Button { Content = t.UserProtection.HasFlag(ProtectionFlags.KeepActive) ? "Let it sleep" : "Keep this tab active", HorizontalAlignment = HorizontalAlignment.Stretch };
+        act.Click += (sender, args) => { OnKeepActiveCurrent(sender, args); RefreshPanel(); };
+        body.Children.Add(act);
+        return (ExplainText.Title, body);
     }
 
     // ---- UI → kernel ----

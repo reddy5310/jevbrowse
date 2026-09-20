@@ -108,7 +108,7 @@
             </Grid>
         </Border>
 
-        <Grid x:Name="MainArea" Grid.Row="1" Grid.Column="1" Margin="{StaticResource JevInsetMain}">
+        <Grid x:Name="MainArea" Grid.Row="1" Grid.Column="1" SizeChanged="OnMainAreaSizeChanged" Margin="{StaticResource JevInsetMain}">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
@@ -188,11 +188,45 @@
                             </MenuFlyout>
                         </Button.Flyout>
                     </Button>
+                    <Button x:Name="MoreButton" Content="&#xE712;" FontFamily="Segoe MDL2 Assets" Style="{StaticResource JevToolButton}"
+                            ToolTipService.ToolTip="Command palette (Ctrl+K) and help (F1)" AutomationProperties.Name="More: command palette and help">
+                        <Button.Flyout>
+                            <MenuFlyout Placement="BottomEdgeAlignedRight">
+                                <MenuFlyoutItem Text="Command palette" Click="OnPalette"/>
+                                <MenuFlyoutItem Text="Help and welcome" Click="OnHelp"/>
+                            </MenuFlyout>
+                        </Button.Flyout>
+                    </Button>
                 </StackPanel>
                 </ScrollViewer>
                 <!-- Empty until the window is narrow enough that the two menu buttons would run off the row. -->
                 <StackPanel x:Name="TrustBarMore" Grid.Row="3" Grid.ColumnSpan="6" Orientation="Horizontal" Spacing="{StaticResource JevSpace6}"/>
             </Grid>
+            <!-- One side panel for information that used to interrupt in a dialog. It is not modal: the page stays alive beside it,
+                 Tab moves through it like anything else, Esc or the close button dismisses it, and focus goes back to where it
+                 came from. Declared before the page so it follows the toolbar in Tab order. Where the window is too narrow to
+                 hold both, it takes the page's place instead of covering it (a web view cannot be drawn under other controls). -->
+            <Border x:Name="SidePanel" Grid.Row="1" Visibility="Collapsed" HorizontalAlignment="Right" Width="360" local:Elevation.Level="Surface"
+                    CornerRadius="{StaticResource JevRadiusPanel}" Background="{ThemeResource JevSurface1Brush}" BorderBrush="{ThemeResource JevBorderSubtleBrush}"
+                    BorderThickness="1" KeyDown="OnSidePanelKeyDown">
+                <Grid RowSpacing="{StaticResource JevSpace4}">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <Grid Padding="{StaticResource JevInsetSidebarHead}" ColumnSpacing="{StaticResource JevSpace8}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="SidePanelTitle" FontSize="15" FontWeight="SemiBold" TextWrapping="Wrap" VerticalAlignment="Center"
+                                   AutomationProperties.HeadingLevel="Level1"/>
+                        <Button x:Name="SidePanelClose" Grid.Column="1" Content="&#xE711;" FontFamily="Segoe MDL2 Assets" Click="OnSidePanelClose"
+                                Style="{StaticResource JevToolButton}" AutomationProperties.Name="Close panel" ToolTipService.ToolTip="Close (Esc)"/>
+                    </Grid>
+                    <ScrollViewer x:Name="SidePanelBody" Grid.Row="1" Padding="{StaticResource JevInsetSidebarFoot}" HorizontalScrollBarVisibility="Disabled" HorizontalScrollMode="Disabled"/>
+                </Grid>
+            </Border>
             <Border local:Elevation.Level="Surface" x:Name="PageSurface" Grid.Row="1" CornerRadius="{StaticResource JevRadiusPanel}" BorderBrush="{ThemeResource JevBorderSubtleBrush}" BorderThickness="1" Background="{ThemeResource JevBackdropBrush}">
                 <Grid>
                     <Grid x:Name="WebHost" CornerRadius="{StaticResource JevRadiusPanel}">

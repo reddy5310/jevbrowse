@@ -150,23 +150,26 @@ try {
     $wb = $win.Current.BoundingRectangle
     for ($k = 0; $k -lt 20 -and ([double]::IsInfinity($wb.Width) -or [double]::IsInfinity($wb.Left)); $k++) { Start-Sleep -Milliseconds 500; $wb = $win.Current.BoundingRectangle }
     if ([double]::IsInfinity($wb.Width) -or [double]::IsInfinity($wb.Left)) { throw 'the window never reported a rectangle, so layout could not be checked' }
-    foreach ($e in $all) {
-        $r = $e.rect
-        if ($e.name -in @('Minimize', 'Maximize', 'Close')) { continue }
-        $label = if ($e.id) { $e.id } else { "$($e.type) '$($e.name)'" }
-        # UI Automation reports an empty rectangle as infinite: it has no drawn bounds, which is itself the defect.
-        if ([double]::IsInfinity($r.Width) -or [double]::IsInfinity($r.Left) -or [double]::IsNaN($r.Width)) { $failures.Add("NO BOUNDS: $label reports no drawn rectangle"); continue }
-        if ($r.Width -lt 8 -or $r.Height -lt 8) { $failures.Add("SQUEEZED: $label is $([int]$r.Width)x$([int]$r.Height)"); continue }
-        if ([double]::IsInfinity($r.Right) -or [double]::IsInfinity($r.Bottom)) { $failures.Add("NO BOUNDS: $label reports no drawn rectangle"); continue }
-        if ($r.Left -lt $wb.Left - 1 -or $r.Top -lt $wb.Top - 1 -or $r.Right -gt $wb.Right + 1 -or $r.Bottom -gt $wb.Bottom + 1) {
-            $failures.Add("CLIPPED: $label spans x=$([int]$r.Left)..$([int]$r.Right) but the window is x=$([int]$wb.Left)..$([int]$wb.Right)")
+    function Test-Layout($controls, [string]$prefix) {
+        foreach ($e in $controls) {
+            $r = $e.rect
+            if ($e.name -in @('Minimize', 'Maximize', 'Close')) { continue }
+            $label = if ($e.id) { $e.id } else { "$($e.type) '$($e.name)'" }
+            # UI Automation reports an empty rectangle as infinite: it has no drawn bounds, which is itself the defect.
+            if ([double]::IsInfinity($r.Width) -or [double]::IsInfinity($r.Left) -or [double]::IsNaN($r.Width)) { $failures.Add("${prefix}NO BOUNDS: $label reports no drawn rectangle"); continue }
+            if ($r.Width -lt 8 -or $r.Height -lt 8) { $failures.Add("${prefix}SQUEEZED: $label is $([int]$r.Width)x$([int]$r.Height)"); continue }
+            if ([double]::IsInfinity($r.Right) -or [double]::IsInfinity($r.Bottom)) { $failures.Add("${prefix}NO BOUNDS: $label reports no drawn rectangle"); continue }
+            if ($r.Left -lt $wb.Left - 1 -or $r.Top -lt $wb.Top - 1 -or $r.Right -gt $wb.Right + 1 -or $r.Bottom -gt $wb.Bottom + 1) {
+                $failures.Add("${prefix}CLIPPED: $label spans x=$([int]$r.Left)..$([int]$r.Right) but the window is x=$([int]$wb.Left)..$([int]$wb.Right)")
+            }
         }
     }
+    Test-Layout $all ''
 
-    # The toggle names what the next press does; the palette and help buttons live in the sidebar, so with it hidden they are
-    # reached by Ctrl+K and F1 (a finding recorded in docs/EVIDENCE_MATRIX.md, not something this list can pretend away).
+    # The toggle names what the next press does. Palette and help are also in the toolbar's More menu, so they stay on screen with the sidebar hidden.
     $required = @('Back', 'Forward', 'Reload', $(if ($Sidebar -eq 'hidden') { 'Show sidebar' } else { 'Hide sidebar' }), 'Press to change how this site is treated',
-                  'Shield: blocked requests and site repair', 'Explain why this tab is awake or asleep', 'Receipt: what this site did', 'This tab menu', 'Tools menu')
+                  'Shield: blocked requests and site repair', 'Explain why this tab is awake or asleep', 'Receipt: what this site did', 'This tab menu', 'Tools menu',
+                  'More: command palette and help')
     if ($Sidebar -eq 'open') { $required += @('Command palette', 'Help and welcome') }
     $have = @($all | ForEach-Object { $_.name })
     foreach ($r in $required) {
@@ -206,6 +209,66 @@ try {
         }
     }
 
+    # ---- side panel: real keys, and the focus rules a keyboard user depends on ----
+    function Find-ByName($name) { $win.FindFirst($Scope::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, $name))) }
+    function Panel-Open { $c = Find-ByName 'Close panel'; return ($null -ne $c -and -not $c.Current.IsOffscreen) }
+    $panelStatus = 'not started'; $panelProven = $false
+    # One pass per panel: Enter on its button opens it, focus moves in, Tab can leave, Esc closes and focus returns to the
+    # button, the close button does the same, and the layout rules hold while it is open.
+    function Test-Panel([string]$button) {
+        $short = $button.Split(':')[0].Split(' ')[0]
+        (Find-ByName $button).SetFocus(); Start-Sleep -Milliseconds 500
+        [System.Windows.Forms.SendKeys]::SendWait('{ENTER}'); Start-Sleep -Milliseconds 1200
+        if (-not (Panel-Open)) { $failures.Add("PANEL ${short}: Enter on the button did not open the panel"); return }
+        if (-not (Find-ByName 'Close panel').Current.HasKeyboardFocus) { $failures.Add("PANEL ${short}: opening did not move keyboard focus into the panel") }
+        Test-Layout @(Interactive) "panel $short open: "
+        # Not a trap: Tab has to keep moving focus. Stuck on one element for three presses in a row is the symptom.
+        $last = ''; $stuck = 0
+        for ($i = 0; $i -lt 8; $i++) {
+            [System.Windows.Forms.SendKeys]::SendWait('{TAB}'); Start-Sleep -Milliseconds 300
+            $f = $AE::FocusedElement
+            if ($f.Current.ProcessId -ne $proc.Id) { break }
+            $id = "$($f.Current.AutomationId)|$($f.Current.Name)|$($f.Current.ControlType.Id)"
+            if ($id -eq $last) { $stuck++ } else { $stuck = 0 }
+            $last = $id
+            if ($stuck -ge 2) { $failures.Add("PANEL ${short}: Tab stopped moving focus (keyboard trap) at '$($f.Current.Name)'"); break }
+        }
+        (Find-ByName 'Close panel').SetFocus(); Start-Sleep -Milliseconds 400
+        [System.Windows.Forms.SendKeys]::SendWait('{ESC}'); Start-Sleep -Milliseconds 900
+        if (Panel-Open) { $failures.Add("PANEL ${short}: Escape did not close the panel") }
+        elseif ($AE::FocusedElement.Current.Name -ne $button) { $failures.Add("PANEL ${short}: after Escape focus is on '$($AE::FocusedElement.Current.Name)', not on the button that opened it") }
+        [System.Windows.Forms.SendKeys]::SendWait('{ENTER}'); Start-Sleep -Milliseconds 1000
+        if (-not (Panel-Open)) { $failures.Add("PANEL ${short}: reopening from its button failed"); return }
+        (Find-ByName 'Close panel').SetFocus(); Start-Sleep -Milliseconds 300
+        [System.Windows.Forms.SendKeys]::SendWait('{ENTER}'); Start-Sleep -Milliseconds 900
+        if (Panel-Open) { $failures.Add("PANEL ${short}: the close button did not close the panel") }
+        elseif ($AE::FocusedElement.Current.Name -ne $button) { $failures.Add("PANEL ${short}: after the close button focus is on '$($AE::FocusedElement.Current.Name)', not on its button") }
+    }
+    # The palette and help must be reachable from the toolbar with the sidebar hidden: open More, find both items, Esc.
+    function Test-More {
+        $name = 'More: command palette and help'
+        (Find-ByName $name).SetFocus(); Start-Sleep -Milliseconds 400
+        [System.Windows.Forms.SendKeys]::SendWait('{ENTER}'); Start-Sleep -Milliseconds 900
+        foreach ($item in 'Command palette', 'Help and welcome') {
+            $m = $win.FindFirst($Scope::Descendants, (New-Object System.Windows.Automation.AndCondition(
+                    (New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, $item)),
+                    (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::MenuItem)))))
+            if (-not $m) { $failures.Add("MORE: the menu has no '$item' item") }
+        }
+        [System.Windows.Forms.SendKeys]::SendWait('{ESC}'); Start-Sleep -Milliseconds 700
+        if ($AE::FocusedElement.Current.Name -ne $name) { $failures.Add("MORE: after Escape focus is on '$($AE::FocusedElement.Current.Name)', not on the More button") }
+    }
+    if (-not (Ensure-Foreground)) { $panelStatus = 'INCONCLUSIVE: the app could not be brought to the front, so no key was sent' }
+    else {
+        $before = $failures.Count
+        foreach ($b in 'Shield: blocked requests and site repair', 'Explain why this tab is awake or asleep', 'Receipt: what this site did') {
+            if (-not (Ensure-Foreground)) { $panelStatus = 'INCONCLUSIVE: the OS moved the foreground away mid-check'; break }
+            Test-Panel $b
+        }
+        if ($panelStatus -eq 'not started' -and (Ensure-Foreground)) { Test-More }
+        if ($panelStatus -eq 'not started') { if ($failures.Count -eq $before) { $panelProven = $true; $panelStatus = 'complete' } else { $panelStatus = 'FAILED' } }
+    }
+
     function Shot($name) {
         $b = $win.Current.BoundingRectangle
         $bm = New-Object System.Drawing.Bitmap ([int]$b.Width), ([int]$b.Height)
@@ -234,7 +297,7 @@ try {
     $captureNote = 'saved'
     if (Ensure-Foreground) { Shot "$Theme-main-final" } else { $captureNote = 'skipped: the app was not in front, and a capture would show whatever is on screen there' }
 
-    $verdict = if ($failures.Count -gt 0) { 'FAIL' } elseif (-not $cycleComplete) { 'INCONCLUSIVE' } else { 'PASS' }
+    $verdict = if ($failures.Count -gt 0) { 'FAIL' } elseif (-not $cycleComplete -or -not $panelProven) { 'INCONCLUSIVE' } else { 'PASS' }
     $script:exitCode = switch ($verdict) { 'PASS' { 0 } 'FAIL' { 1 } default { 2 } }
     $report = [ordered]@{
         verdict = $verdict
@@ -242,6 +305,7 @@ try {
         runDirectory = $Out
         interactiveControls = $all.Count
         tabTraversal = $tabStatus
+        panelCheck = $panelStatus
         finalCapture = $captureNote
         tabOrder = $reached
         failures = $failures

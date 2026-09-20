@@ -249,6 +249,40 @@ public class DesignTokenTests
     }
 
     [Fact]
+    public void The_side_panel_is_reachable_and_named_for_keyboard_and_screen_reader_users()
+    {
+        var xaml = File.ReadAllText(Path.Combine(Src(), "MainWindow.xaml"));
+        // Declared before the page so Tab reaches it straight after the toolbar, not after a whole web page.
+        Assert.True(xaml.IndexOf("x:Name=\"SidePanel\"", StringComparison.Ordinal) is var panel and > 0 && panel < xaml.IndexOf("x:Name=\"PageSurface\"", StringComparison.Ordinal),
+            "SidePanel must come before PageSurface in the markup: markup order is Tab order.");
+        Assert.Matches(@"x:Name=""SidePanelClose""[^>]*AutomationProperties\.Name=""Close panel""", xaml);
+        Assert.Matches(@"x:Name=""SidePanel""[^>]*KeyDown=""OnSidePanelKeyDown""", xaml);   // Esc
+    }
+
+    [Fact]
+    public void Palette_and_help_stay_in_the_toolbar_when_the_sidebar_is_hidden()
+    {
+        var xaml = File.ReadAllText(Path.Combine(Src(), "MainWindow.xaml"));
+        var toolbar = xaml[xaml.IndexOf("x:Name=\"Toolbar\"", StringComparison.Ordinal)..xaml.IndexOf("x:Name=\"SidePanel\"", StringComparison.Ordinal)];
+        Assert.Contains("x:Name=\"MoreButton\"", toolbar);
+        Assert.Contains("OnPalette", toolbar);
+        Assert.Contains("OnHelp", toolbar);
+        // Shield, Explain and Receipt are buttons in the toolbar, not items inside a menu.
+        foreach (var name in new[] { "ShieldButton", "ExplainButton", "ReceiptButton" }) Assert.Contains($"<Button x:Name=\"{name}\"", toolbar);
+    }
+
+    [Fact]
+    public void Decisions_stay_dialogs_and_reading_moves_to_the_panel()
+    {
+        var code = File.ReadAllText(Path.Combine(Src(), "MainWindow.xaml.cs")) + File.ReadAllText(Path.Combine(Src(), "MainWindow.Alpha.cs"));
+        foreach (var handler in new[] { "OnShield", "OnExplain", "OnReceipt" })
+            Assert.Matches($@"void {handler}\(object s, RoutedEventArgs e\) => OpenPanel\(", code);
+        // A permission request must still block until answered: that is what makes ignoring it safe.
+        Assert.Contains("PermissionDialogButton", code);
+        Assert.Matches(@"Clear Browser Memory\?", code);
+    }
+
+    [Fact]
     public void Every_token_the_window_refers_to_exists()
     {
         var defined = AppResources().Descendants().Select(e => (string?)e.Attribute(X + "Key")).Where(k => k is not null).ToHashSet();
