@@ -19,11 +19,23 @@ public sealed class WrapPanel : Panel
 
     private static void OnChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) { if (d is WrapPanel p) { p.InvalidateMeasure(); p.InvalidateArrange(); } }
 
+    // A panel that lays children out by hand has to hear when one appears or goes away, or a child that starts Collapsed is never measured
+    // again after it is shown. Each child is watched the first time the panel sees it (collapsed or not).
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<UIElement, object> _watched = new();
+
+    private void Watch(UIElement child)
+    {
+        if (_watched.TryGetValue(child, out _)) return;
+        _watched.Add(child, new object());
+        child.RegisterPropertyChangedCallback(UIElement.VisibilityProperty, (_, _) => { InvalidateMeasure(); InvalidateArrange(); });
+    }
+
     protected override Size MeasureOverride(Size available)
     {
         double x = 0, y = 0, rowHeight = 0, widest = 0;
         foreach (var child in Children)
         {
+            Watch(child);
             if (child.Visibility == Visibility.Collapsed) continue;
             child.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
             var s = child.DesiredSize;

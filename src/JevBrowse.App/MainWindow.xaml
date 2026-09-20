@@ -155,6 +155,11 @@
                 <!-- The trust and tab controls travel as ONE group. Wide: right of the address bar. Narrow: a second row, so
                      Explain and Receipt stay directly reachable instead of disappearing into an overflow menu. -->
                 <local:WrapPanel x:Name="TrustBar" Grid.Column="5" Spacing="{StaticResource JevSpace6}" LineSpacing="{StaticResource JevSpace6}">
+                    <!-- Shown only while an agent session is running: what is happening, and a Stop that needs no dialog (stopping is the safe direction). -->
+                    <StackPanel x:Name="AgentGroup" Orientation="Horizontal" Spacing="{StaticResource JevSpace4}" Visibility="Collapsed">
+                        <Button x:Name="AgentBadge" Click="OnAgentActivity" Style="{StaticResource JevToolButton}" BorderBrush="{ThemeResource JevAccentSolidBrush}" BorderThickness="1"/>
+                        <Button x:Name="AgentStopButton" Content="Stop" Click="OnStopAgents" Style="{StaticResource JevToolButton}"/>
+                    </StackPanel>
                     <Button x:Name="ShieldButton" Content="Shield" Click="OnShield" Style="{StaticResource JevToolButton}"
                             ToolTipService.ToolTip="What was blocked on this page, and a fix if the site is not working" AutomationProperties.Name="Shield: blocked requests and site repair"/>
                     <Button x:Name="ExplainButton" Content="Explain" Click="OnExplain" Style="{StaticResource JevToolButton}"

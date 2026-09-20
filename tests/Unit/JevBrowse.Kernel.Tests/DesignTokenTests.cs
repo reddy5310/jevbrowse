@@ -283,6 +283,22 @@ public class DesignTokenTests
     }
 
     [Fact]
+    public void The_agent_indicator_and_its_stop_are_in_the_toolbars_wrapping_bar_so_they_stay_reachable_at_any_width()
+    {
+        var xaml = File.ReadAllText(Path.Combine(Src(), "MainWindow.xaml"));
+        var barStart = xaml.IndexOf("<local:WrapPanel x:Name=\"TrustBar\"", StringComparison.Ordinal);
+        var bar = xaml[barStart..xaml.IndexOf("</local:WrapPanel>", barStart, StringComparison.Ordinal)];
+        Assert.Contains("x:Name=\"AgentGroup\"", bar);
+        Assert.Matches("x:Name=\"AgentBadge\"[^>]*Click=\"OnAgentActivity\"", bar);
+        Assert.Matches("x:Name=\"AgentStopButton\"[^>]*Click=\"OnStopAgents\"", bar);
+        // Hidden until a session runs (Collapsed also removes it from the tab order), and a plain button: Stop asks nothing first.
+        Assert.Matches("x:Name=\"AgentGroup\"[^>]*Visibility=\"Collapsed\"", bar);
+        var code = File.ReadAllText(Path.Combine(Src(), "MainWindow.Agents.cs"));
+        var stop = code[code.IndexOf("async void OnStopAgents", StringComparison.Ordinal)..];
+        Assert.DoesNotContain("ContentDialog", stop[..Math.Min(stop.Length, 700)]);   // the handler is short; nothing in it asks first
+    }
+
+    [Fact]
     public void Every_token_the_window_refers_to_exists()
     {
         var defined = AppResources().Descendants().Select(e => (string?)e.Attribute(X + "Key")).Where(k => k is not null).ToHashSet();

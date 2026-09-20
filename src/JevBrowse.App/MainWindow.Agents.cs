@@ -14,6 +14,39 @@ public sealed partial class MainWindow
 {
     private void OnAgentActivity(object s, RoutedEventArgs e) => OpenPanel("agents", BuildAgentActivity, MoreButton, live: false);
 
+    /// <summary>
+    /// "An agent is working" is a fact about the browser the person is using, so it is on the toolbar, not only inside a panel. It shows
+    /// while any session is running, names the agent, opens the activity panel, and has a Stop beside it that stops every running agent
+    /// in one press. Event-driven: the gateway says when a session opens or ends.
+    /// </summary>
+    private void UpdateAgentIndicator()
+    {
+        var running = (_agentHost?.Sessions ?? []).Where(x => !x.Closed && !x.CleanedUp).ToList();
+        AgentGroup.Visibility = running.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        if (running.Count > 0)
+        {
+            var names = string.Join(", ", running.Select(x => x.Manifest.Agent).Distinct());
+            AgentBadge.Content = running.Count == 1 ? $"● {names} working" : $"● {running.Count} agents working";
+            AutomationProperties.SetName(AgentBadge, running.Count == 1 ? $"Agent activity: {names} is working. Open what it is doing." : $"Agent activity: {running.Count} agents are working ({names}). Open what they are doing.");
+            ToolTipService.SetToolTip(AgentBadge, "An agent is acting in the background, in pages of its own. Click to see what it is doing.");
+            AutomationProperties.SetName(AgentStopButton, running.Count == 1 ? $"Stop {names} now" : "Stop all agents now");
+            ToolTipService.SetToolTip(AgentStopButton, "Stop every running agent now and close its pages");
+        }
+        LayoutToolbar();
+    }
+
+    private async void OnStopAgents(object s, RoutedEventArgs e)
+    {
+        if (_agentHost is null) { UpdateAgentIndicator(); return; }
+        AgentStopButton.IsEnabled = false;
+        try
+        {
+            var n = await _agentHost.StopAllAsync();
+            StatusText.Text = n == 1 ? "stopped 1 agent session" : $"stopped {n} agent sessions";
+        }
+        finally { AgentStopButton.IsEnabled = true; UpdateAgentIndicator(); if (PanelOpen && _panelId == "agents") RefreshPanel(force: true); }
+    }
+
     private IReadOnlyList<AgentSessionFacts> AgentFacts() =>
         (_agentHost?.Sessions ?? []).Select(ses =>
         {

@@ -102,6 +102,12 @@ public sealed partial class AgentGateway : IAgentGateway
     /// only: it is never looked up, so an agent cannot name its way into the user's Personal or Work identity, and
     /// two agent sessions never share cookies. (Callers should clamp the manifest with AgentCeiling first.)
     /// </summary>
+    /// <summary>
+    /// Raised when a session opens or ends (stopped, expired, released), from whatever thread that happened on. The shell uses it to show
+    /// that an agent is working, so there is no polling timer and nothing runs while nothing changes.
+    /// </summary>
+    public event Action? SessionsChanged;
+
     public Task<AgentSession> OpenAsync(AgentManifest m, CancellationToken ct)
     {
         var container = AgentCeiling.GrantableContainers.Contains(m.Container) ? m.Container : IdentityContainer.Disposable;
@@ -110,6 +116,7 @@ public sealed partial class AgentGateway : IAgentGateway
         var now = _clock();
         var s = new AgentSession { Manifest = m, OpenedAt = now, ExpiresAt = now.AddMinutes(m.SessionMinutes), WorkspaceId = ws.Id };
         Record(s, "open", m.Agent, true, $"workspace '{ws.Name}' ({ws.Container}), {m.Actions.Count} actions, {m.AllowDomains.Count} domains, {m.MaxLivePages} live pages, {m.SessionMinutes} min");
+        SessionsChanged?.Invoke();
         return Task.FromResult(s);
     }
 
@@ -323,6 +330,7 @@ public sealed partial class AgentGateway : IAgentGateway
         Record(s, "close", s.Manifest.Agent, s.CleanedUp,
             s.CleanedUp ? $"{s.ActionsUsed} actions, {s.Pages.Count} pages, all renderers released"
                         : $"{stuck.Count} page(s) could not be released; retrying on the next sweep");
+        SessionsChanged?.Invoke();
     }
 
     /// <summary>User-initiated revocation. Same path as expiry; the UI reports "Stopped" only when this reports true.</summary>

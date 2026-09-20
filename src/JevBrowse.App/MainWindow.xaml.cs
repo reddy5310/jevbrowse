@@ -191,6 +191,7 @@ public sealed partial class MainWindow : Window
         AgentGateway.AgentGateway.RemoveLegacyScreenshotFiles(Path.Combine(DataDir, "agents", "screenshots"));   // pictures are memory-only now
         _agents = new AgentGateway.AgentGateway(_kernel, _leases, Path.Combine(DataDir, "agents", "screenshots"), ConfirmAgentActionAsync,
             (s, e) => File.AppendAllText(Path.Combine(auditDir, s.Id + ".jsonl"), JsonSerializer.Serialize(new { e.At, s.Manifest.Agent, e.Action, e.Target, e.Allowed, e.Reason }) + "\n"));
+        _agents.SessionsChanged += () => DispatcherQueue.TryEnqueue(UpdateAgentIndicator);
 
         // Browser Memory: indexes only what Trust OS allows (PUBLIC by default); 200 MB budget.
         _memory = new BrowserMemory(_db);
@@ -354,7 +355,7 @@ public sealed partial class MainWindow : Window
             });
         }
 
-        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--private-session-check") || args.Contains("--agent-check") || args.Contains("--agent-window-check") || args.Contains("--agent-screenshot-stage-check") || args.Contains("--agent-frame-secret-check") || args.Contains("--agent-show-during-capture-check") || args.Contains("--media-check") || args.Contains("--site-sweep") || args.Any(a => a.StartsWith("--join=", StringComparison.Ordinal)))
+        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--private-session-check") || args.Contains("--agent-check") || args.Contains("--agent-window-check") || args.Contains("--agent-screenshot-stage-check") || args.Contains("--agent-frame-secret-check") || args.Contains("--agent-show-during-capture-check") || args.Contains("--agent-indicator-check") || args.Contains("--media-check") || args.Contains("--site-sweep") || args.Any(a => a.StartsWith("--join=", StringComparison.Ordinal)))
         {
             Directory.CreateDirectory(Path.Combine(DataDir, "benchmarks"));
             try
@@ -368,6 +369,7 @@ public sealed partial class MainWindow : Window
                 else if (args.Contains("--agent-screenshot-stage-check")) await RunAgentScreenshotStageCheckAsync();
                 else if (args.Contains("--agent-frame-secret-check")) await RunAgentFrameSecretCheckAsync();
                 else if (args.Contains("--agent-show-during-capture-check")) await RunAgentShowDuringCaptureCheckAsync();
+                else if (args.Contains("--agent-indicator-check")) await RunAgentIndicatorCheckAsync();
                 else if (args.Contains("--privacy-check")) await RunPrivacyCheckAsync();
                 else if (args.Contains("--memory-lab")) await RunMemoryLabAsync();
                 else if (args.Contains("--restore-bench")) await RunRestoreBenchAsync();
@@ -972,6 +974,7 @@ public sealed partial class MainWindow : Window
         else if (!toggle.IsOn && running)
         {
             _agentHost!.Dispose(); _agentHost = null;
+            UpdateAgentIndicator();
             StatusText.Text = "agent endpoint stopped";
         }
     }
@@ -1664,6 +1667,56 @@ public sealed partial class MainWindow : Window
         await host.StopAsync(session);
         var result = new { pass = rows.All(r => r.ok), rows };
         await File.WriteAllTextAsync(Path.Combine(dir, "show-during-capture.json"), JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    /// <summary>
+    /// The agent-running indicator and its Stop, on the real app: absent with no agent; present, named and opening the activity panel while
+    /// one runs; and one press of Stop (invoked the way a screen reader or keyboard would) ends the session, releases its pages and removes
+    /// the indicator, with no dialog in between.
+    /// </summary>
+    private async Task RunAgentIndicatorCheckAsync()
+    {
+        var k = _kernel!;
+        var dir = Path.Combine(DataDir, "benchmarks"); Directory.CreateDirectory(dir);
+        var mine = k.Open(new Uri("https://example.com/"));
+        await k.ActivateAsync(mine.Id);
+        await Task.Delay(3500);
+        var hiddenAtStart = AgentGroup.Visibility == Visibility.Collapsed;
+        var ceiling = new AgentCeiling { Limits = new AgentManifest { Agent = "ceiling", AllowDomains = ["example.org"], Actions = [AgentAction.Navigate, AgentAction.Read], SessionMinutes = 10, MaxLivePages = 2, MaxActions = 100 } };
+        _agentHost = new LocalAgentHost(_agents!, ceiling);
+        var (session, _) = await _agentHost.GrantAsync(new AgentManifest { Agent = "indicator-probe", AllowDomains = ["example.org"], Actions = [AgentAction.Navigate, AgentAction.Read], SessionMinutes = 10, MaxLivePages = 2 });
+        await _agents!.ExecuteAsync(session, new AgentRequest(AgentAction.Navigate, "https://example.org/"), default);
+        await Task.Delay(1500);
+        var shown = AgentGroup.Visibility == Visibility.Visible;
+        var text = AgentBadge.Content?.ToString() ?? "";
+        var badgeName = Microsoft.UI.Xaml.Automation.AutomationProperties.GetName(AgentBadge);
+        var stopName = Microsoft.UI.Xaml.Automation.AutomationProperties.GetName(AgentStopButton);
+        // Reachable at the width the window has now: the group sits inside the wrapping bar, so it is measured with it.
+        Toolbar.UpdateLayout();                                   // a window nobody is looking at may not have run a layout pass yet
+        var debugWhileRunning = $"group vis={AgentGroup.Visibility} desired={AgentGroup.DesiredSize.Width}x{AgentGroup.DesiredSize.Height} render={AgentGroup.RenderSize.Width}x{AgentGroup.RenderSize.Height} badge vis={AgentBadge.Visibility} desired={AgentBadge.DesiredSize.Width} content='{AgentBadge.Content}' parent={AgentGroup.Parent?.GetType().Name} trustDesired={TrustBar.DesiredSize.Width}x{TrustBar.DesiredSize.Height} row={Grid.GetRow(TrustBar)} col={Grid.GetColumn(TrustBar)} span={Grid.GetColumnSpan(TrustBar)} shieldW={ShieldButton.ActualWidth} shieldVis={ShieldButton.Visibility}";
+        var badgeW = AgentBadge.ActualWidth; var stopW = AgentStopButton.ActualWidth; var groupW = AgentGroup.ActualWidth; var barW = TrustBar.ActualWidth;
+        var reachable = badgeW > 8 && stopW > 8 && AgentBadge.IsTabStop && AgentStopButton.IsTabStop;
+
+        new Microsoft.UI.Xaml.Automation.Peers.ButtonAutomationPeer(AgentBadge).Invoke();     // opens what it is doing
+        await Task.Delay(800);
+        var opensPanel = PanelOpen && _panelId == "agents";
+
+        var pagesBefore = _agents.LiveAgentPages(session);
+        var dialogOpen = false;
+        new Microsoft.UI.Xaml.Automation.Peers.ButtonAutomationPeer(AgentStopButton).Invoke();  // one press, no confirmation
+        for (var i = 0; i < 40 && !session.CleanedUp; i++) await Task.Delay(250);
+        await Task.Delay(500);
+        var result = new
+        {
+            pass = hiddenAtStart && shown && text.Contains("indicator-probe") && badgeName.Contains("indicator-probe") && stopName.StartsWith("Stop") && reachable && opensPanel
+                   && session.CleanedUp && _agents.LiveAgentPages(session) == 0 && AgentGroup.Visibility == Visibility.Collapsed && !dialogOpen,
+            hiddenAtStart, shown, text, badgeName, stopName, reachable, opensPanel, livePagesBeforeStop = pagesBefore,
+            debug = debugWhileRunning,
+            badgeWidthWhileRunning = badgeW, stopWidthWhileRunning = stopW, groupWidthWhileRunning = groupW, trustBarWidthWhileRunning = barW, badgeTabStop = AgentBadge.IsTabStop, stopTabStop = AgentStopButton.IsTabStop, toolbarWidth = Toolbar.ActualWidth, trustBarWidth = TrustBar.ActualWidth,
+            sessionCleanedUp = session.CleanedUp, livePagesAfterStop = _agents.LiveAgentPages(session), indicatorHiddenAfterStop = AgentGroup.Visibility == Visibility.Collapsed,
+            statusLine = StatusText.Text,
+        };
+        await File.WriteAllTextAsync(Path.Combine(dir, "agent-indicator-check.json"), JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
     }
 
     /// <summary>
