@@ -669,43 +669,46 @@ public sealed partial class MainWindow : Window
     /// <summary>Set by unattended checks that load real sites: nobody is there to answer, and granting is not the point.</summary>
     private bool _autoDenyPermissions;
 
-    private async Task<PermissionAdapter.Choice> PromptPermissionAsync(string site, PermissionKind kind, string what)
+    private async Task<PermissionChoice> PromptPermissionAsync(string site, PermissionKind kind, string what)
     {
         try { File.AppendAllText(Path.Combine(DataDir, "benchmarks", "site-sweep.progress.log"), $"{DateTime.Now:HH:mm:ss}   PERMISSION PROMPT {kind} ({what}) from {site}\n"); } catch (Exception) { }
-        if (_autoAllowPermissions) return PermissionAdapter.Choice.AllowOnce;
-        if (_autoDenyPermissions) return PermissionAdapter.Choice.BlockOnce;
-        var tcs = new TaskCompletionSource<PermissionAdapter.Choice>();
+        if (_autoAllowPermissions) return PermissionChoice.AllowOnce;
+        if (_autoDenyPermissions) return PermissionChoice.BlockOnce;
+        var tcs = new TaskCompletionSource<PermissionChoice>();
         if (!DispatcherQueue.TryEnqueue(async () =>
         {
             try
             {
-                // Escape and the close button mean "not now", never "never". A permanent block is a decision, so it is
-                // an explicit tick box; before this, pressing Esc on a prompt blocked the site for good.
-                var remember = new CheckBox { Content = "Don't ask this site again", Margin = new Thickness(0, 8, 0, 0) };
+                // Three explicit outcomes. Escape and the close button return the same result from the dialog, so they
+                // must mean the same safe thing: refuse THIS request, remember nothing. A permanent block is its own
+                // button. Enter also lands on "Not now" (DefaultButton), so a stray keypress can never grant access.
+                var duration = new ComboBox { ItemsSource = new[] { "Just this time", "For 1 hour" }, SelectedIndex = 0, HorizontalAlignment = HorizontalAlignment.Stretch };
                 var dlg = new ContentDialog
                 {
                     Title = $"{site} wants to {what}",
                     Content = new StackPanel
                     {
-                        Spacing = 4,
+                        Spacing = 8,
                         Children =
                         {
-                            new TextBlock { Text = "Allow it for an hour, allow it just this time, or say no. Saying no only refuses this request; you will be asked again next time.", TextWrapping = TextWrapping.Wrap },
-                            remember,
+                            new TextBlock { Text = "Choose how long to allow it. \"Not now\" (or Esc) refuses only this request and you will be asked again next time. \"Block this site\" refuses it until you change your mind.", TextWrapping = TextWrapping.Wrap },
+                            duration,
                         },
                     },
-                    PrimaryButtonText = "Allow for 1 hour", SecondaryButtonText = "Allow once", CloseButtonText = "Don't allow", XamlRoot = Content.XamlRoot,
+                    PrimaryButtonText = "Allow", SecondaryButtonText = "Block this site", CloseButtonText = "Not now",
+                    DefaultButton = ContentDialogButton.Close, XamlRoot = Content.XamlRoot,
                 };
                 var r = await dlg.ShowSerializedAsync();
-                tcs.TrySetResult(r switch
+                var pressed = r switch
                 {
-                    ContentDialogResult.Primary => PermissionAdapter.Choice.AllowForHour,
-                    ContentDialogResult.Secondary => PermissionAdapter.Choice.AllowOnce,
-                    _ => remember.IsChecked == true ? PermissionAdapter.Choice.Block : PermissionAdapter.Choice.BlockOnce,
-                });
+                    ContentDialogResult.Primary => PermissionDialogButton.Allow,
+                    ContentDialogResult.Secondary => PermissionDialogButton.Block,
+                    _ => PermissionDialogButton.Dismissed,
+                };
+                tcs.TrySetResult(PermissionChoices.FromDialog(pressed, allowForAnHour: duration.SelectedIndex == 1));
             }
-            catch (Exception) { tcs.TrySetResult(PermissionAdapter.Choice.BlockOnce); }   // could not ask: deny this request
-        })) tcs.TrySetResult(PermissionAdapter.Choice.BlockOnce);                          // dispatcher gone: same
+            catch (Exception) { tcs.TrySetResult(PermissionChoice.BlockOnce); }   // could not ask: deny this request
+        })) tcs.TrySetResult(PermissionChoice.BlockOnce);                          // dispatcher gone: same
         return await tcs.Task;
     }
 

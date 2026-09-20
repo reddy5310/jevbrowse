@@ -61,14 +61,14 @@ public sealed partial class MainWindow
             kernel.Open(new Uri("jev://private-probe/virtual"));
             checks["probeMediaProtectedBeforeEnd"] = first.Protection.HasLiveMedia();
 
-            var answer = new TaskCompletionSource<PermissionAdapter.Choice>();
+            var answer = new TaskCompletionSource<PermissionChoice>();
             var permissions = new PermissionAdapter(new SitePermissionsRepository(_db!), (_, _, _) => answer.Task);
             permissions.Block(IdentityContainer.Private, session, new Uri("https://private-session.test"), PermissionKind.Geolocation);
             var pending = permissions.DecideAsync(IdentityContainer.Private, session, new Uri("https://private-session.test"), PermissionKind.Camera);
             checks["permissionAnswerWasPending"] = !pending.IsCompleted;
             permissions.EndSession(IdentityContainer.Private, session);
             var closedAndDeleted = await EndPrivateSessionCoreAsync(session);
-            answer.SetResult(PermissionAdapter.Choice.AllowAlways);
+            answer.SetResult(PermissionChoice.AllowAlways);
             checks["latePermissionAnswerDeniedAndForgotten"] = await pending == PermissionVerdict.Deny && permissions.SessionGrantCount(IdentityContainer.Private, session) == 0;
             checks["privateRenderersClosed"] = !leases.TryGet(first.Id, out _) && !leases.TryGet(second.Id, out _);
             checks["privateProfileDeleted"] = closedAndDeleted;
@@ -86,6 +86,22 @@ public sealed partial class MainWindow
             checks["freshSessionCleanupComplete"] = await EndPrivateSessionCoreAsync(freshSession);
             await kernel.CloseAsync(normal.Id);
             checks["allProbeRenderersClosed"] = leases.LiveResources.Count == 0;
+
+            // The real adapter and a real database, no renderer needed: what a remembered permission covers.
+            var asked = 0;
+            var granting = new PermissionAdapter(new SitePermissionsRepository(_db!),
+                (_, _, _) => { asked++; return Task.FromResult(PermissionChoice.AllowForHour); });
+            var permOrigin = new Uri("https://permission-probe.test");
+            Task<PermissionVerdict> Ask(PermissionKind k) => granting.DecideAsync(IdentityContainer.Personal, ContextId.Default, permOrigin, k);
+
+            await Ask(PermissionKind.AutomaticDownloads);
+            await Ask(PermissionKind.AutomaticDownloads);
+            checks["permissionGrantIsRememberedForItsOwnKind"] = asked == 1;
+            await Ask(PermissionKind.FileAccess);
+            checks["aDifferentPermissionFromTheSameSiteIsAskedSeparately"] = asked == 2;
+            await Ask(PermissionKind.Other);
+            await Ask(PermissionKind.Other);
+            checks["aPermissionWeCannotNameIsNeverRemembered"] = asked == 4;
         }
         catch (Exception ex) { error = ex.ToString(); }
         finally { leases.LocalPage = originalPage; }

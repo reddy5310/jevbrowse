@@ -1,7 +1,15 @@
 namespace JevBrowse.TrustOS;
 
 /// <summary>Browser permission kinds JevBrowse gates (Table A.7).</summary>
-public enum PermissionKind { Geolocation, Camera, Microphone, Notifications, Clipboard, Midi, Sensors, Other }
+/// <remarks>
+/// Values are stored in the database as integers, so existing members keep their numbers and new ones are appended.
+/// <see cref="Other"/> (7) is only ever "a permission we could not name" and is never remembered.
+/// </remarks>
+public enum PermissionKind
+{
+    Geolocation, Camera, Microphone, Notifications, Clipboard, Midi, Sensors, Other,
+    AutomaticDownloads, FileAccess, LocalFonts, Autoplay, WindowManagement, MidiSystemExclusive,
+}
 
 public enum PermissionVerdict { Allow, Deny, Ask }
 
@@ -23,9 +31,17 @@ public sealed class PermissionPolicy
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
     }
 
+    /// <summary>
+    /// A grant is stored per kind, so it is only sound for a permission we can name exactly. Everything the engine
+    /// asks that we cannot name maps to <see cref="PermissionKind.Other"/>, and one remembered answer for "Other"
+    /// would cover every unrelated permission from that site. So it is asked every time and never stored.
+    /// </summary>
+    public static bool MayRemember(PermissionKind kind) => kind != PermissionKind.Other;
+
     public PermissionVerdict Decide(string site, PermissionKind kind)
     {
-        var g = _lookup(site, kind);
+        // Rows written before kinds were split may exist under Other; they are ignored, not honoured.
+        var g = MayRemember(kind) ? _lookup(site, kind) : null;
         if (g is not null && (g.ExpiresAt is null || g.ExpiresAt > _clock()))
             return g.Allowed ? PermissionVerdict.Allow : PermissionVerdict.Deny;
 
@@ -35,7 +51,7 @@ public sealed class PermissionPolicy
             PermissionKind.Geolocation => PermissionVerdict.Ask,
             PermissionKind.Camera or PermissionKind.Microphone => PermissionVerdict.Ask,
             PermissionKind.Clipboard => PermissionVerdict.Ask,
-            PermissionKind.Midi or PermissionKind.Sensors => PermissionVerdict.Deny,
+            PermissionKind.Midi or PermissionKind.MidiSystemExclusive or PermissionKind.Sensors => PermissionVerdict.Deny,
             _ => PermissionVerdict.Ask,
         };
     }

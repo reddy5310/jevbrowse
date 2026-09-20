@@ -17,17 +17,8 @@ namespace JevBrowse.App.Trust;
 /// </summary>
 public sealed class PermissionAdapter
 {
-    public enum Choice
-    {
-        AllowOnce, AllowForHour, AllowAlways,
-        /// <summary>Deny and remember: the site is blocked until the user says otherwise.</summary>
-        Block,
-        /// <summary>Deny this request and remember nothing. Used when we could not ask, and by unattended checks.</summary>
-        BlockOnce,
-    }
-
     private readonly SitePermissionsRepository _repo;
-    private readonly Func<string, PermissionKind, string, Task<Choice>> _prompt;
+    private readonly Func<string, PermissionKind, string, Task<PermissionChoice>> _prompt;
     private readonly Dictionary<(string Key, PermissionKind Kind), PermissionGrant> _memory = [];
     private readonly Func<DateTimeOffset> _clock;
     private readonly HashSet<(IdentityContainer Container, ContextId Isolation)> _ended = [];
@@ -41,7 +32,7 @@ public sealed class PermissionAdapter
             _memory.Remove(key);
     }
 
-    public PermissionAdapter(SitePermissionsRepository repo, Func<string, PermissionKind, string, Task<Choice>> prompt, Func<DateTimeOffset>? clock = null)
+    public PermissionAdapter(SitePermissionsRepository repo, Func<string, PermissionKind, string, Task<PermissionChoice>> prompt, Func<DateTimeOffset>? clock = null)
     {
         _repo = repo;
         _prompt = prompt;
@@ -102,62 +93,25 @@ public sealed class PermissionAdapter
         var verdict = PolicyFor(container).Decide(key, kind);
         if (verdict != PermissionVerdict.Ask) return verdict;
         var label = $"{origin.Scheme}://{origin.Host}{(origin.IsDefaultPort ? "" : ":" + origin.Port)} ({container})";
-        Choice choice;
+        PermissionChoice choice;
         try { choice = await _prompt(label, kind, what ?? Phrase(kind)); }
-        catch (Exception) { choice = Choice.BlockOnce; }
+        catch (Exception) { choice = PermissionChoice.BlockOnce; }
         if (_ended.Contains((container, isolation))) return PermissionVerdict.Deny;
         var now = _clock();
-        switch (choice)
+        // Only a permission we can name exactly may be remembered; an unnamed one is decided per request.
+        if (PermissionPolicy.MayRemember(kind))
         {
-            case Choice.AllowForHour: Store(container, key, kind, true, now.AddHours(1)); break;
-            case Choice.AllowAlways: Store(container, key, kind, true, null); break;
-            case Choice.Block: Store(container, key, kind, false, null); break;
+            switch (choice)
+            {
+                case PermissionChoice.AllowForHour: Store(container, key, kind, true, now.AddHours(1)); break;
+                case PermissionChoice.AllowAlways: Store(container, key, kind, true, null); break;
+                case PermissionChoice.Block: Store(container, key, kind, false, null); break;
+            }
         }
-        return choice is Choice.Block or Choice.BlockOnce ? PermissionVerdict.Deny : PermissionVerdict.Allow;
+        return choice is PermissionChoice.Block or PermissionChoice.BlockOnce ? PermissionVerdict.Deny : PermissionVerdict.Allow;
     }
 
-    /// <summary>
-    /// What the site is asking to do, in words a person would use. The prompt used to say "wants Other" for every
-    /// permission we do not model, which asks the user to consent to something we have not told them.
-    /// </summary>
-    internal static string Phrase(PermissionKind k) => k switch
-    {
-        PermissionKind.Geolocation => "see your location",
-        PermissionKind.Camera => "use your camera",
-        PermissionKind.Microphone => "use your microphone",
-        PermissionKind.Notifications => "show notifications",
-        PermissionKind.Clipboard => "read what you have copied",
-        PermissionKind.Midi => "use MIDI devices",
-        PermissionKind.Sensors => "use your device's motion sensors",
-        _ => "use a browser feature",
-    };
-
-    // Matched by name so an SDK that adds or renames a member degrades to the generic phrase instead of failing to build.
-    internal static string Phrase(CoreWebView2PermissionKind k) => k.ToString() switch
-    {
-        "MultipleAutomaticDownloads" => "download several files automatically",
-        "FileReadWrite" => "read and write files on your device",
-        "Autoplay" => "play media automatically",
-        "LocalFonts" => "see the fonts installed on your device",
-        "MidiSystemExclusiveMessages" => "control MIDI devices",
-        "WindowManagement" => "manage your windows and screens",
-        "ClipboardRead" => "read what you have copied",
-        "Notifications" => "show notifications",
-        "Geolocation" => "see your location",
-        "Camera" => "use your camera",
-        "Microphone" => "use your microphone",
-        "OtherSensors" => "use your device's motion sensors",
-        _ => "use a browser feature",
-    };
-
-    private static PermissionKind Map(CoreWebView2PermissionKind k) => k switch
-    {
-        CoreWebView2PermissionKind.Geolocation => PermissionKind.Geolocation,
-        CoreWebView2PermissionKind.Camera => PermissionKind.Camera,
-        CoreWebView2PermissionKind.Microphone => PermissionKind.Microphone,
-        CoreWebView2PermissionKind.Notifications => PermissionKind.Notifications,
-        CoreWebView2PermissionKind.ClipboardRead => PermissionKind.Clipboard,
-        CoreWebView2PermissionKind.OtherSensors => PermissionKind.Sensors,
-        _ => PermissionKind.Other,
-    };
+    internal static string Phrase(PermissionKind k) => PermissionKinds.Phrase(k);
+    internal static string Phrase(CoreWebView2PermissionKind k) => PermissionKinds.Phrase(Map(k));
+    private static PermissionKind Map(CoreWebView2PermissionKind k) => PermissionKinds.FromEngineName(k.ToString());
 }
