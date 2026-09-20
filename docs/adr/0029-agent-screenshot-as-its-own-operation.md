@@ -1,4 +1,4 @@
-# ADR 0029: Screenshot is its own operation, in memory, from a page that is not shown
+﻿# ADR 0029: Screenshot is its own operation, in memory, from a page that is not shown
 
 Status: accepted. Resolves the "Screenshot returns no image" gap recorded in ADR 0027.
 
@@ -60,7 +60,7 @@ directly.
   not isolated by a test.
 - Staging briefly makes a real window handle visible (off-canvas), so the page runs unthrottled for that moment (timers, animation), and
   is laid out at 1280x800, which may differ from its previous size. A concurrent "Show its page" during a capture is handled in code
-  (the kernel's wish is re-applied afterwards) but not exercised on the real engine.
+  (the kernel's wish is re-applied afterwards) and was exercised on the real engine at six click offsets (ADR 0030).
 - Pictures are only as private as the agent that receives them: an agent may send one anywhere. The controls are the grant, the
   budget, the page checks and the audit, not what happens after the bytes leave.
 
