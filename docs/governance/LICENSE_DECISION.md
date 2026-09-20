@@ -1,5 +1,7 @@
 # License decision (for the maintainer)
 
+**Decided 2026-09-20: MPL-2.0** (`LICENSE`, canonical text from mozilla.org) with `TRADEMARK.md` for the name and logo. The analysis below is kept for the record.
+
 Constraints from the architecture: open source; forks must remain legally possible; the JevBrowse name/logo are protected separately; community adoption matters; contributions should flow back.
 
 | Option | What it means for others | What it means for you | Fit |

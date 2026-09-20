@@ -32,6 +32,9 @@ Read `docs/PRODUCT_CONSTITUTION.md` first. It is the contract every change is me
 4. Architectural changes need an ADR in `docs/adr/` (next number).
 5. CI must be green, including the invariant gates.
 
+## License of contributions
+Inbound = outbound: by submitting a contribution you license it under MPL-2.0, the same terms as the project (MPL-2.0 §3.1 / §3.3). No CLA. Do not add third-party code under licenses incompatible with MPL-2.0 (GPL-only code cannot be mixed into MPL files; Apache-2.0 and MIT are fine and must keep their notices).
+
 ## Coding standards
 - .NET 10, nullable on, warnings are errors.
 - Match the surrounding style. Comments explain *why*, not *what*.

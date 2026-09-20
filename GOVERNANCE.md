@@ -14,7 +14,7 @@
 `docs/ROADMAP.md` lists items as **committed**, **exploring**, or **rejected with rationale**. Rejections stay listed.
 
 ## Name and logo
-The software license (see `LICENSE`) and the JevBrowse name/logo are separate. Forks are welcome and must not present themselves as official builds; see `TRADEMARK.md` once published.
+The software license (MPL-2.0, see `LICENSE`) and the JevBrowse name/logo are separate. Forks are welcome and must not present themselves as official builds; see `TRADEMARK.md`.
 
 ## Releases
 Reproducible from a tagged commit with `scripts/release.ps1`; every release publishes SHA-256 checksums and the SBOM produced by `dotnet` package listing. Telemetry: none.

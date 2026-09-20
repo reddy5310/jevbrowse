@@ -7,5 +7,10 @@
     <Deterministic>true</Deterministic>
     <!-- All build output stays inside the repo on D: -->
     <ArtifactsPath>$(MSBuildThisFileDirectory)artifacts</ArtifactsPath>
+    <!-- License applies to every project in the tree; the name/logo are covered separately by TRADEMARK.md. -->
+    <PackageLicenseExpression>MPL-2.0</PackageLicenseExpression>
+    <Authors>JevBrowse contributors</Authors>
+    <Copyright>Copyright (c) 2026 JevBrowse contributors. Licensed under MPL-2.0.</Copyright>
+    <RepositoryUrl>https://github.com/reddy5310/jevbrowse</RepositoryUrl>
   </PropertyGroup>
 </Project>

@@ -43,4 +43,5 @@ Optional AI: set `OPENROUTER_API_KEY` (and `OPENROUTER_MODEL`) or `JEV_API_KEY` 
 ## Project documents
 `docs/PRODUCT_CONSTITUTION.md` · `docs/adr/` · `docs/ROADMAP.md` · `CONTRIBUTING.md` · `SECURITY.md` · `GOVERNANCE.md` · `docs/SECURITY_REVIEW_ALPHA.md`
 
-License: to be announced before the public alpha (see `GOVERNANCE.md`).
+## License
+Code: [Mozilla Public License 2.0](LICENSE). Modify and redistribute freely; changes to MPL-covered files must be published under the same license; embedding in larger works, including proprietary ones, is permitted. Name and logo: [TRADEMARK.md](TRADEMARK.md), modified builds must be renamed.
