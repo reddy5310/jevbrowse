@@ -78,18 +78,22 @@
                     </ListView.ItemContainerStyle>
                     <ListView.ItemTemplate>
                         <DataTemplate x:DataType="local:TabItem">
-                            <Grid ColumnSpacing="10">
+                            <!-- The row announces title AND state: the coloured dot is the only visual carrier of
+                                 "sleeping" / "playing sound", and a dot announces nothing. IsAccessibilityView=Raw on
+                                 the inner text stops Narrator reading the same words again after the row name. -->
+                            <Grid ColumnSpacing="10" AutomationProperties.Name="{x:Bind AccessibleName, Mode=OneWay}">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto"/>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
-                                <Border Width="10" Height="10" CornerRadius="5" VerticalAlignment="Center" Background="{x:Bind StateBrush, Mode=OneWay}" Shadow="{StaticResource JevShadow}" Translation="0,0,8"/>
+                                <Border Width="10" Height="10" CornerRadius="5" VerticalAlignment="Center" Background="{x:Bind StateBrush, Mode=OneWay}" Shadow="{StaticResource JevShadow}" Translation="0,0,8" AutomationProperties.AccessibilityView="Raw"/>
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock Text="{x:Bind Title, Mode=OneWay}" TextTrimming="CharacterEllipsis" FontSize="13"/>
-                                    <TextBlock Text="{x:Bind Subtitle, Mode=OneWay}" TextTrimming="CharacterEllipsis" FontSize="11" Opacity="0.55"/>
+                                    <TextBlock Text="{x:Bind Title, Mode=OneWay}" TextTrimming="CharacterEllipsis" FontSize="13" AutomationProperties.AccessibilityView="Raw"/>
+                                    <TextBlock Text="{x:Bind Subtitle, Mode=OneWay}" TextTrimming="CharacterEllipsis" FontSize="11" Opacity="0.55" AutomationProperties.AccessibilityView="Raw"/>
                                 </StackPanel>
-                                <Button Grid.Column="2" Content="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="10" Padding="4" Background="Transparent" BorderThickness="0" Click="OnCloseTab" Tag="{x:Bind Id}"/>
+                                <Button Grid.Column="2" Content="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="10" Padding="4" Background="Transparent" BorderThickness="0" Click="OnCloseTab" Tag="{x:Bind Id}"
+                                        AutomationProperties.Name="{x:Bind CloseName, Mode=OneWay}" ToolTipService.ToolTip="{x:Bind CloseName, Mode=OneWay}"/>
                             </Grid>
                         </DataTemplate>
                     </ListView.ItemTemplate>

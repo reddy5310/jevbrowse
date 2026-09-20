@@ -44,6 +44,12 @@ endpoint off revokes every session it granted.
 ## What the agent sees
 A **Page Map**, not the DOM: title, headings, links (text + href), form fields as name/type/label with **no values**, and up to 4 000 chars of main text. No script evaluation exists on the agent surface.
 
+"No values" is a statement about the *structured field extraction* and nothing wider. The main text is a readability
+extraction, not a sensitive-text redactor, and a screenshot (when the manifest grants one) shows whatever is on
+screen, field contents included. So: **structured field information excludes field values; page text — and
+screenshots, when allowed — may contain personal information visible on the page.** SECRET pages, where a password
+or payment field is present, are refused outright whatever the manifest says.
+
 ### And what becomes of it
 The domain grant answers *where* an agent may act. It does not answer what happens to what it reads, and that part
 JevBrowse cannot enforce: once the page map crosses the local endpoint it belongs to the agent's own program, which

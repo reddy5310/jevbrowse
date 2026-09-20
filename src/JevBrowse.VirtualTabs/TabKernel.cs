@@ -169,7 +169,7 @@ public sealed class TabKernel
         if (SameIdentity(src, dst))
         {
             t.MoveTo(dest);
-            Persist(t);
+            ApplyPinnedOrder(dest);     // it keeps its pin, so it must also keep the place a pin means
             Changed?.Invoke(new("moved", id, dest.ToString()));
             return t;
         }
@@ -180,6 +180,7 @@ public sealed class TabKernel
         Persist(nt);
         Changed?.Invoke(new("opened", nt.Id, nt.Url.Host));
         await CloseAsync(id, ct);
+        ApplyPinnedOrder(dest);
         Changed?.Invoke(new("moved", nt.Id, $"identity boundary {src.Container}→{dst.Container}: new tab, old one closed"));
         return nt;
     }
@@ -552,13 +553,24 @@ public sealed class TabKernel
         var t = Find(id);
         if (t.IsPinned == pinned) return;
         t.SetPinned(pinned);
-        // Pinned tabs rise to the top of their own workspace, and only within the slots that workspace already
-        // occupies — reordering one workspace must not shuffle the others.
-        var slots = _tabs.Select((x, i) => (x, i)).Where(p => p.x.WorkspaceId == t.WorkspaceId).Select(p => p.i).ToList();
+        ApplyPinnedOrder(t.WorkspaceId);
+        Changed?.Invoke(new("pinned", id, pinned ? "pinned" : "unpinned"));
+    }
+
+    /// <summary>
+    /// Pinned-first is an invariant of workspace membership, not a one-off sort done where the user happens to click.
+    /// Anything that adds a tab to a workspace or changes its pin re-establishes it, so a tab can never say "pinned"
+    /// while sitting below ordinary tabs and then jump to the top after a restart (which is what the database's
+    /// ORDER BY would have done on its own). Only the slots this workspace already occupies are touched: reordering
+    /// one workspace must not shuffle another.
+    /// </summary>
+    private void ApplyPinnedOrder(ContextId workspace)
+    {
+        var slots = _tabs.Select((x, i) => (x, i)).Where(p => p.x.WorkspaceId == workspace).Select(p => p.i).ToList();
+        if (slots.Count == 0) return;
         var sorted = slots.Select(i => _tabs[i]).OrderByDescending(x => x.IsPinned).ToList();   // OrderBy is stable
         for (int k = 0; k < slots.Count; k++) _tabs[slots[k]] = sorted[k];
         foreach (var x in sorted) Persist(x);
-        Changed?.Invoke(new("pinned", id, pinned ? "pinned" : "unpinned"));
     }
 
     /// <summary>

@@ -275,12 +275,13 @@ public sealed partial class MainWindow : Window
             });
         }
 
-        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--agent-check"))
+        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--agent-check") || args.Contains("--media-check"))
         {
             Directory.CreateDirectory(Path.Combine(DataDir, "benchmarks"));
             try
             {
-                if (args.Contains("--agent-check")) await RunAgentCheckAsync();
+                if (args.Contains("--media-check")) await RunMediaCheckAsync();
+                else if (args.Contains("--agent-check")) await RunAgentCheckAsync();
                 else if (args.Contains("--privacy-check")) await RunPrivacyCheckAsync();
                 else if (args.Contains("--memory-lab")) await RunMemoryLabAsync();
                 else if (args.Contains("--restore-bench")) await RunRestoreBenchAsync();
@@ -629,8 +630,12 @@ public sealed partial class MainWindow : Window
         UpdateClassBadge();
     }
 
+    /// <summary>Set only by the --media-check bench, which runs with nobody present to answer a prompt.</summary>
+    private bool _autoAllowPermissions;
+
     private async Task<PermissionAdapter.Choice> PromptPermissionAsync(string site, PermissionKind kind)
     {
+        if (_autoAllowPermissions) return PermissionAdapter.Choice.AllowOnce;
         var tcs = new TaskCompletionSource<PermissionAdapter.Choice>();
         DispatcherQueue.TryEnqueue(async () =>
         {
@@ -683,9 +688,12 @@ public sealed partial class MainWindow : Window
             {
                 TextWrapping = TextWrapping.Wrap,
                 Text = "What it can read on those domains: the page title, headings, link text and addresses, form "
-                     + "field names and types (never their values), and up to 4,000 characters of the main text"
+                     + "field names and types, and up to 4,000 characters of the main text"
                      + (effective.Actions.Contains(AgentAction.Screenshot) ? ", plus screenshots" : "")
-                     + ".\n\nWhat happens to it afterwards is up to " + effective.Agent + ". JevBrowse hands it over "
+                     + ".\n\nStructured field information excludes field values. Page text"
+                     + (effective.Actions.Contains(AgentAction.Screenshot) ? " — and screenshots" : "")
+                     + " may contain personal information visible on the page.\n\n"
+                     + "What happens to it afterwards is up to " + effective.Agent + ". JevBrowse hands it over "
                      + "and cannot follow it — the agent may send it to its own servers or AI model. Your own AI and "
                      + "search settings do not restrict that. Every request is recorded in this session's audit, and "
                      + "Stop in the Agents panel ends it immediately.",
@@ -1130,6 +1138,179 @@ public sealed partial class MainWindow : Window
             audit = session.Audit.Select(a => $"{(a.Allowed ? "ok" : "no")} {a.Action} {a.Target} — {a.Reason}").ToList(),
         };
         var file = Path.Combine(DataDir, "benchmarks", $"agent-check-{DateTime.Now:yyyyMMdd-HHmmss}.json");
+        await File.WriteAllTextAsync(file, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    /// <summary>
+    /// Can this browser actually hold a video call? Real renderer, real engine. Three separate questions, because
+    /// they fail for different reasons and "it didn't work" is not a useful answer:
+    /// <list type="number">
+    /// <item>Does the engine expose the APIs a conferencing site needs (getUserMedia, getDisplayMedia, RTCPeerConnection)?</item>
+    /// <item>Does a real peer connection negotiate and carry media? Driven with a synthetic canvas track so this
+    /// answers the question on a machine with no camera attached — a hardware-independent proof of the stack.</item>
+    /// <item>Do camera and microphone actually open through our permission path, and does the tab then refuse to be
+    /// put to sleep underneath the call?</item>
+    /// </list>
+    /// The permission prompt is auto-allowed here (there is nobody to click it) and the result says so.
+    /// </summary>
+    private async Task RunMediaCheckAsync()
+    {
+        var k = _kernel!;
+        foreach (var t in k.Tabs.ToList()) await k.CloseAsync(t.Id);
+
+        // A secure context is required for getUserMedia; example.com is https and loads fast.
+        var tab = k.Open(new Uri("https://example.com/"));
+        await k.ActivateAsync(tab.Id);
+        await Task.Delay(4000);
+        if (!_leases!.TryGet(tab.Id, out var lease)) return;
+        var core = ((WebView2Lease)lease).View.CoreWebView2;
+
+        // ExecuteScriptAsync does not await promises — it returns "{}" for one — and everything here is async.
+        // So the script posts its result back over the message bridge and we wait for the tagged reply.
+        int probe = 0;
+        async Task<JsonElement> EvalAsync(string js, int timeoutMs = 30000)
+        {
+            var tag = $"jev:media:{++probe}:";
+            var tcs = new TaskCompletionSource<string>();
+            void OnMessage(CoreWebView2 _, CoreWebView2WebMessageReceivedEventArgs e)
+            {
+                string m; try { m = e.TryGetWebMessageAsString(); } catch (ArgumentException) { return; }
+                if (m.StartsWith(tag, StringComparison.Ordinal)) tcs.TrySetResult(m[tag.Length..]);
+            }
+            core.WebMessageReceived += OnMessage;
+            try
+            {
+                await core.ExecuteScriptAsync($$"""
+                    (async () => {
+                      const post = v => { try { chrome.webview.postMessage({{JsonSerializer.Serialize(tag)}} + JSON.stringify(v)); } catch {} };
+                      try { post(await (async () => { {{js}} })()); }
+                      catch (e) { post({ error: String((e && e.name) || e) + ': ' + String((e && e.message) || '') }); }
+                    })();
+                    """);
+                if (await Task.WhenAny(tcs.Task, Task.Delay(timeoutMs)) != tcs.Task)
+                    return JsonDocument.Parse("""{"error":"timed out"}""").RootElement.Clone();
+                return JsonDocument.Parse(await tcs.Task).RootElement.Clone();
+            }
+            finally { core.WebMessageReceived -= OnMessage; }
+        }
+
+        // 1. API surface.
+        var apis = await EvalAsync("""
+            return {
+              secureContext: !!window.isSecureContext,
+              getUserMedia: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
+              getDisplayMedia: !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia),
+              enumerateDevices: !!(navigator.mediaDevices && navigator.mediaDevices.enumerateDevices),
+              RTCPeerConnection: typeof RTCPeerConnection === 'function',
+              insertableStreams: typeof RTCRtpSender !== 'undefined' && 'createEncodedStreams' in RTCRtpSender.prototype,
+              webAudio: typeof AudioContext === 'function',
+              wasm: typeof WebAssembly === 'object',
+              sharedArrayBuffer: typeof SharedArrayBuffer === 'function',
+              codecs: (typeof RTCRtpSender !== 'undefined' && RTCRtpSender.getCapabilities)
+                ? (RTCRtpSender.getCapabilities('video').codecs || []).map(c => c.mimeType).filter((v,i,a) => a.indexOf(v) === i)
+                : [],
+              userAgent: navigator.userAgent,
+            };
+            """);
+
+        // 2. A real loopback call: two peer connections, a synthetic video track, negotiated for real.
+        var loopback = await EvalAsync("""
+            const cv = document.createElement('canvas'); cv.width = 320; cv.height = 240;
+            const ctx = cv.getContext('2d');
+            const paint = () => { ctx.fillStyle = '#' + Math.floor(Math.random()*16777215).toString(16); ctx.fillRect(0,0,320,240); };
+            paint(); const timer = setInterval(paint, 100);
+            const stream = cv.captureStream(15);
+            const a = new RTCPeerConnection(), b = new RTCPeerConnection();
+            a.onicecandidate = e => e.candidate && b.addIceCandidate(e.candidate);
+            b.onicecandidate = e => e.candidate && a.addIceCandidate(e.candidate);
+            const got = new Promise(res => { b.ontrack = e => res(e.track); });
+            stream.getTracks().forEach(t => a.addTrack(t, stream));
+            await a.setLocalDescription(await a.createOffer());
+            await b.setRemoteDescription(a.localDescription);
+            await b.setLocalDescription(await b.createAnswer());
+            await a.setRemoteDescription(b.localDescription);
+            const connected = await new Promise(res => {
+              const done = () => { if (a.connectionState === 'connected') res(true); };
+              a.onconnectionstatechange = done; done();
+              setTimeout(() => res(a.connectionState === 'connected'), 15000);
+            });
+            const track = await Promise.race([got, new Promise(r => setTimeout(() => r(null), 5000))]);
+            await new Promise(r => setTimeout(r, 2000));
+            let inbound = null;
+            (await b.getStats()).forEach(s => { if (s.type === 'inbound-rtp' && s.kind === 'video') inbound = s; });
+            clearInterval(timer); a.close(); b.close();
+            return {
+              connected, connectionState: 'closed-after-test',
+              remoteTrackReceived: !!track, remoteTrackKind: track ? track.kind : null,
+              framesDecoded: inbound ? (inbound.framesDecoded || 0) : 0,
+              bytesReceived: inbound ? (inbound.bytesReceived || 0) : 0,
+            };
+            """, 40000);
+
+        // 3. Real devices through our own permission path. Auto-allowed: this bench has no user.
+        _autoAllowPermissions = true;
+        var devices = await EvalAsync("""
+            const before = await navigator.mediaDevices.enumerateDevices();
+            let mic = null, cam = null, labelsVisible = false;
+            try {
+              const s = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+              mic = !!s.getAudioTracks().length; cam = !!s.getVideoTracks().length;
+              const after = await navigator.mediaDevices.enumerateDevices();
+              labelsVisible = after.some(d => d.label && d.label.length > 0);
+              s.getTracks().forEach(t => t.stop());
+            } catch (e) { return {
+              audioInputs: before.filter(d => d.kind === 'audioinput').length,
+              videoInputs: before.filter(d => d.kind === 'videoinput').length,
+              getUserMediaError: e.name + ': ' + e.message };
+            }
+            return {
+              audioInputs: before.filter(d => d.kind === 'audioinput').length,
+              videoInputs: before.filter(d => d.kind === 'videoinput').length,
+              microphoneTrack: mic, cameraTrack: cam, labelsVisibleAfterGrant: labelsVisible,
+            };
+            """, 40000);
+        _autoAllowPermissions = false;
+
+        // 4. Does a live call stop the scheduler putting the tab to sleep underneath it?
+        var protectionDuringCall = "not observed";
+        try
+        {
+            _autoAllowPermissions = true;
+            var opened = await EvalAsync("window.__jevCall = await navigator.mediaDevices.getUserMedia({audio:true, video:true}); return { ok: true };", 30000);
+            if (opened.TryGetProperty("ok", out _))
+            {
+                await Task.Delay(2500);
+                var demote = await k.VirtualizeAsync(tab.Id, Cause.Scheduler);
+                protectionDuringCall = $"{tab.Protection} → scheduler {(demote.Allowed ? "PUT IT TO SLEEP" : "refused: " + demote.Reason)}";
+                // If it did get put to sleep the renderer is gone; touching it again would throw.
+                if (!demote.Allowed) await EvalAsync("window.__jevCall.getTracks().forEach(t => t.stop()); return { ok: true };", 10000);
+            }
+            else protectionDuringCall = "no media to hold: " + opened;
+        }
+        catch (Exception ex) { protectionDuringCall = "probe failed: " + ex.GetType().Name; }
+        finally { _autoAllowPermissions = false; }
+
+        bool B(JsonElement e, string p) => e.TryGetProperty(p, out var v) && v.ValueKind == JsonValueKind.True;
+        var stackWorks = B(apis, "getUserMedia") && B(apis, "RTCPeerConnection") && B(loopback, "connected") && B(loopback, "remoteTrackReceived");
+        var framesFlowed = loopback.TryGetProperty("framesDecoded", out var fd) && fd.GetInt32() > 0;
+
+        // A call that the scheduler is free to hibernate is not a working call, so protection is part of PASS.
+        var callSurvivesScheduler = protectionDuringCall.Contains("refused", StringComparison.Ordinal);
+        var result = new
+        {
+            pass = stackWorks && framesFlowed && callSurvivesScheduler,
+            summary = !stackWorks ? "The WebRTC stack did not complete a loopback call."
+                : !framesFlowed ? "WebRTC negotiated but no frames decoded."
+                : !callSurvivesScheduler ? "WebRTC works, but the scheduler is willing to hibernate a live call."
+                : "WebRTC negotiates and carries video end to end, and a live call blocks hibernation.",
+            apiSurface = apis,
+            loopbackCall = loopback,
+            realDevices = devices,
+            sleepDuringCall = protectionDuringCall,
+            note = "Permission prompts were auto-allowed for this run; in normal use camera and microphone are Ask. "
+                 + "Device counts of 0 mean this machine has no camera/microphone attached, not that JevBrowse blocked them.",
+        };
+        var file = Path.Combine(DataDir, "benchmarks", $"media-check-{DateTime.Now:yyyyMMdd-HHmmss}.json");
         await File.WriteAllTextAsync(file, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
     }
 

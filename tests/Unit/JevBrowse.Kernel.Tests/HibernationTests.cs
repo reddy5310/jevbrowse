@@ -208,6 +208,37 @@ public class HibernationTests : IDisposable
     }
 
     [Fact]
+    public async Task A_pinned_tab_moved_into_a_populated_workspace_lands_at_the_top()
+    {
+        // Both move paths. Sorting only where the user clicks "pin" is not enough: a tab could sit below ordinary
+        // tabs while saying "pinned", then jump to the top after a restart when the database's ORDER BY applied.
+        var work = _k.CreateWorkspace("Work", IdentityContainer.Personal);          // same identity: the tab moves
+        var dev = _k.CreateWorkspace("Dev", IdentityContainer.Dev);                 // other identity: a new tab
+        foreach (var host in new[] { "one.test", "two.test" })
+        {
+            await _k.MoveToWorkspaceAsync(_k.Open(new Uri($"https://{host}")).Id, work.Id);
+            await _k.MoveToWorkspaceAsync(_k.Open(new Uri($"https://{host}")).Id, dev.Id);
+        }
+
+        var sameIdentity = _k.Open(new Uri("https://pinned.test"));
+        _k.SetPinned(sameIdentity.Id, true);
+        await _k.MoveToWorkspaceAsync(sameIdentity.Id, work.Id);
+        Assert.Equal(sameIdentity.Id, _k.TabsIn(work.Id).First().Id);
+
+        var crossIdentity = _k.Open(new Uri("https://pinned2.test"));
+        _k.SetPinned(crossIdentity.Id, true);
+        var moved = await _k.MoveToWorkspaceAsync(crossIdentity.Id, dev.Id);
+        Assert.True(moved.IsPinned);
+        Assert.Equal(moved.Id, _k.TabsIn(dev.Id).First().Id);
+
+        // And the order the user sees now is the order they get back.
+        var k2 = new TabKernel(new FakeLeaseManager(), new TabRepository(_db), new CheckpointRepository(_db), Path.GetTempPath());
+        k2.Load();
+        Assert.Equal(sameIdentity.Id, k2.TabsIn(work.Id).First().Id);
+        Assert.Equal(moved.Id, k2.TabsIn(dev.Id).First().Id);
+    }
+
+    [Fact]
     public async Task Restore_timing_is_recorded_only_for_fresh_leases()
     {
         var a = await OpenAndActivate("a.test");

@@ -61,10 +61,13 @@ public sealed class TabItem(VirtualTab tab) : INotifyPropertyChanged
     /// </summary>
     public string AccessibleName => $"{Title}. {Subtitle}.";
 
+    /// <summary>"Close" alone tells a screen-reader user nothing about which of twenty rows they are on.</summary>
+    public string CloseName => $"Close {Title}";
+
     public event PropertyChangedEventHandler? PropertyChanged;
     public void Refresh()
     {
-        foreach (var p in new[] { nameof(Title), nameof(Subtitle), nameof(StateBrush), nameof(AccessibleName) }) Raise(p);
+        foreach (var p in new[] { nameof(Title), nameof(Subtitle), nameof(StateBrush), nameof(AccessibleName), nameof(CloseName) }) Raise(p);
     }
     private void Raise([CallerMemberName] string? p = null) => PropertyChanged?.Invoke(this, new(p));
 }

@@ -149,6 +149,46 @@ public sealed class WebView2Lease : IRendererLease
             // shell the assessment is settled rather than still loading.
             if (!pw && !cc && !out && document.body && (document.body.innerText || '').trim().length > 200) post('jev:content-rendered');
           };
+          // Camera / microphone / screen capture in progress. IsDocumentPlayingAudio cannot see this: a microphone
+          // capture makes no sound come OUT of the page, so a live video call looks exactly like an idle tab and the
+          // scheduler hibernates it mid-call. We count live capture tracks instead, and an open peer connection for
+          // the case where the user is only receiving.
+          let live = 0, peers = 0;
+          const busy = () => post(live + peers > 0 ? 'jev:capture-on' : 'jev:capture-off');
+          const md = navigator.mediaDevices;
+          if (md) {
+            const watch = stream => {
+              stream.getTracks().forEach(t => {
+                let counted = true; live++; busy();
+                const off = () => { if (!counted) return; counted = false; live--; busy(); };
+                t.addEventListener('ended', off);
+                const stop = t.stop.bind(t); t.stop = () => { stop(); off(); };
+              });
+              return stream;
+            };
+            for (const fn of ['getUserMedia', 'getDisplayMedia']) {
+              const orig = md[fn] && md[fn].bind(md);
+              if (orig) md[fn] = (...a) => orig(...a).then(watch);
+            }
+          }
+          if (typeof RTCPeerConnection === 'function') {
+            const Orig = RTCPeerConnection;
+            const Patched = function (...a) {
+              const pc = new Orig(...a);
+              let counted = false;
+              const sync = () => {
+                const on = pc.connectionState === 'connected' || pc.connectionState === 'connecting';
+                if (on === counted) return;
+                counted = on; peers += on ? 1 : -1; busy();
+              };
+              pc.addEventListener('connectionstatechange', sync);
+              const close = pc.close.bind(pc); pc.close = () => { close(); if (counted) { counted = false; peers--; busy(); } };
+              return pc;
+            };
+            Patched.prototype = Orig.prototype;
+            for (const k of Object.getOwnPropertyNames(Orig)) { try { Patched[k] = Orig[k]; } catch {} }
+            window.RTCPeerConnection = Patched;
+          }
           if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', scan); else scan();
           new MutationObserver(() => scan()).observe(document.documentElement, { childList: true, subtree: true });
         })();
@@ -206,6 +246,8 @@ public sealed class WebView2Lease : IRendererLease
                 case "jev:payment-field": lease.SetSignals(lease._signals | PageSignals.PaymentField); break;
                 case "jev:authenticated": lease.SetSignals((lease._signals | PageSignals.Authenticated) & ~PageSignals.ContentRendered); break;
                 case "jev:content-rendered": if (!lease._signals.HasFlag(PageSignals.Authenticated)) lease.SetSignals(lease._signals | PageSignals.ContentRendered); break;
+                case "jev:capture-on": lease.SetDetected(ProtectionFlags.WebRtcActive, true); break;
+                case "jev:capture-off": lease.SetDetected(ProtectionFlags.WebRtcActive, false); break;
             }
         };
         await core.AddScriptToExecuteOnDocumentCreatedAsync(PageScript);
