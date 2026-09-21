@@ -29,7 +29,8 @@ public sealed partial class MainWindow
         _downloads = new DownloadRepository(_db!);
         _siteZoom = new SiteZoomRepository(_db!);
         _historyRecorder = new HistoryRecorder(_kernel!, _history, siteZoom: _siteZoom);
-        _leases!.OnDownloadFinished = (id, name, path, source, ok, agent, container, workspace) =>
+        _leases!.OnZoomKey = (id, dir, reset) => { if (_kernel!.Active?.Id == id) Zoom(dir, reset); };   // keys pressed while the PAGE has focus
+        _leases.OnDownloadFinished = (id, name, path, source, ok, agent, container, workspace) =>
         {
             if (agent) return;   // an agent's downloads are not the person's; they are governed by the agent's own log
             var rec = new DownloadRecord(name, path, source?.Host ?? "", DateTimeOffset.UtcNow, ok);

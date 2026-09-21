@@ -52,6 +52,8 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
     /// <summary>A page started a download: (the page, file name, where from, it is an agent's page) → allow it? Asked before anything is saved.</summary>
     public Func<ResourceId, string, Uri?, bool, Task<bool>>? OnDownloadRequested { get; set; }
     public string? DownloadPathOverride { get; set; }
+    /// <summary>A page asked to zoom: (the page, direction, reset).</summary>
+    public Action<ResourceId, int, bool>? OnZoomKey { get; set; }
     /// <summary>A download ended: (the page, file name, saved path, where from, it finished rather than being interrupted, this is an agent's page, the identity container and workspace the page belonged to when the download STARTED; a null container means ownership is unknown).</summary>
     public Action<ResourceId, string, string, Uri?, bool, bool, IdentityContainer?, ContextId>? OnDownloadFinished { get; set; }
     /// <summary>Resolves jev:// URLs to locally generated HTML (welcome/help). No network involved.</summary>
@@ -110,6 +112,7 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
         try
         {
             await view.EnsureCoreWebView2Async(env);
+            view.CoreWebView2.Settings.IsZoomControlEnabled = false;   // zoom is JevBrowse's own (per-site, one ladder); the engine's Ctrl+/- must not ALSO zoom the page
             _runningBrowsers[key].Add(view.CoreWebView2.BrowserProcessId);
             ThrowIfEnded(key);
             if (OnCoreCreated is not null) await OnCoreCreated(view.CoreWebView2, id, container, isolationKey, initialUrl);
@@ -120,6 +123,7 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
             lease.PopupRequested = (target, userInitiated, agent) => OnPopupRequested?.Invoke(id, target, userInitiated, agent);
             lease.DownloadGate = (name, source, agent) => OnDownloadRequested is { } ask ? ask(id, name, source, agent) : Task.FromResult(true);
             lease.DownloadPathOverride = DownloadPathOverride;
+            lease.ZoomRequested = (dir, reset) => OnZoomKey?.Invoke(id, dir, reset);
             lease.OwnerContainer = container; lease.OwnerWorkspace = isolationKey;   // fixed now: the page may be gone by the time a download ends
             lease.DownloadFinished = (name, path, source, ok, agent) => OnDownloadFinished?.Invoke(id, name, path, source, ok, agent, lease.OwnerContainer, lease.OwnerWorkspace);
             // Before anything else reacts: an environment whose browser process died cannot create new controls, so forget it NOW (the environment's own
@@ -221,6 +225,22 @@ public sealed class WebView2Lease : IRendererLease
             if (!e.target) return;
             if (!dirty) { dirty = true; post('jev:dirty-form'); }
           };
+          // Zoom keys and Ctrl+wheel (a touchpad pinch arrives as Ctrl+wheel) are taken from the engine and handed to the app, which keeps ONE zoom per site. Without
+          // this the engine zoomed the page a second time on top of the app's, and the app's own shortcut stopped working once the page had keyboard focus.
+          if (window.top === window) {
+            document.addEventListener('keydown', e => {
+              if (!e.ctrlKey || e.altKey || e.metaKey) return;
+              const m = (e.key === '+' || e.key === '=' || e.code === 'NumpadAdd') ? 'jev:zoom-in' : (e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract') ? 'jev:zoom-out' : (e.key === '0' || e.code === 'Numpad0') ? 'jev:zoom-reset' : null;
+              if (m) { e.preventDefault(); e.stopPropagation(); post(m); }
+            }, true);
+            let wheelAt = 0;
+            window.addEventListener('wheel', e => {
+              if (!e.ctrlKey) return;
+              e.preventDefault();
+              const now = Date.now(); if (now - wheelAt < 120) return; wheelAt = now;
+              post(e.deltaY < 0 ? 'jev:zoom-in' : 'jev:zoom-out');
+            }, { capture: true, passive: false });
+          }
           document.addEventListener('input', mark, true);
           document.addEventListener('change', mark, true);
           const scan = () => {
@@ -446,6 +466,9 @@ public sealed class WebView2Lease : IRendererLease
             try { msg = e.TryGetWebMessageAsString(); } catch (Exception) { }
             switch (msg)
             {
+                case "jev:zoom-in": lease.ZoomRequested?.Invoke(1, false); break;
+                case "jev:zoom-out": lease.ZoomRequested?.Invoke(-1, false); break;
+                case "jev:zoom-reset": lease.ZoomRequested?.Invoke(0, true); break;
                 case "jev:dirty-form": lease.SetDetected(ProtectionFlags.DirtyForm, true); break;
                 case "jev:secret-field": lease.SetSignals(lease._signals | PageSignals.PasswordField); break;
                 case "jev:payment-field": lease.SetSignals(lease._signals | PageSignals.PaymentField); break;
@@ -898,6 +921,8 @@ public sealed class WebView2Lease : IRendererLease
 
     public event Action<NavigationInfo>? NavigationChanged;
     public event Action? Loaded;
+    /// <summary>The page asked to zoom (Ctrl with plus, minus, 0 or the wheel): (direction, reset).</summary>
+    public Action<int, bool>? ZoomRequested { get; set; }
     public event Action<EngineFailure>? EngineFailed;
     /// <summary>(address, the person did it with a click or key, this is an agent's page). Set by the manager.</summary>
     public Action<Uri?, bool, bool>? PopupRequested { get; set; }
@@ -1024,6 +1049,7 @@ public sealed class WebView2Lease : IRendererLease
         PopupRequested = null;
         DownloadGate = null;
         DownloadFinished = null;
+        ZoomRequested = null;
     }
 
     internal void DropFrameMedia(CoreWebView2Frame frame)
