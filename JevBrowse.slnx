@@ -17,6 +17,9 @@
     <Project Path="src/JevBrowse.VirtualTabs/JevBrowse.VirtualTabs.csproj" />
   </Folder>
   <Folder Name="/tests/" />
+  <Folder Name="/tests/Tools/">
+    <Project Path="tests/Tools/CrashHarness/CrashHarness.csproj" />
+  </Folder>
   <Folder Name="/tests/Unit/">
     <Project Path="tests/Unit/JevBrowse.AgentGateway.Tests/JevBrowse.AgentGateway.Tests.csproj" />
     <Project Path="tests/Unit/JevBrowse.Brain.Tests/JevBrowse.Brain.Tests.csproj" />

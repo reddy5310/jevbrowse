@@ -12,3 +12,6 @@ data/
 
 # local SDK / NuGet home created by sandboxed builds
 .dotnet-home/
+
+# Databases written by real historic builds, used by the upgrade tests.
+!tests/Fixtures/db/*.db

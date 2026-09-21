@@ -102,3 +102,28 @@ jobs:
           name: idle-cpu
           path: ${{ runner.temp }}/idle/**
           if-no-files-found: warn
+
+  # Real-app recovery (docs/adr/0031): kill the app with a live Private session, close it normally, start it on a damaged database. REPORT ONLY: it needs an
+  # interactive desktop and python, which a hosted runner may not give it; an inconclusive result there is expected and never blocks a merge.
+  recovery-app:
+    runs-on: windows-latest
+    needs: test
+    if: github.event_name == 'push'
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Publish self-contained shell
+        run: dotnet publish src/JevBrowse.App -c Release -r win-x64 -p:Platform=x64 -p:WindowsAppSDKSelfContained=true -p:SelfContained=true -o out/app --nologo
+      - name: Recovery check (report only)
+        shell: powershell
+        continue-on-error: true
+        run: ./scripts/recovery-check.ps1 -Scenario all -ExePath "$env:GITHUB_WORKSPACE/out/app/JevBrowse.App.exe" -Root "$env:RUNNER_TEMP/recovery"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: recovery-app
+          path: ${{ runner.temp }}/recovery/**/recovery-result.json
+          if-no-files-found: warn

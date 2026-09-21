@@ -139,13 +139,74 @@ public sealed class BrowserDb : IDisposable
     ];
 
     /// <param name="targetVersion">Migrate only up to this version (used by recovery tests; production uses the latest).</param>
-    public BrowserDb(string path, int? targetVersion = null)
+    /// <param name="beforeCommit">Test seam: called with the step's version after the step's SQL ran and BEFORE its transaction commits, so a crash test can
+    /// kill the process at the one moment a migration is half-done. Null in production.</param>
+    public BrowserDb(string path, int? targetVersion = null, Action<int>? beforeCommit = null)
     {
+        _beforeCommit = beforeCommit;
         if (path != ":memory:") Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         Connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Cache = SqliteCacheMode.Shared }.ToString());
-        Connection.Open();
-        Exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;");
-        Migrate(targetVersion ?? LatestVersion);
+        try
+        {
+            Connection.Open();
+            Exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;");
+            Migrate(targetVersion ?? LatestVersion);
+        }
+        catch
+        {
+            Connection.Dispose();   // a constructor that throws is never disposed by its caller; do not keep the file open
+            throw;
+        }
+    }
+
+    private readonly Action<int>? _beforeCommit;
+
+    /// <summary>
+    /// Opens the database; if the file is not a usable database (garbage, truncated, damaged pages) it is MOVED ASIDE, never deleted, and a fresh one is created,
+    /// so a damaged file cannot leave the app unable to start. Anything that is not damage (a locked file, a permissions problem, a database from a newer
+    /// build) is thrown as before, because moving a healthy file aside would lose the person's data for no reason.
+    /// </summary>
+    /// <param name="quarantinedTo">Where the damaged file went, or null when nothing was wrong.</param>
+    public static BrowserDb OpenOrRecover(string path, out string? quarantinedTo, Func<DateTimeOffset>? clock = null)
+    {
+        quarantinedTo = null;
+        try { return OpenChecked(path); }
+        catch (SqliteException ex) when (IsDamage(ex))
+        {
+            SqliteConnection.ClearAllPools();   // release every handle on the damaged file so it can be renamed
+            var stamp = (clock?.Invoke() ?? DateTimeOffset.UtcNow).ToString("yyyyMMdd-HHmmss");
+            var target = path + ".corrupt-" + stamp;
+            for (var n = 2; File.Exists(target); n++) target = path + ".corrupt-" + stamp + "-" + n;
+            File.Move(path, target);
+            foreach (var suffix in new[] { "-wal", "-shm" })
+                if (File.Exists(path + suffix)) File.Move(path + suffix, target + suffix);
+            quarantinedTo = target;
+            return OpenChecked(path);
+        }
+    }
+
+    // SQLITE_CORRUPT (11) and SQLITE_NOTADB (26). Not SQLITE_BUSY, SQLITE_READONLY, SQLITE_CANTOPEN or SQLITE_IOERR: those are the environment, not the file.
+    private static bool IsDamage(SqliteException ex) => ex.SqliteErrorCode is 11 or 26;
+
+    private const long FullCheckLimitBytes = 256L * 1024 * 1024;
+
+    private static BrowserDb OpenChecked(string path)
+    {
+        var db = new BrowserDb(path);
+        try
+        {
+            // The core tables are small and always read at start; a full page-level check is affordable for any file up to the limit (about a second at most).
+            foreach (var table in new[] { "tabs", "workspaces", "checkpoints", "site_settings", "site_permissions" }) db.Exec($"SELECT COUNT(*) FROM {table}");
+            if (path != ":memory:" && new FileInfo(path).Length <= FullCheckLimitBytes)
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "PRAGMA quick_check(1)";
+                var result = Convert.ToString(cmd.ExecuteScalar());
+                if (result != "ok") throw new SqliteException("database failed quick_check: " + result, 11);
+            }
+            return db;
+        }
+        catch { db.Dispose(); throw; }
     }
 
     public SqliteConnection Connection { get; }
@@ -170,6 +231,7 @@ public sealed class BrowserDb : IDisposable
             {
                 Exec(sql);
                 Exec($"PRAGMA user_version={version}");   // transactional: commits or rolls back together with the schema change
+                _beforeCommit?.Invoke(version);
                 tx.Commit();
             }
             catch

@@ -19,10 +19,17 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Databases written by the REAL historic builds (scripts/make-db-fixtures.ps1), one per schema version. -->
+    <Content Include="..\..\Fixtures\db\*.db" Link="Fixtures\db\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\..\src\JevBrowse.VirtualTabs\JevBrowse.VirtualTabs.csproj" />
     <ProjectReference Include="..\..\..\src\JevBrowse.Storage\JevBrowse.Storage.csproj" />
     <ProjectReference Include="..\..\..\src\JevBrowse.Renderer.Abstractions\JevBrowse.Renderer.Abstractions.csproj" />
     <ProjectReference Include="..\..\..\src\JevBrowse.Domain\JevBrowse.Domain.csproj" />
+    <!-- The child process the crash tests start and kill. -->
+    <ProjectReference Include="..\..\Tools\CrashHarness\CrashHarness.csproj" />
   </ItemGroup>
 
 </Project>

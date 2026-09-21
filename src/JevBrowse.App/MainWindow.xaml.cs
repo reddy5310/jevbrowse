@@ -94,6 +94,7 @@ public sealed partial class MainWindow : Window
     private bool _shutdownCheckpointDone;
     private int _restoreEpoch;
     private bool _shutdownInProgress;
+    private string? _startupNotice;   // something the person should know about how this start went (for example a damaged database that was set aside)
 
     // ---- First run / help ----
 
@@ -147,7 +148,8 @@ public sealed partial class MainWindow : Window
     private async Task InitAsync()
     {
         _leases = new WebView2LeaseManager(WebHost, Path.Combine(DataDir, "profiles"), Path.Combine(DataDir, "thumbnails")) { MaxLive = 5 };
-        _db = new BrowserDb(Path.Combine(DataDir, "db", "browser.db"));
+        _db = BrowserDb.OpenOrRecover(Path.Combine(DataDir, "db", "browser.db"), out var damagedDbMovedTo);
+        if (damagedDbMovedTo is not null) _startupNotice = $"Your saved tab list could not be read, so a fresh one was started. The damaged file was kept, not deleted: {damagedDbMovedTo}";
         _siteSettings = new SiteSettingsRepository(_db);
 
         // Shield: compile whatever lists are on disk before the first renderer exists; fetch lists if there are none.
@@ -270,6 +272,8 @@ public sealed partial class MainWindow : Window
         _leases.LocalPage = u => u.Scheme == "jev" && u.Host == "welcome" ? WelcomePage.Html(_providers.Any(p => p.IsConfigured), _jev?.IsConfigured == true) : null;
 
         var uiDialog = args.FirstOrDefault(a => a.StartsWith("--ui-dialog=", StringComparison.Ordinal)) is { } ud0 ? ud0["--ui-dialog=".Length..] : null;
+        if (args.Contains("--recovery-seed"))
+            _ = RunRecoverySeedAsync();   // scripts/recovery-check.ps1 then kills or closes the app and inspects what is left
         if (args.FirstOrDefault(a => a.StartsWith("--idle-scenario=", StringComparison.Ordinal)) is { } idleScenario)
             _ = RunIdleScenarioAsync(idleScenario["--idle-scenario=".Length..]);   // read from outside by scripts/idle-benchmark.ps1
         if (args.FirstOrDefault(a => a.StartsWith("--agent-hidden-load=", StringComparison.Ordinal)) is { } hiddenLoad)
@@ -398,6 +402,13 @@ public sealed partial class MainWindow : Window
         if (!_kernel.TabsIn(_kernel.ActiveWorkspace).Any())
             _kernel.Open(new Uri(!string.IsNullOrWhiteSpace(startUrl) && Uri.IsWellFormedUriString(startUrl, UriKind.Absolute) ? startUrl : firstRun ? WelcomePage.Url : "https://example.com"));
         await _kernel.ActivateAsync(_kernel.TabsIn(_kernel.ActiveWorkspace).First().Id);
+        if (_startupNotice is not null)
+        {
+            // Data was set aside: that is worth an explicit acknowledgement rather than a status line that the next page load overwrites.
+            var notice = _startupNotice; _startupNotice = null;
+            StatusText.Text = notice;
+            await new ContentDialog { Title = "Your saved tabs could not be read", Content = new TextBlock { Text = notice, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true }, CloseButtonText = "OK", DefaultButton = ContentDialogButton.Close, XamlRoot = Content.XamlRoot }.ShowSerializedAsync();
+        }
         if (firstRun) { await Task.Delay(800); await ShowFirstRunTipsAsync(); }
     }
 
@@ -1798,6 +1809,50 @@ public sealed partial class MainWindow : Window
         var progressVisible = RestoreProgress.Visibility == Visibility.Visible;
         var result = new { restoringIdEmpty = noRestore, restorePanel = RestorePanel.Visibility.ToString(), restoreProgressVisible = progressVisible, pass = !(noRestore && progressVisible) };
         await File.WriteAllTextAsync(Path.Combine(dir, "idle-invariants.json"), JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    /// <summary>
+    /// Puts the app in the state a crash test needs: a normal tab, and a live Private session (a tab with a cookie in its throwaway profile). Writes down what
+    /// exists so the script can compare it with what is left after the app is killed or closed. Runs alongside the normal window.
+    /// </summary>
+    private async Task RunRecoverySeedAsync()
+    {
+        try
+        {
+            var progress = Path.Combine(DataDir, "benchmarks", "recovery-seed-progress.txt");
+            void Step(string what) { try { File.AppendAllText(progress, $"{DateTime.Now:HH:mm:ss.fff} {what}\n"); } catch (Exception) { } }
+            Directory.CreateDirectory(Path.GetDirectoryName(progress)!);
+            Step("started");
+            await Task.Delay(6000);
+            var k = _kernel!;
+            Step("opening the normal tab");
+            var normalTab = k.Open(new Uri(WelcomePage.Url + "?normal-marker=keep-4242"));
+            await k.ActivateAsync(normalTab.Id);
+            Step("normal tab active; entering Private mode");
+            await ChangeProductModeAsync(ProductMode.Private);
+            var session = k.ActiveWorkspace;
+            Step("in Private mode; opening the private tab");
+            var priv = k.Open(new Uri(WelcomePage.Url + "?private-marker=SECRET-7731"));
+            await k.ActivateAsync(priv.Id);
+            Step("private tab active");
+            _leases!.TryGet(priv.Id, out var l0); var lease = (WebView2Lease)l0!;
+            var mgr = lease.View.CoreWebView2.CookieManager;
+            mgr.AddOrUpdateCookie(mgr.CreateCookie("session", "private-cookie-7731", "recovery-probe.test", "/"));
+            await Task.Delay(3000);
+            var dir = Path.Combine(DataDir, "benchmarks"); Directory.CreateDirectory(dir);
+            var state = new
+            {
+                pid = Environment.ProcessId,
+                normalTab = normalTab.Id.ToString(),
+                privateTab = priv.Id.ToString(),
+                privateWorkspace = session.ToString(),
+                privateWorkspaceCount = k.Workspaces.Count(w => w.Container == IdentityContainer.Private),
+                tabs = k.Tabs.Count,
+                readyAtUtc = DateTimeOffset.UtcNow.ToString("o"),
+            };
+            await File.WriteAllTextAsync(Path.Combine(dir, "recovery-seed.json"), JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch (Exception ex) { try { await File.WriteAllTextAsync(Path.Combine(DataDir, "benchmarks", "recovery-seed-error.txt"), ex.ToString()); } catch (Exception) { } }
     }
 
     /// <summary>
