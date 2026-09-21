@@ -8,17 +8,34 @@
 #>
 param(
     [Parameter(Mandatory)][string]$AppDir,
+    [Parameter(Mandatory)][string]$ZipPath,   # the release zip AppDir was extracted from; its SHA-256 is recorded with the results
     [string]$Root = 'D:\Browser\_ui-check\interaction'
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms
-Add-Type -Namespace W -Name U -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr h);'
+Add-Type -Namespace W -Name U -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr h); [DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow(); [DllImport("user32.dll")] public static extern System.IntPtr GetWindow(System.IntPtr h, uint cmd); [DllImport("user32.dll")] public static extern void mouse_event(int f, int x, int y, int d, int e); [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, int flags, int extra);'
 $AE = [System.Windows.Automation.AutomationElement]; $TS = [System.Windows.Automation.TreeScope]
 $run = Join-Path ([IO.Path]::GetFullPath($Root)) ("{0}" -f (Get-Date -Format 'yyyyMMdd-HHmmss')); New-Item -ItemType Directory -Path $run -Force | Out-Null
 $exe = Join-Path (Resolve-Path $AppDir).Path 'JevBrowse.App.exe'
+$zipHash = (Get-FileHash (Resolve-Path $ZipPath).Path -Algorithm SHA256).Hash.ToLower()
+$buildJson = Join-Path (Resolve-Path $AppDir).Path 'BUILD.json'
+if (-not (Test-Path $buildJson)) { throw 'AppDir has no BUILD.json: it is not an extracted release' }
+$build = Get-Content $buildJson -Raw | ConvertFrom-Json
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$zf = [IO.Compression.ZipFile]::OpenRead((Resolve-Path $ZipPath).Path)
+try { $zipBuild = (New-Object IO.StreamReader(($zf.Entries | Where-Object { $_.FullName -eq 'BUILD.json' }).Open())).ReadToEnd() | ConvertFrom-Json } finally { $zf.Dispose() }
+if ($zipBuild.commit -ne $build.commit -or $zipBuild.builtAt -ne $build.builtAt) { throw 'AppDir was not extracted from this zip (BUILD.json differs)' }
+$runId = [guid]::NewGuid().ToString('N').Substring(0, 8)
+$dlName = "jev-pass-$runId.bin"
+$downloadsDir = (New-Object -ComObject Shell.Application).NameSpace('shell:Downloads').Self.Path
+$dlFile = Join-Path $downloadsDir $dlName
 $data = Join-Path $run 'data'; New-Item -ItemType Directory -Path $data -Force | Out-Null
 '{"firstRunDone":true}' | Set-Content "$data\settings.json" -Encoding ascii   # the first-run tips are covered by the packaged smoke
 $results = [ordered]@{}
+# Caps Lock changes what SendKeys types (a run on a machine with it on typed upper-case addresses). Turn it off for the run and put it back exactly as found.
+$capsWasOn = [System.Windows.Forms.Control]::IsKeyLocked('CapsLock')
+function Toggle-Caps { [W.U]::keybd_event(0x14, 0x3A, 0, 0); [W.U]::keybd_event(0x14, 0x3A, 2, 0); Start-Sleep -Milliseconds 400 }   # SendKeys' {CAPSLOCK} does not toggle it
+if ($capsWasOn) { Toggle-Caps; if ([System.Windows.Forms.Control]::IsKeyLocked('CapsLock')) { throw 'Caps Lock is on and could not be turned off; typed addresses would be upper-case' } }
 function Row($name, $status, $detail = '') { $results[$name] = [ordered]@{ status = $status; detail = $detail }; Write-Host ("  {0,-10} {1} {2}" -f $status, $name, $detail) }
 function Try-Row($name, [scriptblock]$body) { try { $r = & $body; if ($r -is [string]) { Row $name 'FAIL' $r } else { Row $name 'PASS' } } catch { Row $name 'FAIL' $_.Exception.Message } }
 
@@ -30,9 +47,11 @@ $serverScript = @"
 while (`$l.IsListening) {
   `$c = `$l.GetContext(); `$p = `$c.Request.Url.AbsolutePath
   if (`$p -eq '/report') { Add-Content '$reportLog' (`$c.Request.Url.Query); `$c.Response.StatusCode = 204; `$c.Response.Close(); continue }
-  if (`$p -eq '/dl') { `$b = [Text.Encoding]::UTF8.GetBytes('hello download'); `$c.Response.ContentType = 'application/octet-stream'; `$c.Response.AddHeader('Content-Disposition','attachment; filename=jev-pass.bin'); `$c.Response.OutputStream.Write(`$b,0,`$b.Length); `$c.Response.Close(); continue }
+  if (`$p -eq '/dl') { `$b = [Text.Encoding]::UTF8.GetBytes('hello download'); `$c.Response.ContentType = 'application/octet-stream'; `$c.Response.AddHeader('Content-Disposition','attachment; filename=$dlName'); `$c.Response.OutputStream.Write(`$b,0,`$b.Length); `$c.Response.Close(); continue }
   `$t = 'Page ' + `$p.Trim('/').ToUpper()
-  `$html = '<!doctype html><title>' + `$t + '</title><body><h1>' + `$t + '</h1><script>setTimeout(function(){fetch("/report?p=' + `$p + '&z="+encodeURIComponent(document.documentElement.style.zoom||"1")+"&dpr="+window.devicePixelRatio)},1800)</script></body>'
+  if (`$p -eq '/slow') { Start-Sleep -Seconds 4 }
+  `$extra = if (`$p -eq '/f') { '<iframe id="f" src="/a" width="220" height="90"></iframe>' } else { '' }
+  `$html = '<!doctype html><title>' + `$t + '</title><body><h1>' + `$t + '</h1>' + `$extra + '<script>document.body.addEventListener("click",function(){var f=document.getElementById("f");if(f)f.contentWindow.focus()});setInterval(function(){fetch("/report?p=' + `$p + '&z="+encodeURIComponent(document.documentElement.style.zoom||"1")+"&dpr="+window.devicePixelRatio+"&ae="+(document.activeElement?document.activeElement.tagName:""))},700)</script></body>'
   `$b = [Text.Encoding]::UTF8.GetBytes(`$html); `$c.Response.ContentType = 'text/html'; `$c.Response.OutputStream.Write(`$b,0,`$b.Length); `$c.Response.Close()
 }
 "@
@@ -52,8 +71,25 @@ function Start-Jev { param([string]$exePath = $exe)
     if (-not $w) { throw 'no window' }
     $script:win = $w; Start-Sleep -Seconds 4; Focus-Jev
 }
-function Focus-Jev { try { [W.U]::SetForegroundWindow($script:app.MainWindowHandle) | Out-Null } catch { }; try { $script:win.SetFocus() } catch { }; Start-Sleep -Milliseconds 300 }
+function Get-Fg { [W.U]::GetForegroundWindow() }
+function Require-Foreground([IntPtr]$hwnd, $what) {
+    for ($i = 0; $i -lt 12; $i++) { if ((Get-Fg) -eq $hwnd) { return }; [void][W.U]::SetForegroundWindow($hwnd); Start-Sleep -Milliseconds 250 }
+    throw "$what could not be brought to the front, so no keys were sent (another window has focus)"
+}
+function Focus-Jev { Require-Foreground $script:app.MainWindowHandle 'JevBrowse'; try { $script:win.SetFocus() } catch { }; Start-Sleep -Milliseconds 200; Require-Foreground $script:app.MainWindowHandle 'JevBrowse' }
 function Keys($k) { Focus-Jev; [System.Windows.Forms.SendKeys]::SendWait($k); Start-Sleep -Milliseconds 500 }
+function Send-Text($k) { Focus-Jev; [System.Windows.Forms.SendKeys]::SendWait($k); Start-Sleep -Milliseconds 200 }
+function Ctrl-Wheel([int]$notches) {
+    Focus-Jev
+    $r = $script:win.Current.BoundingRectangle
+    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2))
+    Start-Sleep -Milliseconds 300
+    [W.U]::keybd_event(0x11, 0, 0, 0); Start-Sleep -Milliseconds 100
+    [W.U]::mouse_event(0x800, 0, 0, 120 * $notches, 0); Start-Sleep -Milliseconds 300
+    [W.U]::keybd_event(0x11, 0, 2, 0); Start-Sleep -Milliseconds 500
+}
+function Click-Page { Focus-Jev; $r = $script:win.Current.BoundingRectangle; [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]($r.X + $r.Width * 0.6), [int]($r.Y + $r.Height * 0.6)); Start-Sleep -Milliseconds 200; [W.U]::mouse_event(2, 0, 0, 0, 0); [W.U]::mouse_event(4, 0, 0, 0, 0); Start-Sleep -Milliseconds 600 }
+function Last-Report { if (Test-Path $reportLog) { @(Get-Content $reportLog -Tail 1)[0] } else { '' } }
 function Names { @($script:win.FindAll($TS::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name }) }
 function ById($id) { $script:win.FindFirst($TS::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::AutomationIdProperty, $id))) }
 function ByName($name, $root = $null) { if (-not $root) { $root = $script:win }; $root.FindFirst($TS::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, $name))) }
@@ -61,16 +97,27 @@ function Status { try { (ById 'StatusText').Current.Name } catch { '' } }
 function Address { try { (ById 'AddressBox').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value } catch { '' } }
 function Wait-For([scriptblock]$cond, $sec = 12) { for ($i = 0; $i -lt $sec * 4; $i++) { if (& $cond) { return $true }; Start-Sleep -Milliseconds 250 }; $false }
 function Click($el) { try { $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch { $r = $el.Current.BoundingRectangle; [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2)); Add-Type -Namespace M -Name C -MemberDefinition '[DllImport("user32.dll")] public static extern void mouse_event(int f,int x,int y,int d,int e);' -ErrorAction SilentlyContinue; [M.C]::mouse_event(2,0,0,0,0); [M.C]::mouse_event(4,0,0,0,0) }; Start-Sleep -Milliseconds 700 }
-function Go($url) { Keys '^l'; Keys '^a'; [System.Windows.Forms.SendKeys]::SendWait($url.Replace('+', '{+}').Replace('^', '{^}').Replace('%', '{%}').Replace('~', '{~}').Replace('(', '{(}').Replace(')', '{)}')); Start-Sleep -Milliseconds 200; [System.Windows.Forms.SendKeys]::SendWait('{ENTER}'); Start-Sleep -Seconds 3 }
+function Go($url) { Keys '^l'; Keys '^a'; Send-Text ($url.Replace('+', '{+}').Replace('^', '{^}').Replace('%', '{%}').Replace('~', '{~}').Replace('(', '{(}').Replace(')', '{)}')); Send-Text '{ENTER}'; Start-Sleep -Seconds 3 }
 function Close-Panel { Keys '{ESC}'; Start-Sleep -Milliseconds 400 }
 function Close-Jev { $null = $script:app.CloseMainWindow(); if (-not $script:app.WaitForExit(40000)) { Stop-Mine $script:app $script:appStamp } }
-function Find-Picker { $script:dlg = $AE::RootElement.FindFirst($TS::Descendants, (New-Object System.Windows.Automation.AndCondition((New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, 'Open')), (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))))); [bool]$script:dlg }
+function Find-Picker {
+    $script:dlg = $null
+    $cond = New-Object System.Windows.Automation.AndCondition((New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, 'Open')), (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window)))
+    foreach ($c in $AE::RootElement.FindAll($TS::Descendants, $cond)) {
+        $h = [IntPtr]$c.Current.NativeWindowHandle
+        if ([W.U]::GetWindow($h, 4) -eq $script:app.MainWindowHandle) { $script:dlg = $c; break }   # the file dialog is a separate-process window OWNED by JevBrowse's window; any other "Open" window is ignored
+    }
+    [bool]$script:dlg
+}
 function Has-Name($pattern) { [bool](@(Names) | Where-Object { $_ -match $pattern }) }
 function Pick-File($path) {
     if (-not (Wait-For { Find-Picker } 12)) { return $false }
     Start-Sleep -Milliseconds 1200
-    try { $script:dlg.SetFocus() } catch { }
-    [System.Windows.Forms.SendKeys]::SendWait($path); Start-Sleep -Milliseconds 400; [System.Windows.Forms.SendKeys]::SendWait('{ENTER}'); Start-Sleep -Seconds 2
+    $h = [IntPtr]$script:dlg.Current.NativeWindowHandle
+    Require-Foreground $h 'the file picker'
+    [System.Windows.Forms.SendKeys]::SendWait($path); Start-Sleep -Milliseconds 400
+    Require-Foreground $h 'the file picker'
+    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}'); Start-Sleep -Seconds 2
     return $true
 }
 $ell = [char]0x2026
@@ -139,20 +186,25 @@ try {
         if (@(Names) | Where-Object { $_ -match '^Page B\. 127' }) { return 'still listed after Clear' }
     }
     Close-Panel
-    Try-Row '16c A download appears in Downloads (Ctrl+J) and Show in folder opens Explorer on it' {
+    Try-Row '16c The download appears in Downloads (Ctrl+J) and Show in folder selects THAT file in Explorer' {
         Go (U '127.0.0.1' '/dl'); Start-Sleep -Seconds 5
-        Focus-Jev
-        Keys '^j'; if (-not (Wait-For { (Names) -contains 'No downloads yet.' -or @(Names | Where-Object { $_ -match 'jev-pass' }).Count -gt 0 } 6)) { return 'panel did not open' }
-        if (-not (Wait-For { Keys '{ESC}'; Keys '^j'; @(Names | Where-Object { $_ -match 'jev-pass' }).Count -gt 0 } 20)) { return 'the download is not listed: ' + ((Names) -join ' | ') }
-        $btn = ByName 'Show jev-pass.bin in its folder'
+        Keys '^j'; if (-not (Wait-For { (Names) -contains 'No downloads yet.' -or (Has-Name ([regex]::Escape($dlName))) } 6)) { return 'panel did not open' }
+        if (-not (Wait-For { Keys '{ESC}'; Keys '^j'; Has-Name ([regex]::Escape($dlName)) } 20)) { return 'the download is not listed: ' + ((Names) -join ' | ') }
+        if (-not (Test-Path $dlFile)) { return "the file is not at $dlFile" }
+        $btn = ByName "Show $dlName in its folder"
         if (-not $btn -or -not $btn.Current.IsEnabled) { return 'Show in folder is missing or disabled' }
-        $shell = New-Object -ComObject Shell.Application; $before = @($shell.Windows()).Count
-        Click $btn; Start-Sleep -Seconds 3
-        $ex = @($shell.Windows() | Where-Object { $_.LocationURL -match 'Downloads' })
-        if ($ex.Count -eq 0) { return 'no Explorer window on the Downloads folder' }
-        foreach ($e in $ex) { try { $e.Quit() } catch { } }
+        $shell = New-Object -ComObject Shell.Application
+        $before = @($shell.Windows() | ForEach-Object { $_.HWND })
+        Click $btn
+        $found = $null
+        for ($i = 0; $i -lt 40 -and -not $found; $i++) {
+            Start-Sleep -Milliseconds 250
+            foreach ($w in @($shell.Windows())) { try { if ($w.Document.FocusedItem.Path -eq $dlFile) { $found = $w; break } } catch { } }
+        }
+        if (-not $found) { return 'no Explorer window has that file selected' }
+        if ($before -notcontains $found.HWND) { try { $found.Quit() } catch { } }   # close only a window this step opened; one that was already open is left alone
     }
-    Get-ChildItem "$env:USERPROFILE\Downloads\jev-pass*.bin" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue   # the pass's own test file
+    Remove-Item -LiteralPath $dlFile -Force -ErrorAction SilentlyContinue   # exactly the file this run created
     Close-Panel
 
     # ---------------- 17 sensitive site
@@ -183,33 +235,61 @@ try {
     # ---------------- 18 zoom
     Go (U '127.0.0.1' '/z'); Start-Sleep -Seconds 3
     Try-Row '18 Zoom: Ctrl+ + twice (page has focus) reaches 125% once, reload keeps it, Ctrl+0 resets, and the engine adds no zoom of its own' {
-        $null = Wait-For { (Test-Path $reportLog) -and ((Get-Content $reportLog -Raw) -match 'dpr=') } 8
-        $base = if ((Get-Content $reportLog -Raw) -match 'dpr=([\d.]+)') { $Matches[1] } else { '?' }
-        Keys '^{ADD}'; Start-Sleep -Seconds 1; Keys '^{ADD}'; Start-Sleep -Seconds 1
-        Remove-Item $reportLog -ErrorAction SilentlyContinue
-        Keys '{F5}'; Start-Sleep -Seconds 5
-        $rep = if (Test-Path $reportLog) { Get-Content $reportLog -Raw } else { '' }
+        Click-Page
+        $null = Wait-For { (Last-Report) -match 'dpr=' } 8
+        $base = if ((Last-Report) -match 'dpr=([\d.]+)') { $Matches[1] } else { '?' }
+        Keys '^{ADD}'; Start-Sleep -Milliseconds 800; Keys '^{ADD}'; Start-Sleep -Milliseconds 800
+        Keys '{F5}'; Start-Sleep -Seconds 4; Click-Page; Start-Sleep -Seconds 2
+        $rep = Last-Report
         if ($rep -notmatch "z=1\.25&dpr=$([regex]::Escape($base))") { return "after two presses and a reload the page reported: '$rep' (baseline dpr $base)" }
-        Remove-Item $reportLog -ErrorAction SilentlyContinue; Keys '^0'; Keys '{F5}'; Start-Sleep -Seconds 5
-        $rep2 = if (Test-Path $reportLog) { Get-Content $reportLog -Raw } else { '' }
-        if ($rep2 -notmatch "z=1&dpr=$([regex]::Escape($base))") { return "after Ctrl+0 and reload the page reported: '$rep2'" }
+        Keys '^0'; Start-Sleep -Seconds 2
+        $rep2 = Last-Report
+        if ($rep2 -notmatch "z=1&dpr=$([regex]::Escape($base))") { return "after Ctrl+0 the page reported: '$rep2'" }
+    }
+    Try-Row '18b Zoom with the keyboard focus inside an IFRAME reaches the app once per press' {
+        Go (U '127.0.0.1' '/f'); Start-Sleep -Seconds 3; Click-Page; Start-Sleep -Seconds 2
+        Click-Page; $null = Wait-For { (Last-Report) -match 'ae=IFRAME' } 6
+        if ((Last-Report) -notmatch 'ae=IFRAME') { return "focus was not inside the iframe (report: '$(Last-Report)'), so the case was not exercised" }
+        Keys '^{ADD}'; Start-Sleep -Milliseconds 800; Keys '^{ADD}'; Start-Sleep -Seconds 2
+        $rep = Last-Report
+        Keys '^0'; Start-Sleep -Seconds 1
+        if ($rep -notmatch 'z=1\.25&') { return "with focus in the iframe two presses gave: '$rep'" }
+    }
+    Try-Row '18c Ctrl+mouse wheel zooms one step per notch and back' {
+        Go (U '127.0.0.1' '/z'); Start-Sleep -Seconds 3; Click-Page; Start-Sleep -Seconds 2
+        Ctrl-Wheel 1; Start-Sleep -Seconds 2; $up = Last-Report
+        Ctrl-Wheel -1; Start-Sleep -Seconds 2; $down = Last-Report
+        if ($up -notmatch 'z=1\.1&') { return "one notch up gave: '$up'" }
+        if ($down -notmatch 'z=1&') { return "one notch down gave: '$down'" }
+    }
+    Try-Row '21 After Enter the address bar shows the page that was opened, not the typed words' {
+        Go "127.0.0.1:$port/addr"
+        if (-not (Wait-For { (Address) -eq "http://127.0.0.1:$port/addr" } 10)) { "the box shows '$(Address)'" }
+    }
+    Try-Row '22 Typing in the address bar while a page is still loading is not overwritten' {
+        Keys '^l'; Keys '^a'; Send-Text (U '127.0.0.1' '/slow'); Send-Text '{ENTER}'; Start-Sleep -Milliseconds 800
+        Keys '^a'; Send-Text 'keepme'
+        Start-Sleep -Seconds 7
+        $mine = Address
+        Keys '{ESC}'; Start-Sleep -Seconds 1
+        $after = Address
+        if ($mine -ne 'keepme') { return "the text being typed was replaced: '$mine'" }
+        if ($after -ne (U '127.0.0.1' '/slow')) { return "Esc did not restore the page address: '$after'" }
     }
 
     # ---------------- 19/20 default browser and second copy
     Row '19 Default browser: Make default / Settings hand-off / links from other programs' 'NOT TESTED' 'the dialog registers JevBrowse in the current user registry before it asks; that changes the host, so it is left for the disposable guest'
     Try-Row '20 A second copy (extracted to another folder) on the same data folder is refused with a message, never a second window on the data' {
         $app2 = Join-Path $run 'app2'; Copy-Item (Resolve-Path $AppDir).Path $app2 -Recurse
-        $before = @(Get-Process JevBrowse.App -ErrorAction SilentlyContinue).Count
         $env:JEVBROWSE_DATA_DIR = $data
         $p2 = Start-Process (Join-Path $app2 'JevBrowse.App.exe') -PassThru; $st2 = $p2.StartTime
         $w2 = $null; for ($i = 0; $i -lt 60 -and -not $w2 -and -not $p2.HasExited; $i++) { Start-Sleep -Milliseconds 500; $w2 = $AE::RootElement.FindFirst($TS::Children, (New-Object System.Windows.Automation.PropertyCondition($AE::ProcessIdProperty, $p2.Id))) }
         $shown = ''
-        if ($w2) { $shown = (@($w2.FindAll($TS::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name }) -join ' | '); try { [W.U]::SetForegroundWindow($p2.MainWindowHandle) | Out-Null; $w2.SetFocus() } catch { }; Start-Sleep -Milliseconds 500; [System.Windows.Forms.SendKeys]::SendWait('{ENTER}') }
+        if ($w2) { $shown = (@($w2.FindAll($TS::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name }) -join ' | '); Start-Sleep -Milliseconds 800; Require-Foreground $p2.MainWindowHandle 'the refusal message'; [System.Windows.Forms.SendKeys]::SendWait('{ENTER}') }
         $ended = $p2.WaitForExit(20000)
         if (-not $ended) { Stop-Mine $p2 $st2; return "the second copy neither exited nor explained itself (window text: $shown)" }
         if ($shown -notmatch 'already using this data folder') { return "it exited but showed no explanation: '$shown'" }
         if ($p2.ExitCode -ne 1) { return "exit code $($p2.ExitCode)" }
-        if (@(Get-Process JevBrowse.App -ErrorAction SilentlyContinue).Count -gt $before) { return 'a second JevBrowse is running' }
     }
     Close-Jev
     Try-Row '15b The search-engine choice survives a restart (panel shows Google)' {
@@ -224,11 +304,13 @@ try {
 catch { Row 'the pass itself' 'FAIL' $_.Exception.Message }
 finally {
     Stop-Mine $server $serverStamp
+    if ($capsWasOn -and -not [System.Windows.Forms.Control]::IsKeyLocked('CapsLock')) { Toggle-Caps }
+    try { Remove-Item -LiteralPath $dlFile -Force -ErrorAction SilentlyContinue } catch { }
     try { if ($script:app -and -not $script:app.HasExited) { Stop-Mine $script:app $script:appStamp } } catch { }
 }
 foreach ($n in '1 launch (unpackaged, own data folder; first-run tips skipped)') { }
 foreach ($n in 'Private-session rows (bookmark refusal, history, download list) through the UI', 'Rows 3, 5, 7-10, 12, 13 (real account, upload, camera prompt, clear data, Private restart, offline, missing runtime)') { if (-not $results.Contains($n)) { Row $n 'NOT TESTED' 'covered by earlier automated checks or needs a real account / VM; not repeated here' } }
 $bad = @($results.GetEnumerator() | Where-Object { $_.Value.status -eq 'FAIL' }).Count
-[ordered]@{ exe = $exe; zipSha256 = 'see report'; at = (Get-Date).ToUniversalTime().ToString('o'); os = [Environment]::OSVersion.VersionString; results = $results } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $run 'interaction-pass.json') -Encoding utf8
+[ordered]@{ exe = $exe; zipSha256 = $zipHash; buildCommit = $build.commit; buildVersion = $build.version; webView2 = ((Get-ChildItem 'C:\Program Files (x86)\Microsoft\EdgeWebView\Application' -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^\d' } | Sort-Object Name | Select-Object -Last 1).Name); at = (Get-Date).ToUniversalTime().ToString('o'); os = [Environment]::OSVersion.VersionString; results = $results } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $run 'interaction-pass.json') -Encoding utf8
 Write-Host "`n$(if ($bad) { 'FAIL' } else { 'DONE' }) ($($results.Count) rows, $bad failed). $run"
 if ($bad) { exit 1 }

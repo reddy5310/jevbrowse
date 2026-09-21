@@ -227,7 +227,7 @@ public sealed class WebView2Lease : IRendererLease
           };
           // Zoom keys and Ctrl+wheel (a touchpad pinch arrives as Ctrl+wheel) are taken from the engine and handed to the app, which keeps ONE zoom per site. Without
           // this the engine zoomed the page a second time on top of the app's, and the app's own shortcut stopped working once the page had keyboard focus.
-          if (window.top === window) {
+          {
             document.addEventListener('keydown', e => {
               if (!e.ctrlKey || e.altKey || e.metaKey) return;
               const m = (e.key === '+' || e.key === '=' || e.code === 'NumpadAdd') ? 'jev:zoom-in' : (e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract') ? 'jev:zoom-out' : (e.key === '0' || e.code === 'Numpad0') ? 'jev:zoom-reset' : null;
@@ -500,6 +500,9 @@ public sealed class WebView2Lease : IRendererLease
                     if (msg == "jev:secret-field") lease.AddFrameSignal(frame, PageSignals.PasswordField);
                     else if (msg == "jev:payment-field") lease.AddFrameSignal(frame, PageSignals.PaymentField);
                     else if (msg == "jev:dirty-form") lease.SetDetected(ProtectionFlags.DirtyForm, true);   // typing inside an iframe (a payment or comment widget)
+                    else if (msg == "jev:zoom-in") lease.ZoomRequested?.Invoke(1, false);   // zoom keys pressed while focus is inside an iframe
+                    else if (msg == "jev:zoom-out") lease.ZoomRequested?.Invoke(-1, false);
+                    else if (msg == "jev:zoom-reset") lease.ZoomRequested?.Invoke(0, true);
                     else lease.OnMediaMessage(msg, frame);
                 }
                 catch (Exception) { }

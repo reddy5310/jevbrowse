@@ -3111,6 +3111,10 @@ public sealed partial class MainWindow : Window
             var r = AddressInput.Resolve(AddressBox.Text, SearchEngines.Find(UiPrefs.Load(DataDir).SearchEngine));
             if (r.Kind == AddressKind.Invalid) { if (!string.IsNullOrEmpty(r.Message)) StatusText.Text = r.Message; return; }
             var url = r.Url!;
+            // What was typed is now SUBMITTED, so it is no longer an edit in progress: the address follows the page again once it navigates. (Judged as an
+            // edit only because the box held text the app had not put there, so after Enter the box kept the typed words instead of the address it opened.)
+            // Typing again after this, before the page arrives, makes it an edit again and that typing is left alone.
+            _addressSetByApp = AddressBox.Text;
             _addressEditing = false;
             if (_kernel.Active is null) { var nt = _kernel.Open(url); await _kernel.ActivateAsync(nt.Id); return; }
             WithActiveLease(l => l.Navigate(url));
