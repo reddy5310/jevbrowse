@@ -454,7 +454,7 @@ public sealed partial class MainWindow : Window
             });
         }
 
-        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--private-session-check") || args.Contains("--agent-check") || args.Contains("--agent-window-check") || args.Contains("--agent-screenshot-stage-check") || args.Contains("--agent-frame-secret-check") || args.Contains("--agent-show-during-capture-check") || args.Contains("--agent-indicator-check") || args.Contains("--idle-invariants-check") || args.Contains("--nav-check") || args.Contains("--additions-check") || args.Contains("--protection-check") || args.Contains("--media-check") || args.Contains("--site-sweep") || args.Any(a => a.StartsWith("--join=", StringComparison.Ordinal)))
+        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--private-session-check") || args.Contains("--agent-check") || args.Contains("--agent-window-check") || args.Contains("--agent-screenshot-stage-check") || args.Contains("--agent-frame-secret-check") || args.Contains("--agent-show-during-capture-check") || args.Contains("--agent-indicator-check") || args.Contains("--idle-invariants-check") || args.Contains("--nav-check") || args.Contains("--additions-check") || args.Contains("--protection-check") || args.Contains("--history-check") || args.Contains("--media-check") || args.Contains("--site-sweep") || args.Any(a => a.StartsWith("--join=", StringComparison.Ordinal)))
         {
             Directory.CreateDirectory(Path.Combine(DataDir, "benchmarks"));
             try
@@ -473,6 +473,7 @@ public sealed partial class MainWindow : Window
                 else if (args.Contains("--nav-check")) await RunNavCheckAsync();
                 else if (args.Contains("--additions-check")) await RunAdditionsCheckAsync();
                 else if (args.Contains("--protection-check")) await RunProtectionCheckAsync();
+                else if (args.Contains("--history-check")) await RunHistoryCheckAsync();
                 else if (args.Contains("--privacy-check")) await RunPrivacyCheckAsync();
                 else if (args.Contains("--memory-lab")) await RunMemoryLabAsync();
                 else if (args.Contains("--restore-bench")) await RunRestoreBenchAsync();
@@ -555,7 +556,7 @@ public sealed partial class MainWindow : Window
 
     private void OnKernelChanged(KernelEvent e)
     {
-        if (e.Kind is "workspace-created" or "workspace-ended" or "context-restored" or "opened" or "closed" or "moved") RebuildWorkspaces();
+        if (e.Kind is "workspace-created" or "workspace-ended" or "workspace-renamed" or "workspace-deleted" or "context-restored" or "opened" or "closed" or "moved") RebuildWorkspaces();
         if (e.Kind is "workspace-switched") { SyncWorkspaceBox(); RebuildList(); }
         else if (e.Kind is "opened" or "closed" or "loaded" or "moved" or "context-restored" or "pinned") RebuildList();
         else foreach (var i in Items) i.Refresh();
@@ -3047,8 +3048,8 @@ public sealed partial class MainWindow : Window
         UpdatePoolText();
     }
 
-    private void OnBack(object s, RoutedEventArgs e) => WithActiveLease(l => { if (l.View.CanGoBack) l.View.GoBack(); });
-    private void OnForward(object s, RoutedEventArgs e) => WithActiveLease(l => { if (l.View.CanGoForward) l.View.GoForward(); });
+    private void OnBack(object s, RoutedEventArgs e) => WithActiveLease(l => l.GoBackAcrossSleep());
+    private void OnForward(object s, RoutedEventArgs e) => WithActiveLease(l => l.GoForwardAcrossSleep());
 
     private void WithActiveLease(Action<WebView2Lease> a)
     {

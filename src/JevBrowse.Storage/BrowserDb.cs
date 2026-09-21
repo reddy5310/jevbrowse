@@ -9,7 +9,7 @@ namespace JevBrowse.Storage;
 /// </summary>
 public sealed class BrowserDb : IDisposable
 {
-    public const int LatestVersion = 10;
+    public const int LatestVersion = 11;
 
     private static readonly (int Version, string Sql)[] Steps =
     [
@@ -141,6 +141,10 @@ public sealed class BrowserDb : IDisposable
         // honoured only where they can be honoured safely (see SiteSettingsRepository.DataClassOverrideForHost).
         (10, """
             ALTER TABLE site_settings ADD COLUMN exact_host INTEGER NOT NULL DEFAULT 0;
+            """),
+        // Back/Forward history saved with a sleeping tab's checkpoint (a JSON list of entries and the current index). NULL = none was kept.
+        (11, """
+            ALTER TABLE checkpoints ADD COLUMN history_json TEXT;
             """),
     ];
 

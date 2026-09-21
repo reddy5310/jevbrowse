@@ -146,11 +146,14 @@ public sealed class FakeLease(ResourceId id, Uri url, FakeLeaseManager owner) : 
         var cp = new Checkpoint(id, Url, "t", 0, partial ? 0 : ScrollY, null, thumb, DateTimeOffset.UnixEpoch);
         // A partial capture here is the scroll-extraction failure: the address survived, the position did not.
         return Task.FromResult(partial
-            ? new CaptureResult(cp, CaptureOutcome.Partial, "position unavailable", PreservedParts.Address | PreservedParts.Preview)
-            : new CaptureResult(cp, CaptureOutcome.Captured, "address, position and preview", PreservedParts.Address | PreservedParts.Position | PreservedParts.Preview));
+            ? new CaptureResult(cp, CaptureOutcome.Partial, "position unavailable", PreservedParts.Address | PreservedParts.Preview, HistoryToReport)
+            : new CaptureResult(cp, CaptureOutcome.Captured, "address, position and preview", PreservedParts.Address | PreservedParts.Position | PreservedParts.Preview, HistoryToReport));
     }
 
     public void ApplyCheckpoint(Checkpoint cp) { Applied = cp; ScrollY = cp.ScrollY; }
+    public NavHistory? Seeded { get; private set; }
+    public NavHistory? HistoryToReport { get; set; }
+    public void SeedHistory(NavHistory h) => Seeded = h;
     public string? ReadableText { get; set; }
     /// <summary>Simulates a slow in-page extraction; <see cref="DuringExtract"/> runs while the caller is awaiting it.</summary>
     public TimeSpan ExtractDelay { get; set; }

@@ -381,6 +381,15 @@ public sealed class WebView2Lease : IRendererLease
             if (lease.NavigationGuard is { } guard && Uri.TryCreate(e.Uri, UriKind.Absolute, out var dest) && dest.Scheme is "http" or "https" && !guard(dest)) { e.Cancel = true; return; }
             if (e.Cancel) return;
             lease.BumpDocument();
+            // A real navigation from here ends whatever used to be ahead in the saved history (as in any browser); Back/Forward traversals and our own replace do not.
+            if (!e.IsRedirected && e.NavigationKind == CoreWebView2NavigationKind.NewDocument)
+            {
+                // Two loads are not "the person went somewhere new": the one that brought the page back after sleep, and our own replace for Back/Forward. Each is matched by
+                // its address and used up, so an event that arrives late can never let a real navigation slip through, or swallow one.
+                if (e.Uri == lease._restoreUrl) lease._restoreUrl = null;
+                else if (e.Uri == lease._replaceUrl) lease._replaceUrl = null;
+                else lease._sleep.ClearForward();
+            }
             if (!e.IsRedirected) lease.ResetSignals();
         };
         // Typed input is unfinished work until its DOCUMENT is replaced (ContentLoading, below), NOT until it finishes loading: a person can type into a slow page
@@ -682,12 +691,13 @@ public sealed class WebView2Lease : IRendererLease
         var url = Uri.TryCreate(core.Source, UriKind.Absolute, out var u) ? u : new Uri("about:blank");
         var thumb = AllowThumbnails ? _lastThumbnail : null;
         var cp = new Checkpoint(ResourceId, url, core.DocumentTitle, sx, sy, favicon, thumb, DateTimeOffset.UtcNow);
+        var history = await ReadHistoryAsync(core, ct);
         kept |= PreservedParts.Address;                                    // we got this far, so core.Source is real
         if (thumb is not null) kept |= PreservedParts.Preview;
         // A class that forbids thumbnails is not a shortfall: nothing was lost, the policy said not to keep pixels.
         if (!AllowThumbnails) kept |= PreservedParts.Preview;
         if (outcome == CaptureOutcome.Captured && gaps.Count > 0) outcome = CaptureOutcome.Partial;
-        return new(cp, outcome, gaps.Count == 0 ? "address, position and preview" : string.Join("; ", gaps), kept);
+        return new(cp, outcome, gaps.Count == 0 ? "address, position and preview" : string.Join("; ", gaps), kept, history);
     }
 
     // Readability-lite: prefer <article>/<main>/role=main, else the densest text container; strip nav/aside/footer/
@@ -814,6 +824,59 @@ public sealed class WebView2Lease : IRendererLease
             return new(msg == "ok", msg);
         }
         catch (Exception ex) { return new(false, ex.GetType().Name); }
+    }
+
+    // ---- Back and Forward across sleep ----
+    private readonly JevBrowse.VirtualTabs.SleepHistory _sleep = new();
+    private string? _replaceUrl;
+
+    private string? _restoreUrl;
+
+    public void SeedHistory(NavHistory history)
+    {
+        _sleep.Seed(history);
+        _restoreUrl = history.Entries.Count > history.Index ? history.Entries[history.Index].Url : null;   // the wake-up load itself must not end Forward
+    }
+
+    /// <summary>The renderer's own history plus what came before and after the page this renderer woke on. Null if it cannot be read (then nothing extra is kept).</summary>
+    private async Task<NavHistory?> ReadHistoryAsync(CoreWebView2 core, CancellationToken ct)
+    {
+        try
+        {
+            var call = core.CallDevToolsProtocolMethodAsync("Page.getNavigationHistory", "{}").AsTask();
+            if (await Task.WhenAny(call, Task.Delay(CaptureTimeout, ct)) != call) return null;
+            using var doc = JsonDocument.Parse(await call);
+            var index = doc.RootElement.GetProperty("currentIndex").GetInt32();
+            var live = doc.RootElement.GetProperty("entries").EnumerateArray()
+                .Select(e => new HistoryEntry(e.GetProperty("url").GetString() ?? "", e.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "")).ToList();
+            return live.Count == 0 ? null : _sleep.Flatten(live, index);
+        }
+        catch (Exception) { return null; }
+    }
+
+    private HistoryEntry CurrentEntry() => new(View.CoreWebView2.Source ?? "", View.CoreWebView2.DocumentTitle ?? "");
+
+    public bool CanGoBackAcrossSleep => View.CanGoBack || _sleep.CanGoBackFromLiveStart;
+    public bool CanGoForwardAcrossSleep => (!View.CanGoBack && _sleep.CanGoForwardFromLiveStart) || View.CanGoForward;
+
+    public void GoBackAcrossSleep()
+    {
+        if (View.CanGoBack) { View.GoBack(); return; }
+        if (_sleep.TakeBack(CurrentEntry()) is { } prev) ReplaceCurrentPage(prev.Url);
+    }
+
+    public void GoForwardAcrossSleep()
+    {
+        if (!View.CanGoBack && _sleep.TakeForward(CurrentEntry()) is { } next) { ReplaceCurrentPage(next.Url); return; }
+        if (View.CanGoForward) View.GoForward();
+    }
+
+    /// <summary>Loads an address in place of the current page (no new live history entry), so the live history never holds two copies of a page.</summary>
+    private void ReplaceCurrentPage(string url)
+    {
+        _replaceUrl = url;
+        _ = View.CoreWebView2.ExecuteScriptAsync("location.replace(" + JsonSerializer.Serialize(url) + ")");
+        _ = Task.Delay(15000).ContinueWith(_ => { if (_replaceUrl == url) _replaceUrl = null; }, TaskScheduler.Default);   // never stays set if the navigation did not happen
     }
 
     public void ApplyCheckpoint(Checkpoint cp)

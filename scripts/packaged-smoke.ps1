@@ -165,6 +165,19 @@ if ($pdone -and (Test-Path $pres)) { $pr = Get-Content $pres -Raw | ConvertFrom-
 else { Check 'unfinished work keeps a tab awake (password-only typing, iframe typing, upload, silent video)' $false 'timed out or produced no result (a failure, not a pass)' }
 Remove-Item Env:\JEVBROWSE_DATA_DIR, Env:\JEVBROWSE_NO_FILTER_UPDATE, Env:\JEVBROWSE_AI, Env:\JEVBROWSE_MODE -ErrorAction SilentlyContinue
 
+# ---- Back and Forward across sleep against THIS build (bounded wait)
+Write-Host '[back/forward across sleep]'
+$hd = Join-Path $run 'history'; New-Item -ItemType Directory -Path "$hd\benchmarks" -Force | Out-Null
+'{"firstRunDone":true}' | Set-Content "$hd\settings.json" -Encoding ascii
+$env:JEVBROWSE_DATA_DIR = $hd; $env:JEVBROWSE_NO_FILTER_UPDATE = '1'; $env:JEVBROWSE_AI = '0'; $env:JEVBROWSE_MODE = 'Simple'
+$ph = Start-Process $exe -ArgumentList '--history-check' -PassThru
+$hdone = $ph.WaitForExit(150000)
+if (-not $hdone) { Stop-Process -Id $ph.Id -Force }   # a handle we hold: its id cannot have been reused
+$hres = "$hd\benchmarks\history-check.json"
+if ($hdone -and (Test-Path $hres)) { $hr = Get-Content $hres -Raw | ConvertFrom-Json; Check 'Back and Forward keep working after a tab sleeps and wakes' ($hr.pass -eq $true) "$(@($hr.steps).Count) steps; failed: $((@($hr.steps | Where-Object { -not $_.ok }) | ForEach-Object { $_.name }) -join '; ')" }
+else { Check 'Back and Forward keep working after a tab sleeps and wakes' $false 'timed out or produced no result (a failure, not a pass)' }
+Remove-Item Env:\JEVBROWSE_DATA_DIR, Env:\JEVBROWSE_NO_FILTER_UPDATE, Env:\JEVBROWSE_AI, Env:\JEVBROWSE_MODE -ErrorAction SilentlyContinue
+
 $failed = @($results.GetEnumerator() | Where-Object { -not $_.Value.pass }).Count
 $verdict = if ($inconclusive -and $failed -eq 0) { 'INCONCLUSIVE' } elseif ($failed) { 'FAIL' } else { 'PASS' }
 [ordered]@{ verdict = $verdict; zip = $Zip; sha256 = (Get-FileHash $Zip -Algorithm SHA256).Hash.ToLower(); commit = $build.commit; version = $build.version; defaultDataLocation = [bool]$DefaultData

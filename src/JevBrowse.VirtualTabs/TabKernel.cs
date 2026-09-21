@@ -35,6 +35,8 @@ public sealed class TabKernel
     private readonly IRendererLeaseManager _leases;
     private readonly TabRepository _repo;
     private readonly CheckpointRepository _checkpoints;
+    /// <summary>Back/Forward history of sleeping tabs, in memory for every class (a Private session's tabs sleep too). Written to disk only where policy allows.</summary>
+    private readonly Dictionary<ResourceId, NavHistory> _history = [];
     private readonly WorkspaceRepository? _workspaces;
     private readonly List<Workspace> _workspaceList = [];
     private readonly string _thumbnailDir;
@@ -135,7 +137,13 @@ public sealed class TabKernel
         if (!thumbs) { DeleteThumb(ThumbPath(t.Id)); DeleteThumb(ThumbPath(t.Id) + ".tmp"); }
         if (!May(t, DataOperation.PersistCheckpoint).Allowed) _checkpoints.Delete(t.Id);
         // A checkpoint that survives (scroll position only) must not keep pointing at a preview that was just deleted.
-        else if (!thumbs && _checkpoints.Get(t.Id) is { ThumbnailPath: not null } kept) _checkpoints.Upsert(kept with { ThumbnailPath = null });
+        else if (_checkpoints.Get(t.Id) is { } kept)
+        {
+            // The visited addresses in a saved history are more revealing than a scroll position: a Sensitive or Secret page keeps none on disk.
+            var dropHistory = kept.History is not null && ClassOf(t) >= DataClass.Sensitive;
+            var dropThumb = !thumbs && kept.ThumbnailPath is not null;
+            if (dropHistory || dropThumb) _checkpoints.Upsert(kept with { ThumbnailPath = dropThumb ? null : kept.ThumbnailPath, History = dropHistory ? null : kept.History });
+        }
         if (!May(t, DataOperation.PersistTabRow).Allowed) _repo.Delete(t.Id);
         if (!May(t, DataOperation.IndexContent).Allowed) Changed?.Invoke(new("policy-tightened", t.Id, "index"));
     }
@@ -178,6 +186,50 @@ public sealed class TabKernel
         Changed?.Invoke(new("workspace-created", default, name));
         return w;
     }
+
+    /// <summary>Renames an ordinary workspace (its tabs, identity and data are untouched). Private and Disposable workspaces are temporary and keep their generated names.</summary>
+    public void RenameWorkspace(ContextId id, string name)
+    {
+        name = (name ?? "").Trim();
+        if (name.Length == 0) throw new ArgumentException("A workspace needs a name.", nameof(name));
+        if (name.Length > 60) name = name[..60];
+        var ws = _workspaceList.FirstOrDefault(w => w.Id == id) ?? throw new KeyNotFoundException($"workspace {id}");
+        if (ws.Container.IsEphemeral()) throw new InvalidOperationException("Temporary sessions cannot be renamed.");
+        ws.Name = name;
+        _workspaces?.Upsert(ws);
+        Changed?.Invoke(new("workspace-renamed", default, name));
+    }
+
+    /// <summary>
+    /// Deletes an ordinary workspace and closes every tab in it (their saved positions, previews and Back/Forward history go with them). The Default workspace cannot be
+    /// deleted, and neither can a temporary one (ending a session is a different action). If the person is in it, they land in <paramref name="returnTo"/>. Browser Memory and
+    /// the identity's cookies are separate and untouched: clearing those is its own, labelled action.
+    /// </summary>
+    public Task DeleteWorkspaceAsync(ContextId id, ContextId returnTo, CancellationToken ct = default) =>
+        SerializedAsync(async () =>
+        {
+            if (id == ContextId.Default) throw new InvalidOperationException("The default workspace cannot be deleted.");
+            var ws = _workspaceList.FirstOrDefault(w => w.Id == id) ?? throw new KeyNotFoundException($"workspace {id}");
+            if (ws.Container.IsEphemeral()) throw new InvalidOperationException("Temporary sessions are ended, not deleted.");
+            if (returnTo == id) throw new InvalidOperationException("Choose another workspace to return to.");
+            RequireOpenWorkspace(returnTo);
+            if (ActiveWorkspace == id)
+            {
+                Active = null;
+                ActiveWorkspace = returnTo;
+                Changed?.Invoke(new("workspace-switched", default, returnTo.ToString()));
+            }
+            List<Exception> failures = [];
+            foreach (var tab in TabsIn(id).ToList())
+            {
+                try { await CloseCoreAsync(tab.Id, CancellationToken.None); }
+                catch (Exception ex) { failures.Add(ex); }
+            }
+            if (failures.Count > 0) throw new AggregateException("Some tabs could not be closed. Try deleting the workspace again.", failures);
+            _workspaceList.Remove(ws);
+            _workspaces?.Delete(id);
+            Changed?.Invoke(new("workspace-deleted", default, ws.Name));
+        }, ct);
 
     private bool SameIdentity(Workspace a, Workspace b) =>
         a.Container == b.Container && (!a.Container.IsEphemeral() || a.Id == b.Id);
@@ -469,6 +521,9 @@ public sealed class TabKernel
             Changed?.Invoke(new("loaded", id, tab.Url.ToString(), background)); // every completed navigation, for the indexer
         };
         if (checkpoint is not null) lease.ApplyCheckpoint(checkpoint);
+        // Back and Forward survive sleep: seed the new renderer with what the tab had, but only if it describes the page we are loading.
+        var saved = checkpoint?.History ?? _history.GetValueOrDefault(id);
+        if (saved is not null && saved.Entries.Count > 1 && saved.Index < saved.Entries.Count && saved.Entries[saved.Index].Url == tab.Url.ToString()) lease.SeedHistory(saved);
         return lease;
     }
 
@@ -550,9 +605,11 @@ public sealed class TabKernel
 
         if (!r.IsUsable) { Changed?.Invoke(new("checkpoint-failed", tab.Id, $"{r.Outcome}: {r.Detail}")); return r; }
 
+        if (r.History is { } history) _history[tab.Id] = history;   // in memory whatever the class: waking within this run keeps Back and Forward
         var cp = r.Checkpoint!;
         if (!May(tab, DataOperation.PersistCheckpoint).Allowed) { DeleteThumb(cp.ThumbnailPath); return r with { Checkpoint = null, Detail = "policy: nothing about this page is persisted" }; }
         if (cp.ThumbnailPath is not null && !May(tab, DataOperation.PersistThumbnail).Allowed) { DeleteThumb(cp.ThumbnailPath); cp = cp with { ThumbnailPath = null }; }
+        if (r.History is not null && ClassOf(tab) < DataClass.Sensitive) cp = cp with { History = r.History };   // on disk only for classes that may keep visited addresses
         return r with { Checkpoint = cp };
     }
 
@@ -667,6 +724,7 @@ public sealed class TabKernel
         _lastCapture.Remove(id);
         if (Active?.Id == id) Active = null;
         var thumb = _checkpoints.Get(id)?.ThumbnailPath;
+        _history.Remove(id);
         _repo.Delete(id); // cascades to checkpoints
         DeleteThumb(thumb);
         DeleteThumb(ThumbPath(id));

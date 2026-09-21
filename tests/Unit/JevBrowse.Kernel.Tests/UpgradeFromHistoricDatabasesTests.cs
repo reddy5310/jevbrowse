@@ -137,7 +137,7 @@ public class UpgradeFromHistoricDatabasesTests : IDisposable
     private static readonly Dictionary<int, string> Shipped = new()
     {
         [1] = "f30c0fe528c4", [2] = "f06179841d31", [3] = "0aa4f761c50a", [4] = "a45e01e80dda", [5] = "bbc57c72b4ff",
-        [6] = "0ad8f3f247fd", [7] = "9f6b81febe53", [8] = "0b5e602eae91", [9] = "1054a3ea79a3", [10] = "abd187375ead",
+        [6] = "0ad8f3f247fd", [7] = "9f6b81febe53", [8] = "0b5e602eae91", [9] = "1054a3ea79a3", [10] = "abd187375ead", [11] = "06b56b5ef3cb",
     };
 
     [Fact]

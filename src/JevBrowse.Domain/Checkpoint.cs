@@ -39,7 +39,7 @@ public enum PreservedParts
     Preview = 1 << 2,
 }
 
-public sealed record CaptureResult(Checkpoint? Checkpoint, CaptureOutcome Outcome, string Detail, PreservedParts Preserved = PreservedParts.None)
+public sealed record CaptureResult(Checkpoint? Checkpoint, CaptureOutcome Outcome, string Detail, PreservedParts Preserved = PreservedParts.None, NavHistory? History = null)
 {
     /// <summary>True when the checkpoint is good enough to promise the user their page was kept.</summary>
     public bool IsUsable => Checkpoint is not null && Outcome is CaptureOutcome.Captured or CaptureOutcome.Partial;
@@ -70,4 +70,11 @@ public sealed record Checkpoint(
     double ScrollY,
     string? FaviconUrl,
     string? ThumbnailPath,
-    DateTimeOffset CapturedAt);
+    DateTimeOffset CapturedAt,
+    NavHistory? History = null);
+
+/// <summary>One page in a tab's Back/Forward history.</summary>
+public sealed record HistoryEntry(string Url, string Title);
+
+/// <summary>A tab's Back/Forward history as it was when the tab went to sleep: every entry, oldest first, and which one was showing.</summary>
+public sealed record NavHistory(IReadOnlyList<HistoryEntry> Entries, int Index);

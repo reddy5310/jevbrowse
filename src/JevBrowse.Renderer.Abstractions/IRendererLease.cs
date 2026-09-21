@@ -39,6 +39,8 @@ public interface IRendererLease
     Task<CaptureResult> CaptureCheckpointAsync(string thumbnailDir, CancellationToken ct);
     /// <summary>Apply scroll position etc. once the page the lease is loading has finished.</summary>
     void ApplyCheckpoint(Checkpoint checkpoint);
+    /// <summary>Gives a freshly created renderer the Back/Forward history the tab had before it slept, so Back and Forward keep working across sleep.</summary>
+    void SeedHistory(NavHistory history);
     /// <summary>Readable main text with boilerplate reduced (§8). Caller must clear Trust OS IndexContent first.</summary>
     Task<string?> ExtractReadableTextAsync(CancellationToken ct);
 
