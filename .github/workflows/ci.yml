@@ -82,6 +82,7 @@ jobs:
   # Regression enforcement needs a stable dedicated runner and a threshold chosen from that runner's own run-to-run variation.
   idle-cpu:
     runs-on: windows-latest
+    timeout-minutes: 30
     needs: test
     if: github.event_name == 'push'
     continue-on-error: true
@@ -95,7 +96,7 @@ jobs:
       - name: Measure idle CPU (report only)
         shell: powershell
         continue-on-error: true
-        run: ./scripts/idle-benchmark.ps1 -Scenarios "static,panel-open,panel-closed,agent-idle,busy-control" -Runs 3 -WarmupSeconds 20 -SampleSeconds 40 -ExePath "$env:GITHUB_WORKSPACE/out/app/JevBrowse.App.exe" -Root "$env:RUNNER_TEMP/idle" -Label ci -ReportOnly
+        run: ./scripts/idle-benchmark.ps1 -Scenarios "static,panel-open,panel-closed,agent-idle,busy-control" -Runs 3 -WarmupSeconds 20 -SampleSeconds 40 -ExePath "$env:GITHUB_WORKSPACE/out/app/JevBrowse.App.exe" -Root "$env:RUNNER_TEMP/idle" -Label ci -ReportOnly -MaxMinutes 18
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -107,6 +108,7 @@ jobs:
   # interactive desktop and python, which a hosted runner may not give it; an inconclusive result there is expected and never blocks a merge.
   recovery-app:
     runs-on: windows-latest
+    timeout-minutes: 30
     needs: test
     if: github.event_name == 'push'
     continue-on-error: true

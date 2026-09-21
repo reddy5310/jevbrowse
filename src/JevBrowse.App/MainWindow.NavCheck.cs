@@ -95,8 +95,14 @@ public sealed partial class MainWindow
 
             async Task<bool> TrustedClick(string elementId)
             {
-                var raw = await core.ExecuteScriptAsync($"(()=>{{const r=document.getElementById('{elementId}').getBoundingClientRect();return JSON.stringify([r.x+20,r.y+r.height/2]);}})()");
-                var xy = JsonSerializer.Deserialize<double[]>(JsonSerializer.Deserialize<string>(raw)!)!;
+                // The address changes before the page has been parsed; on a slow machine the element is not there yet. Wait for it.
+                string? raw = null;
+                for (var i = 0; i < 100 && (raw is null || raw == "null"); i++)
+                {
+                    raw = await core.ExecuteScriptAsync($"(()=>{{const e=document.getElementById('{elementId}'); if(!e) return null; const r=e.getBoundingClientRect(); return JSON.stringify([r.x+20,r.y+r.height/2]);}})()");
+                    if (raw is null or "null") await Task.Delay(100);
+                }
+                var xy = JsonSerializer.Deserialize<double[]>(JsonSerializer.Deserialize<string>(raw!)!)!;
                 await core.CallDevToolsProtocolMethodAsync("Input.dispatchMouseEvent", JsonSerializer.Serialize(new { type = "mouseMoved", x = xy[0], y = xy[1] }));
                 foreach (var type in new[] { "mousePressed", "mouseReleased" })
                     await core.CallDevToolsProtocolMethodAsync("Input.dispatchMouseEvent", JsonSerializer.Serialize(new { type, x = xy[0], y = xy[1], button = "left", buttons = type == "mousePressed" ? 1 : 0, clickCount = 1 }));

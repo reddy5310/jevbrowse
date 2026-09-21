@@ -41,7 +41,8 @@ param(
     [string]$Label = '',
     [switch]$ReportOnly,
     [string]$CompareTo = '',
-    [switch]$Enforce
+    [switch]$Enforce,
+    [int]$MaxMinutes = 0   # stop starting new runs after this long (0 = no limit); what was not run is reported as not run, never as a result
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'IdleBenchmark.Lib.ps1')
@@ -237,7 +238,11 @@ function Measure-Run([string]$scenario, [int]$runNumber) {
         # GPU and whole-machine CPU come from the background counter job that ran alongside (the GPU counter query alone takes ~5 s).
         $gpuSamples = New-Object System.Collections.Generic.List[object]
         if ($counterJob) {
-            $sets = @(Receive-Job $counterJob -Wait -AutoRemoveJob -ErrorAction SilentlyContinue)
+            # A counter query that never returns must not hold the whole suite: give it the sampling window plus a margin, then abandon it (GPU becomes "unavailable").
+            $null = Wait-Job $counterJob -Timeout ($SampleSeconds + 40)
+            if ($counterJob.State -eq 'Running') { Stop-Job $counterJob }
+            $sets = @(Receive-Job $counterJob -ErrorAction SilentlyContinue)
+            Remove-Job $counterJob -Force -ErrorAction SilentlyContinue
             foreach ($set in $sets) {
                 $gs = 0.0; $gw = 0.0; $sysNow = $null; $gpuRows = 0
                 foreach ($cs in @($set)) {
@@ -261,9 +266,11 @@ function Measure-Run([string]$scenario, [int]$runNumber) {
 
 # ---------------- the suite ----------------
 $suite = [ordered]@{}
+$suiteStart = Get-Date; $notRun = 0
 foreach ($scenario in $Scenarios) {
     $runsForScenario = @()
     for ($r = 1; $r -le $Runs; $r++) {
+        if ($MaxMinutes -gt 0 -and ((Get-Date) - $suiteStart).TotalMinutes -gt $MaxMinutes) { Write-Host "[$scenario] run $r of $Runs NOT RUN: the $MaxMinutes-minute limit was reached"; $notRun++; continue }
         Write-Host "[$scenario] run $r of $Runs ..."
         $raw = Measure-Run $scenario $r
         $problems = @(Test-RunValidity $raw $plan)
@@ -296,7 +303,7 @@ if ($CompareTo) {
     $base = Read-Json $CompareTo
     if ($base) { $comparison = [ordered]@{}; foreach ($sc in $Scenarios) { if ($base.scenarios.PSObject.Properties.Name -contains $sc) { $comparison[$sc] = Compare-Scenario $suite[$sc].summary $base.scenarios.$sc.summary } } }
 }
-$verdict = if ($controlFailed) { 'inconclusive: the positive control was not detected' } elseif ($anyInconclusive) { 'contains inconclusive runs' } else { 'all runs valid' }
+$verdict = if ($notRun -gt 0) { "incomplete: $notRun run(s) were not run because of the time limit" } elseif ($controlFailed) { 'inconclusive: the positive control was not detected' } elseif ($anyInconclusive) { 'contains inconclusive runs' } else { 'all runs valid' }
 $results = [ordered]@{ label = $Label; verdict = $verdict; plan = $plan; environment = $environment; positiveControl = $control; scenarios = $suite; comparison = $comparison; note = $script:GpuNote }
 $results | ConvertTo-Json -Depth 10 | Set-Content "$out\results.json" -Encoding utf8
 
