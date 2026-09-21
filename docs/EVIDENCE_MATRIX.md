@@ -7,7 +7,7 @@ Every claim JevBrowse makes, and the strongest evidence behind it today. Levels,
 - **Real engine**: a benchmark/check drives actual WebView2 renderers and inspects real disk/DB state (`--privacy-check`, `--restore-bench`, …).
 - **Release-validated**: verified on the packaged, signed build on more than one machine. **Nothing is at this level yet** (builds are unsigned and tested on one machine).
 
-Last updated 2026-09-21 after P3, text size, agent isolation, screenshots, the agent indicator, the idle-CPU harness, the recovery work and the review response (ADR 0024-0032; [FIRST_RELEASE_PLAN.md](FIRST_RELEASE_PLAN.md)). 513 unit tests. See [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for what is and is not done.
+Last updated 2026-09-21 after P3, text size, agent isolation, screenshots, the agent indicator, the idle-CPU harness, the recovery work and the review response (ADR 0024-0032; [FIRST_RELEASE_PLAN.md](FIRST_RELEASE_PLAN.md)). 519 unit tests. See [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for what is and is not done.
 
 | Claim | Level | Evidence | Known gap |
 |---|---|---|---|
@@ -73,6 +73,7 @@ Last updated 2026-09-21 after P3, text size, agent isolation, screenshots, the a
 | **A Private-session download is asked about first; Cancel saves nothing; agent pages never download** | Real engine (mutation-checked) | `--additions-check` shows the real prompt (text, Cancel default), dismissing it saves nothing, Continue saves, an ordinary tab is not asked | The engine's own save dialog is bypassed by the check; verify by hand (clean-Windows checklist row 9) |
 | **Popup-based sign-in is NOT supported, and recorded as such** | Real engine | `--additions-check`: the sign-in page opens as a managed tab with `window.opener` null, so it cannot return a token; the status line says so | Deliberate for this alpha; a managed popup that preserves the opener is later work |
 | **A missing WebView2 runtime gives a useful message** | Real app (simulated) | `additions-check.ps1` with the runtime folder pointed at an empty directory: message names the runtime, offers the download, Quit works | Simulated; a real machine without the runtime is the clean-Windows checklist row 13 |
+| **Unfinished work keeps a tab awake: typing (password-only pages and iframes included), an upload in flight, a long silent video** | Real engine (mutation-checked) + unit | `--protection-check` (trusted DevTools input): each is detected and the scheduler is refused, released when it ends, an idle page is left alone; with the old password rule the half-typed-password tab was put to sleep. `UnfinishedWorkTests` (every flag is named to the person and vetoes automatic sleep; the person can still sleep it explicitly) | Uploads via a Request object body, `sendBeacon`, or a `<form>` submit are not detected; short muted loops are deliberately ignored; **Back/Forward history is lost when a tab sleeps** (only address and scroll position are kept) |
 | CI enforces performance regressions | **Designed** (measurement exists, enforcement does not) | `perf` and `idle-cpu` jobs publish numbers and never block; `idle-benchmark.ps1 -Enforce` and `idle-compare.ps1` exist | No stable dedicated runner; threshold not chosen from that runner's variation |
 | Signed, updatable release | **Designed** | portable zip only | No code signing, no MSIX, no security-update path |
 

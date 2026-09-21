@@ -21,6 +21,8 @@ public static class ProtectionPhrases
         if (p.HasFlag(ProtectionFlags.MicrophoneActive)) reasons.Add("using microphone");
         if (p.HasFlag(ProtectionFlags.WebRtcActive)) reasons.Add("call active");
         if (p.HasFlag(ProtectionFlags.DownloadActive)) reasons.Add("downloading");
+        if (p.HasFlag(ProtectionFlags.UploadActive)) reasons.Add("uploading");
+        if (p.HasFlag(ProtectionFlags.VideoPlaying)) reasons.Add("playing video");
         if (p.HasFlag(ProtectionFlags.DirtyForm)) reasons.Add("unsaved typing");
         return reasons;
     }

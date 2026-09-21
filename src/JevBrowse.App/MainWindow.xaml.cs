@@ -439,7 +439,7 @@ public sealed partial class MainWindow : Window
             });
         }
 
-        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--private-session-check") || args.Contains("--agent-check") || args.Contains("--agent-window-check") || args.Contains("--agent-screenshot-stage-check") || args.Contains("--agent-frame-secret-check") || args.Contains("--agent-show-during-capture-check") || args.Contains("--agent-indicator-check") || args.Contains("--idle-invariants-check") || args.Contains("--nav-check") || args.Contains("--additions-check") || args.Contains("--media-check") || args.Contains("--site-sweep") || args.Any(a => a.StartsWith("--join=", StringComparison.Ordinal)))
+        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--private-session-check") || args.Contains("--agent-check") || args.Contains("--agent-window-check") || args.Contains("--agent-screenshot-stage-check") || args.Contains("--agent-frame-secret-check") || args.Contains("--agent-show-during-capture-check") || args.Contains("--agent-indicator-check") || args.Contains("--idle-invariants-check") || args.Contains("--nav-check") || args.Contains("--additions-check") || args.Contains("--protection-check") || args.Contains("--media-check") || args.Contains("--site-sweep") || args.Any(a => a.StartsWith("--join=", StringComparison.Ordinal)))
         {
             Directory.CreateDirectory(Path.Combine(DataDir, "benchmarks"));
             try
@@ -457,6 +457,7 @@ public sealed partial class MainWindow : Window
                 else if (args.Contains("--idle-invariants-check")) await RunIdleInvariantsCheckAsync();
                 else if (args.Contains("--nav-check")) await RunNavCheckAsync();
                 else if (args.Contains("--additions-check")) await RunAdditionsCheckAsync();
+                else if (args.Contains("--protection-check")) await RunProtectionCheckAsync();
                 else if (args.Contains("--privacy-check")) await RunPrivacyCheckAsync();
                 else if (args.Contains("--memory-lab")) await RunMemoryLabAsync();
                 else if (args.Contains("--restore-bench")) await RunRestoreBenchAsync();
@@ -2965,6 +2966,8 @@ public sealed partial class MainWindow : Window
         var parts = new List<string>();
         if (p.HasFlag(ProtectionFlags.DownloadActive)) parts.Add("a download is running");
         if (p.HasFlag(ProtectionFlags.DirtyForm)) parts.Add("you have typed something that is not saved");
+        if (p.HasFlag(ProtectionFlags.UploadActive)) parts.Add("an upload is in progress");
+        if (p.HasFlag(ProtectionFlags.VideoPlaying)) parts.Add("a video is playing");
         if (p.HasFlag(ProtectionFlags.Audible)) parts.Add("it is playing sound");
         if (p.HasFlag(ProtectionFlags.KeepActive)) parts.Add("you asked to keep it active");
         if (p.HasFlag(ProtectionFlags.NeverHibernateSite)) parts.Add("this site is set to stay active");

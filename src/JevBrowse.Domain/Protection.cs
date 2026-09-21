@@ -27,6 +27,10 @@ public enum ProtectionFlags
     MicrophoneActive = 1 << 6,
     CameraActive = 1 << 7,
     ScreenShareActive = 1 << 8,
+    /// <summary>A file or form data is being SENT (fetch/XHR with a file, blob or form body). Disposing the renderer abandons the upload.</summary>
+    UploadActive = 1 << 9,
+    /// <summary>A long or live video is playing, even with no sound (muted, or a silent track). Not "audible", so the audio check alone never saw it.</summary>
+    VideoPlaying = 1 << 10,
 }
 
 public static class ProtectionFlagsExtensions
@@ -38,6 +42,9 @@ public static class ProtectionFlagsExtensions
     /// </summary>
     public const ProtectionFlags LiveMedia =
         ProtectionFlags.MicrophoneActive | ProtectionFlags.CameraActive | ProtectionFlags.ScreenShareActive | ProtectionFlags.WebRtcActive;
+
+    /// <summary>Everything the page itself reports through its heartbeat (live capture, uploads, playing video): cleared together when the reports stop.</summary>
+    public const ProtectionFlags PageReported = LiveMedia | ProtectionFlags.UploadActive | ProtectionFlags.VideoPlaying;
 
     public static bool HasLiveMedia(this ProtectionFlags f) => (f & LiveMedia) != 0;
 }

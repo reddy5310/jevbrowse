@@ -152,6 +152,19 @@ if ($done -and (Test-Path $resFile)) {
 } else { Check 'permission reset, per-profile data clearing, Private-download prompt and the recorded popup-login behaviour (engine checks)' $false 'timed out or produced no result (a failure, not a pass)' }
 Remove-Item Env:\JEVBROWSE_DATA_DIR, Env:\JEVBROWSE_NO_FILTER_UPDATE, Env:\JEVBROWSE_AI, Env:\JEVBROWSE_MODE -ErrorAction SilentlyContinue
 
+# ---- unfinished-work protection against THIS build (password-only typing, iframe typing, upload in flight, silent video; bounded wait)
+Write-Host '[unfinished-work protection]'
+$pd = Join-Path $run 'protection'; New-Item -ItemType Directory -Path "$pd\benchmarks" -Force | Out-Null
+'{"firstRunDone":true}' | Set-Content "$pd\settings.json" -Encoding ascii
+$env:JEVBROWSE_DATA_DIR = $pd; $env:JEVBROWSE_NO_FILTER_UPDATE = '1'; $env:JEVBROWSE_AI = '0'; $env:JEVBROWSE_MODE = 'Simple'
+$pp = Start-Process $exe -ArgumentList '--protection-check' -PassThru
+$pdone = $pp.WaitForExit(180000)
+if (-not $pdone) { Stop-Process -Id $pp.Id -Force }   # a handle we hold: its id cannot have been reused
+$pres = "$pd\benchmarks\protection-check.json"
+if ($pdone -and (Test-Path $pres)) { $pr = Get-Content $pres -Raw | ConvertFrom-Json; Check 'unfinished work keeps a tab awake (password-only typing, iframe typing, upload, silent video)' ($pr.pass -eq $true) "$(@($pr.steps).Count) steps; failed: $((@($pr.steps | Where-Object { -not $_.ok }) | ForEach-Object { $_.name }) -join '; ')" }
+else { Check 'unfinished work keeps a tab awake (password-only typing, iframe typing, upload, silent video)' $false 'timed out or produced no result (a failure, not a pass)' }
+Remove-Item Env:\JEVBROWSE_DATA_DIR, Env:\JEVBROWSE_NO_FILTER_UPDATE, Env:\JEVBROWSE_AI, Env:\JEVBROWSE_MODE -ErrorAction SilentlyContinue
+
 $failed = @($results.GetEnumerator() | Where-Object { -not $_.Value.pass }).Count
 $verdict = if ($inconclusive -and $failed -eq 0) { 'INCONCLUSIVE' } elseif ($failed) { 'FAIL' } else { 'PASS' }
 [ordered]@{ verdict = $verdict; zip = $Zip; sha256 = (Get-FileHash $Zip -Algorithm SHA256).Hash.ToLower(); commit = $build.commit; version = $build.version; defaultDataLocation = [bool]$DefaultData

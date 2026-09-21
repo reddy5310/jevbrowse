@@ -212,7 +212,9 @@ public sealed class WebView2Lease : IRendererLease
           const post = m => { try { chrome.webview.postMessage(m); } catch {} };
           let dirty = false;
           const mark = e => {
-            const t = e.target; if (!t || t.type === 'password') return;
+            // Typing anywhere counts, a password field included: the flag says THAT something was typed, never what. (It used to skip password fields,
+            // so a page holding only a half-typed password looked finished and could be put to sleep.)
+            if (!e.target) return;
             if (!dirty) { dirty = true; post('jev:dirty-form'); }
           };
           document.addEventListener('input', mark, true);
@@ -240,8 +242,8 @@ public sealed class WebView2Lease : IRendererLease
           // either. Frames each report under their own id and the host adds them up.
           const docId = (Math.random().toString(36).slice(2) + Date.now().toString(36));
           const mic = new Set(), cam = new Set(), screen = new Set();
-          let peers = 0, beat = null, lastSent = '';
-          const kinds = () => (mic.size ? 'mic,' : '') + (cam.size ? 'cam,' : '') + (screen.size ? 'screen,' : '') + (peers > 0 ? 'peer' : '');
+          let peers = 0, beat = null, lastSent = '', uploads = 0, videoOn = false;
+          const kinds = () => (mic.size ? 'mic,' : '') + (cam.size ? 'cam,' : '') + (screen.size ? 'screen,' : '') + (peers > 0 ? 'peer,' : '') + (uploads > 0 ? 'upload,' : '') + (videoOn ? 'video' : '');
           const send = () => {
             const k = kinds();
             if (k === '' ) {
@@ -254,6 +256,43 @@ public sealed class WebView2Lease : IRendererLease
             if (!beat) beat = setInterval(() => post('jev:media:' + docId + ':' + kinds()), 2000);
           };
           const forget = t => { mic.delete(t); cam.delete(t); screen.delete(t); send(); };
+          // An upload in flight: a request whose body is a file, a blob, form data or raw bytes. Reported with the same heartbeat as a call, so it ends when
+          // the request settles, or when the document goes away (the heartbeat stops).
+          const isUploadBody = b => b != null && (b instanceof FormData || b instanceof Blob || b instanceof ArrayBuffer || ArrayBuffer.isView(b));
+          const uploadStarted = () => { uploads++; send(); };
+          const uploadSettled = () => { if (uploads > 0) uploads--; send(); };
+          if (typeof fetch === 'function') {
+            const of = window.fetch.bind(window);
+            window.fetch = (input, init) => {
+              const body = init && init.body;   // a Request object's own body is not inspected
+              if (!isUploadBody(body)) return of(input, init);
+              uploadStarted();
+              const p = of(input, init);
+              p.then(uploadSettled, uploadSettled);
+              return p;
+            };
+          }
+          if (window.XMLHttpRequest) {
+            const os = XMLHttpRequest.prototype.send;
+            XMLHttpRequest.prototype.send = function (body) {
+              if (isUploadBody(body)) { uploadStarted(); this.addEventListener('loadend', uploadSettled, { once: true }); }
+              return os.call(this, body);
+            };
+          }
+          // A long or live video playing, muted or not. Short muted loops (hero clips, animated ads) are not reasons to keep a tab awake: it must be visible, a
+          // reasonable size, and either live or longer than two minutes.
+          const videoPlaying = () => {
+            for (const v of document.querySelectorAll('video')) {
+              if (v.paused || v.ended || v.readyState < 3) continue;
+              if (v.offsetWidth < 320 || v.offsetHeight < 180 || v.getClientRects().length === 0) continue;
+              if (!(v.duration === Infinity || Number.isNaN(v.duration) || v.duration > 120)) continue;
+              return true;
+            }
+            return false;
+          };
+          const syncVideo = () => { const on = videoPlaying(); if (on !== videoOn) { videoOn = on; send(); } };
+          for (const ev of ['play', 'playing', 'pause', 'ended', 'emptied', 'loadeddata']) document.addEventListener(ev, syncVideo, true);
+          setInterval(() => { if (videoOn || document.querySelector('video')) syncVideo(); }, 4000);
           const md = navigator.mediaDevices;
           if (md) {
             // Clones have independent lifetimes: a page may clone a track, stop the original and keep using the
@@ -415,6 +454,7 @@ public sealed class WebView2Lease : IRendererLease
                     // (only media was routed), so a password field in an iframe never reached the guards.
                     if (msg == "jev:secret-field") lease.AddFrameSignal(frame, PageSignals.PasswordField);
                     else if (msg == "jev:payment-field") lease.AddFrameSignal(frame, PageSignals.PaymentField);
+                    else if (msg == "jev:dirty-form") lease.SetDetected(ProtectionFlags.DirtyForm, true);   // typing inside an iframe (a payment or comment widget)
                     else lease.OnMediaMessage(msg, frame);
                 }
                 catch (Exception) { }
@@ -850,6 +890,8 @@ public sealed class WebView2Lease : IRendererLease
             "cam" => ProtectionFlags.CameraActive,
             "screen" => ProtectionFlags.ScreenShareActive,
             "peer" => ProtectionFlags.WebRtcActive,
+            "upload" => ProtectionFlags.UploadActive,
+            "video" => ProtectionFlags.VideoPlaying,
             _ => ProtectionFlags.None,
         };
         if (kinds == ProtectionFlags.None) { if (_media.Remove(docId)) ApplyMedia(); return; }
@@ -929,7 +971,7 @@ public sealed class WebView2Lease : IRendererLease
     {
         var all = ProtectionFlags.None;
         foreach (var e in _media.Values) all |= e.Kinds;
-        var next = (_detected & ~ProtectionFlagsExtensions.LiveMedia) | all;
+        var next = (_detected & ~ProtectionFlagsExtensions.PageReported) | all;
         if (next == _detected) return;
         _detected = next;
         DetectedProtectionChanged?.Invoke(_detected);
