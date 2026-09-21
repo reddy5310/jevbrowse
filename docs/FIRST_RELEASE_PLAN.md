@@ -39,7 +39,7 @@ Sensitive re-class left the checkpoint pointing at a deleted preview; the agent'
 
 ## 3. Steps to the first private alpha (in order)
 
-1. **Freeze** one commit after this pass; require its CI (`test`, and the report-only jobs' results read) to be green. *(done for the commit recorded in the release notes)*
+1. **Freeze** one commit after this pass; require its CI (`test`, and the report-only jobs' results read) to be green. *(Done: `ae197d8`. `test` green; on the hosted Windows Server runner the Release build passed all 36 recovery checks and all 20 `--nav-check` steps including the killed-browser recovery, and the idle harness gave 15/15 valid runs with the busy control detected.)*
 2. **Build the ZIP**: `. scripts\env.ps1; scripts\release.ps1 -Version 0.1.0-alpha.1` (runs the unit tests, publishes self-contained, writes `SHA256SUMS.txt` and an SBOM).
 3. **Smoke the extracted ZIP here**: `scripts\packaged-smoke.ps1 -Zip <zip>` (checksum, first and second launch, tips, offline simulation, all recovery scenarios against the packaged exe).
 4. **Clean Windows account or VM (needs you or a VM)**, no development tools installed:
