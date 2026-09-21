@@ -29,7 +29,8 @@ public sealed partial class MainWindow
         _downloads = new DownloadRepository(_db!);
         _siteZoom = new SiteZoomRepository(_db!);
         _historyRecorder = new HistoryRecorder(_kernel!, _history, siteZoom: _siteZoom);
-        _leases!.OnZoomKey = (id, dir, reset) => { if (_kernel!.Active?.Id == id) Zoom(dir, reset); };   // keys pressed while the PAGE has focus
+        _leases!.OnChord = (id, chord) => { if (_kernel!.Active?.Id == id) HandleChord(chord); };   // shortcuts pressed while the PAGE has focus
+        _leases.OnZoomKey = (id, dir, reset) => { if (_kernel!.Active?.Id == id) Zoom(dir, reset); };   // keys pressed while the PAGE has focus
         _leases.OnDownloadFinished = (id, name, path, source, ok, agent, container, workspace) =>
         {
             if (agent) return;   // an agent's downloads are not the person's; they are governed by the agent's own log
@@ -42,10 +43,35 @@ public sealed partial class MainWindow
         };
     }
 
+    /// <summary>Runs the same action the keyboard accelerator would, for a shortcut the page forwarded (the accelerators do not fire while the page has focus).</summary>
+    private void HandleChord(string chord)
+    {
+        try
+        {
+            switch (chord)
+            {
+                case "addr": OnFocusAddress(null!, null); break;
+                case "newtab": OnNewTabAccelerator(null!, null); break;
+                case "closetab": OnCloseTabAccelerator(null!, null); break;
+                case "reopen": OnReopenClosedAccelerator(null!, null); break;
+                case "palette": OnPaletteAccelerator(null!, null); break;
+                case "bookmark": OnBookmarkAccelerator(null!, null); break;
+                case "bookmarks": OnBookmarksAccelerator(null!, null); break;
+                case "history": OnHistoryAccelerator(null!, null); break;
+                case "downloads": OnDownloadsAccelerator(null!, null); break;
+                case "next": OnNextTabAccelerator(null!, null); break;
+                case "prev": OnPrevTabAccelerator(null!, null); break;
+                case "sidebar": OnToggleSidebarAccelerator(null!, null); break;
+                case "help": OnHelpAccelerator(null!, null); break;
+            }
+        }
+        catch (Exception ex) { StatusText.Text = "That shortcut did not work: " + ex.Message; }
+    }
+
     private void OnHistory(object s, RoutedEventArgs e) => OpenPanel("history", BuildHistory, MoreButton, live: false);
-    private void OnHistoryAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { e.Handled = true; OnHistory(s, new RoutedEventArgs()); }
+    private void OnHistoryAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs? e) { Handle(e); OnHistory(s, new RoutedEventArgs()); }
     private void OnDownloads(object s, RoutedEventArgs e) => OpenPanel("downloads", BuildDownloads, MoreButton);
-    private void OnDownloadsAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { e.Handled = true; OnDownloads(s, new RoutedEventArgs()); }
+    private void OnDownloadsAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs? e) { Handle(e); OnDownloads(s, new RoutedEventArgs()); }
 
     private static string When(DateTimeOffset t)
     {

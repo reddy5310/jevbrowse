@@ -220,10 +220,10 @@ public sealed partial class MainWindow
 
     private readonly Stack<Uri> _closedTabs = new();
 
-    private static void Handle(KeyboardAcceleratorInvokedEventArgs e) => e.Handled = true;
+    private static void Handle(KeyboardAcceleratorInvokedEventArgs? e) { if (e is not null) e.Handled = true; }   // null when the shortcut arrived from the page (see HandleChord)
 
-    private void OnFocusAddress(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); AddressBox.Focus(FocusState.Keyboard); AddressBox.SelectAll(); }
-    private void OnNewTabAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); OnNewTab(s, new RoutedEventArgs()); }
+    private void OnFocusAddress(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs? e) { Handle(e); AddressBox.Focus(FocusState.Keyboard); AddressBox.SelectAll(); }
+    private void OnNewTabAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs? e) { Handle(e); OnNewTab(s, new RoutedEventArgs()); }
     // What the toolbar decides is measured, never a fixed width: at a larger Windows text size every button is wider, so a
     // threshold that was right at 100% clips at 150%. The decisions read the buttons' own desired widths.
     private const double UrlRoom = 160;   // the least the address text may be given beside its badge
@@ -307,7 +307,7 @@ public sealed partial class MainWindow
 
     private void OnToggleSidebar(object s, RoutedEventArgs e) => ApplySidebar(!_sidebarCollapsed, remember: true);
 
-    private void OnToggleSidebarAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e)
+    private void OnToggleSidebarAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs? e)
     {
         Handle(e);
         ApplySidebar(!_sidebarCollapsed, remember: true);
@@ -315,9 +315,9 @@ public sealed partial class MainWindow
 
     private void OnReloadClick(object s, RoutedEventArgs e) => WithActiveLease(l => l.View.CoreWebView2?.Reload());
 
-    private void OnReloadAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); WithActiveLease(l => l.View.CoreWebView2?.Reload()); }
+    private void OnReloadAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs? e) { Handle(e); WithActiveLease(l => l.View.CoreWebView2?.Reload()); }
 
-    private async void OnCloseTabAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e)
+    private async void OnCloseTabAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs? e)
     {
         Handle(e);
         if (_kernel?.Active is not { } t) return;
@@ -326,7 +326,7 @@ public sealed partial class MainWindow
         await _kernel.CloseAndSelectNextAsync(t.Id);   // same workspace only: never surfaces a Private or agent page
     }
 
-    private async void OnReopenClosedAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e)
+    private async void OnReopenClosedAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs? e)
     {
         Handle(e);
         if (_kernel is null || !_closedTabs.TryPop(out var url)) { StatusText.Text = "no recently closed tab"; return; }
@@ -343,18 +343,18 @@ public sealed partial class MainWindow
         await _kernel.ActivateAsync(tabs[(i + delta + tabs.Count) % tabs.Count].Id);
     }
 
-    private async void OnNextTabAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); await StepTabAsync(+1); }
-    private async void OnPrevTabAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); await StepTabAsync(-1); }
+    private async void OnNextTabAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs? e) { Handle(e); await StepTabAsync(+1); }
+    private async void OnPrevTabAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs? e) { Handle(e); await StepTabAsync(-1); }
 
-    private void OnZoomInAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); Zoom(1); }
-    private void OnZoomOutAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); Zoom(-1); }
-    private void OnZoomResetAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); Zoom(0, reset: true); }
+    private void OnZoomInAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs? e) { Handle(e); Zoom(1); }
+    private void OnZoomOutAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs? e) { Handle(e); Zoom(-1); }
+    private void OnZoomResetAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs? e) { Handle(e); Zoom(0, reset: true); }
 
     // ---- Command palette (§26) ----
 
     private sealed record Command(string Text, Func<Task> Run);
 
-    private void OnPaletteAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { e.Handled = true; OnPalette(s, new RoutedEventArgs()); }
+    private void OnPaletteAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs? e) { Handle(e); OnPalette(s, new RoutedEventArgs()); }
 
     private List<Command> BuildCommands()
     {

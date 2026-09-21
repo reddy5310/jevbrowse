@@ -54,6 +54,8 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
     public string? DownloadPathOverride { get; set; }
     /// <summary>A page asked to zoom: (the page, direction, reset).</summary>
     public Action<ResourceId, int, bool>? OnZoomKey { get; set; }
+    /// <summary>A page forwarded a shortcut: (the page, the shortcut's name).</summary>
+    public Action<ResourceId, string>? OnChord { get; set; }
     /// <summary>A download ended: (the page, file name, saved path, where from, it finished rather than being interrupted, this is an agent's page, the identity container and workspace the page belonged to when the download STARTED; a null container means ownership is unknown).</summary>
     public Action<ResourceId, string, string, Uri?, bool, bool, IdentityContainer?, ContextId>? OnDownloadFinished { get; set; }
     /// <summary>Resolves jev:// URLs to locally generated HTML (welcome/help). No network involved.</summary>
@@ -124,6 +126,7 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
             lease.DownloadGate = (name, source, agent) => OnDownloadRequested is { } ask ? ask(id, name, source, agent) : Task.FromResult(true);
             lease.DownloadPathOverride = DownloadPathOverride;
             lease.ZoomRequested = (dir, reset) => OnZoomKey?.Invoke(id, dir, reset);
+            lease.ChordRequested = chord => OnChord?.Invoke(id, chord);
             lease.OwnerContainer = container; lease.OwnerWorkspace = isolationKey;   // fixed now: the page may be gone by the time a download ends
             lease.DownloadFinished = (name, path, source, ok, agent) => OnDownloadFinished?.Invoke(id, name, path, source, ok, agent, lease.OwnerContainer, lease.OwnerWorkspace);
             // Before anything else reacts: an environment whose browser process died cannot create new controls, so forget it NOW (the environment's own
@@ -241,6 +244,20 @@ public sealed class WebView2Lease : IRendererLease
               post(e.deltaY < 0 ? 'jev:zoom-in' : 'jev:zoom-out');
             }, { capture: true, passive: false });
           }
+          // Browser shortcuts pressed while the PAGE has keyboard focus never reach the app's own accelerators (the web view keeps them), so Ctrl+L, Ctrl+T and the
+          // rest did nothing once you had clicked into a page. They are forwarded here, after the page has had its chance: a page that handles the key itself
+          // (calls preventDefault) keeps it.
+          window.addEventListener('keydown', e => {
+            if (e.defaultPrevented || !e.isTrusted || e.altKey || e.metaKey) return;
+            if (e.key === 'F1') { e.preventDefault(); post('jev:key:help'); return; }
+            if (!e.ctrlKey) return;
+            const k = (e.key || '').toLowerCase(), t = e.target;
+            const editable = !!t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+            let c = null;
+            if (e.shiftKey) { c = k === 't' ? 'reopen' : k === 'o' ? 'bookmarks' : k === 'tab' ? 'prev' : null; }
+            else { c = k === 'tab' ? 'next' : k === 'b' ? (editable ? null : 'sidebar') : ({ l: 'addr', t: 'newtab', w: 'closetab', k: 'palette', d: 'bookmark', h: 'history', j: 'downloads' })[k] || null; }
+            if (c) { e.preventDefault(); post('jev:key:' + c); }
+          }, false);
           document.addEventListener('input', mark, true);
           document.addEventListener('change', mark, true);
           const scan = () => {
@@ -466,6 +483,7 @@ public sealed class WebView2Lease : IRendererLease
             try { msg = e.TryGetWebMessageAsString(); } catch (Exception) { }
             switch (msg)
             {
+                case string k when k.StartsWith("jev:key:", StringComparison.Ordinal): lease.ChordRequested?.Invoke(k["jev:key:".Length..]); break;
                 case "jev:zoom-in": lease.ZoomRequested?.Invoke(1, false); break;
                 case "jev:zoom-out": lease.ZoomRequested?.Invoke(-1, false); break;
                 case "jev:zoom-reset": lease.ZoomRequested?.Invoke(0, true); break;
@@ -500,6 +518,7 @@ public sealed class WebView2Lease : IRendererLease
                     if (msg == "jev:secret-field") lease.AddFrameSignal(frame, PageSignals.PasswordField);
                     else if (msg == "jev:payment-field") lease.AddFrameSignal(frame, PageSignals.PaymentField);
                     else if (msg == "jev:dirty-form") lease.SetDetected(ProtectionFlags.DirtyForm, true);   // typing inside an iframe (a payment or comment widget)
+                    else if (msg is not null && msg.StartsWith("jev:key:", StringComparison.Ordinal)) lease.ChordRequested?.Invoke(msg["jev:key:".Length..]);   // shortcuts pressed while focus is inside an iframe
                     else if (msg == "jev:zoom-in") lease.ZoomRequested?.Invoke(1, false);   // zoom keys pressed while focus is inside an iframe
                     else if (msg == "jev:zoom-out") lease.ZoomRequested?.Invoke(-1, false);
                     else if (msg == "jev:zoom-reset") lease.ZoomRequested?.Invoke(0, true);
@@ -926,6 +945,8 @@ public sealed class WebView2Lease : IRendererLease
     public event Action? Loaded;
     /// <summary>The page asked to zoom (Ctrl with plus, minus, 0 or the wheel): (direction, reset).</summary>
     public Action<int, bool>? ZoomRequested { get; set; }
+    /// <summary>The page forwarded a browser shortcut it did not use itself (for example "addr" for Ctrl+L).</summary>
+    public Action<string>? ChordRequested { get; set; }
     public event Action<EngineFailure>? EngineFailed;
     /// <summary>(address, the person did it with a click or key, this is an agent's page). Set by the manager.</summary>
     public Action<Uri?, bool, bool>? PopupRequested { get; set; }
@@ -1053,6 +1074,7 @@ public sealed class WebView2Lease : IRendererLease
         DownloadGate = null;
         DownloadFinished = null;
         ZoomRequested = null;
+        ChordRequested = null;
     }
 
     internal void DropFrameMedia(CoreWebView2Frame frame)

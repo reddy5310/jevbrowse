@@ -277,6 +277,20 @@ try {
         if ($after -ne (U '127.0.0.1' '/slow')) { return "Esc did not restore the page address: '$after'" }
     }
 
+    Try-Row '23 Browser shortcuts work while the PAGE has keyboard focus (Ctrl+L, Ctrl+T, Ctrl+W)' {
+        Go (U '127.0.0.1' '/a'); Start-Sleep -Seconds 2; Click-Page
+        Keys '^l'; Send-Text 'abc'
+        if ((Address) -ne 'abc') { return "Ctrl+L with the page focused did not focus the address bar (box shows '$(Address)')" }
+        Keys '{ESC}'; Click-Page
+        $tabs0 = ((Names) | Where-Object { $_ -match '^\d+ tabs? open' } | Select-Object -First 1)
+        Keys '^t'; Start-Sleep -Seconds 2
+        $tabs1 = ((Names) | Where-Object { $_ -match '^\d+ tabs? open' } | Select-Object -First 1)
+        if ($tabs1 -eq $tabs0) { return "Ctrl+T with the page focused did not open a tab ('$tabs0' -> '$tabs1')" }
+        Click-Page; Keys '^w'; Start-Sleep -Seconds 2
+        $tabs2 = ((Names) | Where-Object { $_ -match '^\d+ tabs? open' } | Select-Object -First 1)
+        if ($tabs2 -ne $tabs0) { return "Ctrl+W with the page focused did not close it ('$tabs0' -> '$tabs2')" }
+    }
+
     # ---------------- 19/20 default browser and second copy
     Row '19 Default browser: Make default / Settings hand-off / links from other programs' 'NOT TESTED' 'the dialog registers JevBrowse in the current user registry before it asks; that changes the host, so it is left for the disposable guest'
     Try-Row '20 A second copy (extracted to another folder) on the same data folder is refused with a message, never a second window on the data' {

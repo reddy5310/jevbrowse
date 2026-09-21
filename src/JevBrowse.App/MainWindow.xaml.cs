@@ -191,7 +191,7 @@ public sealed partial class MainWindow : Window
         try { File.WriteAllText(SettingsPath, JsonSerializer.Serialize(new { firstRunDone = true, at = DateTimeOffset.UtcNow })); } catch (Exception) { }
     }
 
-    private void OnHelpAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { e.Handled = true; OnHelp(s, new RoutedEventArgs()); }
+    private void OnHelpAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs? e) { Handle(e); OnHelp(s, new RoutedEventArgs()); }
 
     private async void OnHelp(object s, RoutedEventArgs e)
     {

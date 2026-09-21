@@ -17,8 +17,8 @@ public sealed partial class MainWindow
 
     private void OnBookmarks(object s, RoutedEventArgs e) => OpenPanel("bookmarks", BuildBookmarks, MoreButton, live: false);
     private void OnBookmarkThis(object s, RoutedEventArgs e) => BookmarkCurrentPage();
-    private void OnBookmarkAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { e.Handled = true; BookmarkCurrentPage(); }
-    private void OnBookmarksAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { e.Handled = true; OnBookmarks(s, new RoutedEventArgs()); }
+    private void OnBookmarkAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs? e) { Handle(e); BookmarkCurrentPage(); }
+    private void OnBookmarksAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs? e) { Handle(e); OnBookmarks(s, new RoutedEventArgs()); }
 
     /// <summary>The shared rule for "may this page be bookmarked from here", so the button, the shortcut and the tests agree.</summary>
     private bool TryBookmarkActive(out Bookmark? bookmark, out string message)
