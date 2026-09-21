@@ -15,7 +15,7 @@ and opt-in agent access. Extensions, sync, a built-in password manager and local
 | Interrupted writes leave no partial commits | Done | 20 real kills; every acknowledged commit present. Process kill only |
 | Upgrade from every earlier schema | Done | Fixtures written by the real historic builds; released steps hash-pinned (`UpgradeFromHistoricDatabasesTests`). Tiny fixtures, not a real user's data |
 | Damaged database cannot block start; never deleted | Done | `DamagedDatabaseTests` + `recovery-check.ps1 -Scenario corrupt-db`. Very large partly-damaged files get a lighter check |
-| Crash with a live Private session; next start sweeps | Done | `recovery-check.ps1` crash (real app, TerminateProcess). Intermittent engine-process lingering seen, cause unknown |
+| Crash with a live Private session; next start sweeps | Done | `recovery-check.ps1` crash (real app, TerminateProcess); 12 consecutive clean runs |
 | Normal shutdown with a live Private session | Done | `recovery-check.ps1` clean-shutdown |
 | Cleanup retries | Done | Unit, real file locks |
 | Non-database files (settings, ui-prefs, filter lists) survive truncation | Partial | Prefs and settings are read defensively; writes are not atomic (a kill mid-write can lose the preference, not data). Filter activation is atomic |

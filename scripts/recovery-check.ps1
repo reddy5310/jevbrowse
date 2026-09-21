@@ -51,10 +51,19 @@ $results = [ordered]@{}
 $inconclusive = $false
 function Add-Check($scenario, $name, $ok, $detail = '') { if (-not $results.Contains($scenario)) { $results[$scenario] = [ordered]@{} }; $results[$scenario][$name] = [ordered]@{ pass = [bool]$ok; detail = $detail }; Write-Host ("  {0,-4} {1} {2}" -f $(if ($ok) { 'PASS' } else { 'FAIL' }), $name, $detail) }
 
+# Windows reuses process ids. A process is "the same one" only if it has the same id AND the same start time as when the tree was recorded: otherwise a stray
+# unrelated process (another app's WebView2, say) that inherited a freed id would be counted as a leftover of ours, and stopped.
+$script:Born = @{}
+function Test-Same($id) {
+    $p = Get-Process -Id $id -ErrorAction SilentlyContinue
+    if (-not $p) { return $false }
+    try { return ($script:Born.ContainsKey([int]$id) -and [Math]::Abs(($p.StartTime - $script:Born[[int]$id]).TotalSeconds) -lt 2) } catch { return $false }
+}
 function Get-Tree([int]$rootPid) {
-    $all = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId)
+    $all = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, CreationDate)
     $ids = New-Object System.Collections.Generic.List[int]; $q = New-Object System.Collections.Generic.Queue[int]; $q.Enqueue($rootPid)
-    while ($q.Count) { $p = $q.Dequeue(); foreach ($c in ($all | Where-Object { $_.ParentProcessId -eq $p })) { $ids.Add([int]$c.ProcessId); $q.Enqueue([int]$c.ProcessId) } }
+    $me = $all | Where-Object { $_.ProcessId -eq $rootPid }; if ($me) { $script:Born[[int]$rootPid] = [datetime]$me.CreationDate }
+    while ($q.Count) { $p = $q.Dequeue(); foreach ($c in ($all | Where-Object { $_.ParentProcessId -eq $p })) { $ids.Add([int]$c.ProcessId); $script:Born[[int]$c.ProcessId] = [datetime]$c.CreationDate; $q.Enqueue([int]$c.ProcessId) } }
     $ids
 }
 function Start-App($data, [string[]]$appArgs, $extraEnv = @{}) {
@@ -89,7 +98,7 @@ function Bytes-Contain($dir, [string[]]$needles) {
     }
     $hits
 }
-function Stop-Leftovers($ids) { foreach ($id in $ids) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue } }
+function Stop-Leftovers($ids) { foreach ($id in $ids) { if (Test-Same $id) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue } } }   # only what this run started
 
 function Seed-App($name) {
     $data = Join-Path $run "data-$name"; New-Item -ItemType Directory -Path "$data\benchmarks" -Force | Out-Null
@@ -114,8 +123,8 @@ function Test-Crash {
     Stop-Process -Id $s.proc.Id -Force            # TerminateProcess: no shutdown path runs
     $s.proc.WaitForExit(10000) | Out-Null
     # The engine's own processes notice the host is gone and exit on their own. Measure how long that takes; they hold the throwaway profile until they do.
-    $waited = 0; $stragglers = @($tree | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
-    while ($stragglers.Count -and $waited -lt 30) { Start-Sleep -Seconds 1; $waited++; $stragglers = @($tree | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }) }
+    $waited = 0; $stragglers = @($tree | Where-Object { Test-Same $_ })
+    while ($stragglers.Count -and $waited -lt 30) { Start-Sleep -Seconds 1; $waited++; $stragglers = @($tree | Where-Object { Test-Same $_ }) }
     if ($stragglers.Count) {
         # Keep the evidence: what were they, which profile did they belong to, and how old were they?
         $detail = @(Get-CimInstance Win32_Process | Where-Object { $stragglers -contains [int]$_.ProcessId } | ForEach-Object { [ordered]@{ pid = $_.ProcessId; parent = $_.ParentProcessId; name = $_.Name; created = $_.CreationDate.ToString('o'); type = $(if ($_.CommandLine -match '--type=([a-z-]+)') { $Matches[1] } else { 'browser' }); userDataDir = $(if ($_.CommandLine -match '--user-data-dir="?([^" ]+)') { $Matches[1] } else { $null }) } })
@@ -148,7 +157,7 @@ function Test-Crash {
     Add-Check 'crash' 'the next start swept the leftover profile and its lock (only the new session profile of this run may exist)' (($after | Where-Object { $left.Name -contains $_.Name }).Count -eq 0 -and -not ($locks | Where-Object { $left.Name -contains ($_.BaseName) })) "left before: $($left.Count), same names now: $(@($after | Where-Object { $left.Name -contains $_.Name }).Count)"
     $tree2 = @(Get-Tree $p2.Id)
     $null = $p2.CloseMainWindow(); if (-not $p2.WaitForExit(40000)) { Stop-Process -Id $p2.Id -Force; Add-Check 'crash' 'the restarted app closes normally' $false 'had to be killed' } else { Add-Check 'crash' 'the restarted app closes normally' $true }
-    Start-Sleep 3; Stop-Leftovers @($tree2 | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+    Start-Sleep 3; Stop-Leftovers @($tree2 | Where-Object { Test-Same $_ })
     $copy2 = Db-Copy $s.data (Join-Path $run 'dbcopy-crash-2')
     $r2 = Db-Report $copy2
     if ($null -eq $r2) { $script:inconclusive = $true } else {
@@ -173,7 +182,7 @@ function Test-CleanShutdown {
     Add-Check 'clean-shutdown' 'the app closes by itself with a live Private session' $exited
     if (-not $exited) { Stop-Process -Id $s.proc.Id -Force }
     Start-Sleep 4
-    $stragglers = @($tree | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+    $stragglers = @($tree | Where-Object { Test-Same $_ })
     Add-Check 'clean-shutdown' 'no app or engine process from the run survives' ($stragglers.Count -eq 0) "$($stragglers.Count) left"
     Stop-Leftovers $stragglers
     $left = @(Get-ChildItem $eph -Directory -ErrorAction SilentlyContinue)
@@ -206,7 +215,7 @@ function Test-CorruptDb {
     # Acknowledge the notice the way a person would (the OK button), then close the window.
     try { $ok = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition((New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, 'OK')), (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button))))); Add-Check 'corrupt-db' 'the notice has an OK button that dismisses it' ([bool]$ok); if ($ok) { $ok.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke(); Start-Sleep 1 } } catch { Add-Check 'corrupt-db' 'the notice has an OK button that dismisses it' $false $_.Exception.Message }
     $null = $p.CloseMainWindow(); if (-not $p.WaitForExit(40000)) { Stop-Process -Id $p.Id -Force; Add-Check 'corrupt-db' 'closes normally' $false } else { Add-Check 'corrupt-db' 'closes normally' $true }
-    Start-Sleep 3; Stop-Leftovers @($tree | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+    Start-Sleep 3; Stop-Leftovers @($tree | Where-Object { Test-Same $_ })
     $r = Db-Report (Db-Copy $data (Join-Path $run 'dbcopy-corrupt'))
     if ($null -eq $r) { $script:inconclusive = $true } else {
         Add-Check 'corrupt-db' 'the new database is healthy and holds the tab that was opened' ($r.integrity -eq 'ok' -and @($r.tabs).Count -ge 1) "user_version $($r.user_version), $(@($r.tabs).Count) tab(s)"
@@ -232,7 +241,7 @@ function Test-AgentClose {
     Add-Check 'agent-close' 'the window closes by itself with a live agent (no deadlock)' $exited "$([int]$watch.Elapsed.TotalSeconds) s"
     if (-not $exited) { Stop-Process -Id $p.Id -Force }
     Start-Sleep 4
-    $left = @($tree | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+    $left = @($tree | Where-Object { Test-Same $_ })
     Add-Check 'agent-close' 'no app or engine process from the run survives' ($left.Count -eq 0) "$($left.Count) left"
     Stop-Leftovers $left
     $dirs = @(Get-ChildItem $eph -Directory -ErrorAction SilentlyContinue)
@@ -266,7 +275,7 @@ c.commit(); c.close()
     $exited = $p.WaitForExit(20000)
     Add-Check 'newer-db' 'Quit closes the app' $exited
     if (-not $exited) { Stop-Process -Id $p.Id -Force }
-    Start-Sleep 3; Stop-Leftovers @($tree | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+    Start-Sleep 3; Stop-Leftovers @($tree | Where-Object { Test-Same $_ })
     $after = (Get-FileHash "$data\db\browser.db").Hash
     Add-Check 'newer-db' 'the newer database is byte-for-byte unchanged and was not moved' ($before -eq $after -and -not (Get-ChildItem "$data\db" -Filter '*.corrupt-*' -ErrorAction SilentlyContinue))
 }

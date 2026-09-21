@@ -64,7 +64,9 @@ function Window($p, $seconds = 40) {
     }
 }
 function Names($w) { try { @($w.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name } | Where-Object { $_ }) } catch { @() } }
-function Tree([int]$root) { $all = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId); $ids = New-Object System.Collections.Generic.List[int]; $q = New-Object System.Collections.Generic.Queue[int]; $q.Enqueue($root); while ($q.Count) { $x = $q.Dequeue(); foreach ($c in ($all | Where-Object { $_.ParentProcessId -eq $x })) { $ids.Add([int]$c.ProcessId); $q.Enqueue([int]$c.ProcessId) } }; $ids }
+$script:Born = @{}
+function Test-Same($id) { $p = Get-Process -Id $id -ErrorAction SilentlyContinue; if (-not $p) { return $false }; try { return ($script:Born.ContainsKey([int]$id) -and [Math]::Abs(($p.StartTime - $script:Born[[int]$id]).TotalSeconds) -lt 2) } catch { return $false } }   # ids are reused by Windows: same id AND same start time
+function Tree([int]$root) { $all = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, CreationDate); $me = $all | Where-Object { $_.ProcessId -eq $root }; if ($me) { $script:Born[[int]$root] = [datetime]$me.CreationDate }; $ids = New-Object System.Collections.Generic.List[int]; $q = New-Object System.Collections.Generic.Queue[int]; $q.Enqueue($root); while ($q.Count) { $x = $q.Dequeue(); foreach ($c in ($all | Where-Object { $_.ParentProcessId -eq $x })) { $ids.Add([int]$c.ProcessId); $script:Born[[int]$c.ProcessId] = [datetime]$c.CreationDate; $q.Enqueue([int]$c.ProcessId) } }; $ids }
 function Close-App($p, $tips = $false) {
     $tree = @(Tree $p.Id)
     # Go through the first-run tips the way a person does: press "Next" until there are no more (the app remembers first-run only after the last one).
@@ -83,7 +85,7 @@ function Close-App($p, $tips = $false) {
     $ok = $p.WaitForExit(40000)
     if (-not $ok) { Stop-Process -Id $p.Id -Force }
     Start-Sleep 3
-    foreach ($id in $tree) { if (Get-Process -Id $id -ErrorAction SilentlyContinue) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue } }
+    foreach ($id in $tree) { if (Test-Same $id) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue } }
     $ok
 }
 
@@ -111,7 +113,7 @@ else {
     Start-Sleep 8
     $n2 = Names $w2
     Check 'no first-run tips the second time' (@($n2 | Where-Object { $_ -match 'Your tabs live here' }).Count -eq 0)
-    Check 'the saved tab is back' (@($n2 | Where-Object { $_ -match 'open' -and $_ -match 'Close ' }).Count -ge 1)
+    Check 'the saved tab is back' (@($n2 | Where-Object { $_ -match '\. open ' }).Count -ge 1 -and @($n2 | Where-Object { $_ -match '^Close ' }).Count -ge 1) (($n2 | Where-Object { $_ -match '\. open ' } | Select-Object -First 1))
     Check 'the window closes by itself' (Close-App $p2)
 }
 

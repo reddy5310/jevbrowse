@@ -29,9 +29,11 @@ older builds wrote, and a damaged file were untested, and one of them turned out
 
 - **Power loss or a failing disk.** A killed process keeps the OS cache; a power cut does not. The database runs WAL with `synchronous=NORMAL`, which keeps
   the file consistent but may lose the last commits. Not simulated; whether to move to FULL is an open decision.
-- **The engine sometimes lingers after a crash.** In 2 of the first 5 real-app crash runs about 22 WebView2 processes stayed alive for more than 30 s after
-  the app was killed (in 16 later runs they were gone in about a second). Cause not established; `recovery-check.ps1` now records the stragglers' type and
-  profile when it happens. Those processes hold the throwaway profile, so the next start's sweep can fail and retry on the following start.
+- **"The engine lingers after a crash" was my instrument, not the app.** Three early real-app runs reported about 22 WebView2 processes still alive 30 s after
+  the app was killed. Windows reuses process ids: the check recorded the tree by id, and a later unrelated process (another application's WebView2, seen in
+  the third case) that inherited a freed id counted as a leftover, and the script then stopped it. Now a process is "the same" only if id AND start time
+  match, and only those are ever stopped. With that, 12 consecutive crash runs showed every engine process gone in about one second. Earlier runs of these
+  scripts may have stopped an unrelated process that had inherited an id; nothing was deleted by that.
 - Cookie values inside a leftover throwaway profile are on disk until the next start. A crash cannot avoid that.
 - Fixtures are tiny; real users' databases are larger and messier. A partly damaged database larger than 256 MB gets only the core-table check, not a full one.
 - Settings and preference files are still written non-atomically (a kill mid-write can lose a preference; the readers tolerate a truncated file).
