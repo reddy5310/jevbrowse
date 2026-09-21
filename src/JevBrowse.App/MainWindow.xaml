@@ -206,6 +206,8 @@
                                 <MenuFlyoutItem Text="Bookmark this page (Ctrl+D)" Click="OnBookmarkThis"/>
                                 <MenuFlyoutItem Text="History (Ctrl+H)" Click="OnHistory"/>
                                 <MenuFlyoutItem Text="Downloads (Ctrl+J)" Click="OnDownloads"/>
+                                <MenuFlyoutItem Text="Make JevBrowse your default browser…" Click="OnMakeDefault"/>
+                                <MenuFlyoutItem Text="Remove JevBrowse from the browser list" Click="OnRemoveDefault"/>
                                 <MenuFlyoutItem Text="Workspaces overview" Click="OnWorkspaceOverview"/>
                                 <MenuFlyoutItem Text="Agent activity" Click="OnAgentActivity"/>
                                 <MenuFlyoutItem Text="Help and welcome" Click="OnHelp"/>

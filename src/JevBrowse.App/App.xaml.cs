@@ -1,4 +1,6 @@
+using JevBrowse.Domain;
 using Microsoft.UI.Xaml;
+using Microsoft.Windows.AppLifecycle;
 
 namespace JevBrowse.App;
 
@@ -36,6 +38,28 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
+        // One browser per data folder. A second start (a link clicked in another program while JevBrowse is open) hands its link to the running one and exits.
+        // Keyed by the data folder so that separate profiles, and the automated checks that use their own folders, stay separate instances.
+        try
+        {
+            var dataDir = Environment.GetEnvironmentVariable("JEVBROWSE_DATA_DIR") ?? Path.Combine(AppContext.BaseDirectory, "data");
+            var key = "jevbrowse-" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(Path.GetFullPath(dataDir).ToLowerInvariant())))[..16];
+            var main = AppInstance.FindOrRegisterForKey(key);
+            if (!main.IsCurrent)
+            {
+                var activation = AppInstance.GetCurrent().GetActivatedEventArgs();
+                var handedOver = Task.Run(async () => { await main.RedirectActivationToAsync(activation); }).Wait(TimeSpan.FromSeconds(10));
+                if (handedOver) { Environment.Exit(0); return; }
+            }
+            else main.Activated += (_, e) =>
+            {
+                var link = e.Kind == ExtendedActivationKind.Launch && e.Data is Windows.ApplicationModel.Activation.ILaunchActivatedEventArgs la
+                    ? LaunchArgs.ExtractUrl(la.Arguments.Split(' ', StringSplitOptions.RemoveEmptyEntries)) : null;
+                var w = _window as MainWindow;
+                w?.DispatcherQueue.TryEnqueue(async () => { if (link is not null) await w.OpenExternalLinkAsync(link); else w.Activate(); });
+            };
+        }
+        catch (Exception ex) { Record("single instance", ex, "continuing as a separate instance"); }
         _window = new MainWindow();
         _window.Activate();
     }

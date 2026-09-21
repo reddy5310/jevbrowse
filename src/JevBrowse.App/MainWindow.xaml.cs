@@ -509,6 +509,9 @@ public sealed partial class MainWindow : Window
         }
         _ready = true;
         Root.IsHitTestVisible = true;
+        var launchLink = _pendingExternalLink ?? LaunchArgs.ExtractUrl(args.Skip(1));   // a link another program passed at launch
+        _pendingExternalLink = null;
+        if (launchLink is not null) await OpenExternalLinkAsync(launchLink);
         StatusText.Text = "";
         if (_startupNotice is not null)
         {
