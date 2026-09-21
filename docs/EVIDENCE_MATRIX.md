@@ -7,7 +7,7 @@ Every claim JevBrowse makes, and the strongest evidence behind it today. Levels,
 - **Real engine**: a benchmark/check drives actual WebView2 renderers and inspects real disk/DB state (`--privacy-check`, `--restore-bench`, …).
 - **Release-validated**: verified on the packaged, signed build on more than one machine. **Nothing is at this level yet** (builds are unsigned and tested on one machine).
 
-Last updated 2026-09-21 after P3, text size, agent isolation, screenshots, the agent indicator, the idle-CPU harness, the recovery work and the review response (ADR 0024-0032; [FIRST_RELEASE_PLAN.md](FIRST_RELEASE_PLAN.md)). 550 unit tests. See [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for what is and is not done.
+Last updated 2026-09-22 (alpha.7 candidate: bookmarks, history, downloads list, zoom, links from other apps) after P3, text size, agent isolation, screenshots, the agent indicator, the idle-CPU harness, the recovery work and the review response (ADR 0024-0032; [FIRST_RELEASE_PLAN.md](FIRST_RELEASE_PLAN.md)). 584 unit tests. See [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for what is and is not done.
 
 | Claim | Level | Evidence | Known gap |
 |---|---|---|---|

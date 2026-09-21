@@ -178,6 +178,12 @@ if ($hdone -and (Test-Path $hres)) { $hr = Get-Content $hres -Raw | ConvertFrom-
 else { Check 'Back and Forward keep working after a tab sleeps and wakes' $false 'timed out or produced no result (a failure, not a pass)' }
 Remove-Item Env:\JEVBROWSE_DATA_DIR, Env:\JEVBROWSE_NO_FILTER_UPDATE, Env:\JEVBROWSE_AI, Env:\JEVBROWSE_MODE -ErrorAction SilentlyContinue
 
+# ---- links from other programs against THIS build (two real processes; bounded waits inside)
+Write-Host '[links from other programs]'
+& powershell -NoProfile -File (Join-Path $PSScriptRoot 'external-link-check.ps1') -ExePath $exe -Root (Join-Path $run 'external') | Select-Object -Last 2 | ForEach-Object { Write-Host "  $_" }
+Check 'a link from another program opens in the running browser, non-web addresses are ignored, and a cold start opens the link' ($LASTEXITCODE -eq 0) "exit $LASTEXITCODE"
+if ($LASTEXITCODE -eq 2) { $script:inconclusive = $true }
+
 $failed = @($results.GetEnumerator() | Where-Object { -not $_.Value.pass }).Count
 $verdict = if ($inconclusive -and $failed -eq 0) { 'INCONCLUSIVE' } elseif ($failed) { 'FAIL' } else { 'PASS' }
 [ordered]@{ verdict = $verdict; zip = $Zip; sha256 = (Get-FileHash $Zip -Algorithm SHA256).Hash.ToLower(); commit = $build.commit; version = $build.version; defaultDataLocation = [bool]$DefaultData
