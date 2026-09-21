@@ -181,6 +181,30 @@ public sealed partial class MainWindow
             var searchUrl = AddressInput.Resolve("jev test", SearchEngines.Find(UiPrefs.Load(DataDir).SearchEngine)).Url!.Host;
             prefsBefore.Save(DataDir);
             Step("the chosen search engine is what the address bar searches with", searchUrl == "www.bing.com", searchUrl);
+
+            // ---------------- 6. history, download list and per-site zoom, from real pages and a real download
+            var ordinaryUrl = new Uri(A("/")).AbsoluteUri;
+            Step("an ordinary page is in the history list", await Until(() => _history!.List().Any(v => v.Url == ordinaryUrl), 8000), string.Join(",", _history!.List().Select(v => v.Url)));
+            var privLease2 = LeaseOf(pt.Id)!;
+            privLease2.Navigate(new Uri(A("/private-only"))); await Until(() => privLease2.View.CoreWebView2.Source.EndsWith("/private-only"), 8000); await Task.Delay(1200);
+            Step("a page opened in a Private session is not in the history list", !_history.List().Any(v => v.Url.EndsWith("/private-only")), string.Join(",", _history.List().Select(v => v.Url)));
+            Step("the ordinary download is in the downloads list, finished, with its file present", await Until(() => _downloads!.List().Any(d => d.Name.StartsWith("note") && d.Completed && File.Exists(d.Path)), 8000), string.Join(",", _downloads!.List().Select(d => d.Name)));
+            Step("the Private-session download is listed for this session only, not written to the database", _sessionDownloads.Count >= 1 && _downloads!.List().Count == 1, $"session={_sessionDownloads.Count} stored={_downloads!.List().Count}");
+            await k.SwitchWorkspaceAsync(ContextId.Default); await k.ActivateAsync(personalTab.Id);
+            Zoom(1);
+            var zl = LeaseOf(personalTab.Id)!;
+            async Task<string> ZoomStyle() => JsonSerializer.Deserialize<string>(await zl.View.CoreWebView2.ExecuteScriptAsync("document.documentElement.style.zoom||''")) ?? "";
+            var z1 = false; for (var i = 0; i < 20 && !z1; i++) { z1 = await ZoomStyle() == "1.1"; if (!z1) await Task.Delay(150); }
+            Step("Ctrl+ zooms the page one step (110%)", z1, await ZoomStyle());
+            Step("…and remembers it for the site", Math.Abs(_siteZoom!.Get(personalTab.Url.Host) - 1.1) < 0.001);
+            zl.Navigate(new Uri(A("/"))); await Task.Delay(1500);
+            var again = false; for (var i = 0; i < 40 && !again; i++) { again = await ZoomStyle() == "1.1"; if (!again) await Task.Delay(250); }
+            Step("a fresh load of the same site comes back at 110%", again, await ZoomStyle());
+            Zoom(0, reset: true);
+            Step("reset returns to 100% and forgets the site's zoom", Math.Abs(_siteZoom.Get(personalTab.Url.Host) - 1.0) < 0.001);
+            await k.SwitchWorkspaceAsync(priv.Id); await k.ActivateAsync(pt.Id);
+            Zoom(1);
+            Step("in a Private session zoom works but is never written", _siteZoom.Get(pt.Url.Host) == 1.0);
         }
         catch (Exception ex) { Step("no exception", false, ex.ToString()); }
         finally { try { idp.Stop(); app.Stop(); } catch (Exception) { } DownloadAnswerForCheck = null; }

@@ -9,7 +9,7 @@ namespace JevBrowse.Storage;
 /// </summary>
 public sealed class BrowserDb : IDisposable
 {
-    public const int LatestVersion = 12;
+    public const int LatestVersion = 13;
 
     private static readonly (int Version, string Sql)[] Steps =
     [
@@ -155,6 +155,29 @@ public sealed class BrowserDb : IDisposable
                 added_at INTEGER NOT NULL
             );
             CREATE INDEX bookmarks_added ON bookmarks(added_at DESC);
+            """),
+        // History list, download list and per-site zoom. History rows are written only where Trust OS allows a page address to be saved (never Private, agent, Sensitive or Secret).
+        (13, """
+            CREATE TABLE history_visits (
+                url TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                host TEXT NOT NULL,
+                visited_at INTEGER NOT NULL,
+                visit_count INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE INDEX history_visited ON history_visits(visited_at DESC);
+            CREATE TABLE downloads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                path TEXT NOT NULL,
+                source_host TEXT NOT NULL,
+                finished_at INTEGER NOT NULL,
+                completed INTEGER NOT NULL
+            );
+            CREATE TABLE site_zoom (
+                host TEXT PRIMARY KEY,
+                zoom REAL NOT NULL
+            );
             """),
     ];
 

@@ -273,6 +273,7 @@ public sealed partial class MainWindow : Window
         var classifier = new DataClassifier(host => _siteSettings.DataClassOverrideForHost(host) is { } c ? (DataClass)c : null);
         _kernel = new TabKernel(_leases, new TabRepository(_db), new CheckpointRepository(_db), Path.Combine(DataDir, "thumbnails"), null, new WorkspaceRepository(_db), new DefaultTrustPolicy(), classifier);
         _kernel.Changed += OnKernelChanged;
+        InitLibrary();
         _kernel.Load();
         RebuildWorkspaces();
         RebuildList();
@@ -562,6 +563,7 @@ public sealed partial class MainWindow : Window
         else if (e.Kind is "opened" or "closed" or "loaded" or "moved" or "context-restored" or "pinned") RebuildList();
         else foreach (var i in Items) i.Refresh();
 
+        if (e.Kind is "loaded" or "restored" or "activated") ApplySiteZoom(e.Id);
         if (e.Kind == "activated")
         {
             _syncingSelection = true;

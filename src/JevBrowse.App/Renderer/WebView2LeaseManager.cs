@@ -52,6 +52,8 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
     /// <summary>A page started a download: (the page, file name, where from, it is an agent's page) → allow it? Asked before anything is saved.</summary>
     public Func<ResourceId, string, Uri?, bool, Task<bool>>? OnDownloadRequested { get; set; }
     public string? DownloadPathOverride { get; set; }
+    /// <summary>A download ended: (the page, file name, saved path, where from, it finished rather than being interrupted, this is an agent's page).</summary>
+    public Action<ResourceId, string, string, Uri?, bool, bool>? OnDownloadFinished { get; set; }
     /// <summary>Resolves jev:// URLs to locally generated HTML (welcome/help). No network involved.</summary>
     public Func<Uri, string?>? LocalPage { get; set; }
 
@@ -118,6 +120,7 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
             lease.PopupRequested = (target, userInitiated, agent) => OnPopupRequested?.Invoke(id, target, userInitiated, agent);
             lease.DownloadGate = (name, source, agent) => OnDownloadRequested is { } ask ? ask(id, name, source, agent) : Task.FromResult(true);
             lease.DownloadPathOverride = DownloadPathOverride;
+            lease.DownloadFinished = (name, path, source, ok, agent) => OnDownloadFinished?.Invoke(id, name, path, source, ok, agent);
             // Before anything else reacts: an environment whose browser process died cannot create new controls, so forget it NOW (the environment's own
             // exit event can arrive later than the failure that triggers the page's recovery).
             lease.EngineFailed += f => { if (f.WholeEngine) _envs.Remove(key); };
@@ -408,17 +411,18 @@ public sealed class WebView2Lease : IRendererLease
         {
             var gate = lease.DownloadGate;
             var deferral = gate is null ? null : e.GetDeferral();
-            void Track()
+            void Track(Uri? source)
             {
                 lease._activeDownloads++;
                 lease.SetDetected(ProtectionFlags.DownloadActive, true);
                 e.DownloadOperation.StateChanged += (d, _) =>
                 {
                     if (d.State == CoreWebView2DownloadState.InProgress) return;
+                    try { var saved = d.ResultFilePath ?? ""; lease.DownloadFinished?.Invoke(Path.GetFileName(saved) is { Length: > 0 } fn ? fn : "a file", saved, source, d.State == CoreWebView2DownloadState.Completed, lease.NavigationGuard is not null); } catch (Exception) { }
                     if (--lease._activeDownloads <= 0) { lease._activeDownloads = 0; lease.SetDetected(ProtectionFlags.DownloadActive, false); }
                 };
             }
-            if (gate is null) { Track(); return; }
+            if (gate is null) { Uri.TryCreate(e.DownloadOperation.Uri, UriKind.Absolute, out var src0); Track(src0); return; }
             // The person (or the policy) is asked BEFORE anything is written. Cancel and failure both mean nothing is saved.
             var pending = Decide();   // observed inside: it never throws
             async Task Decide()
@@ -429,7 +433,7 @@ public sealed class WebView2Lease : IRendererLease
                     Uri.TryCreate(e.DownloadOperation.Uri, UriKind.Absolute, out var source);
                     if (!await gate(name, source, lease.NavigationGuard is not null)) { e.Cancel = true; return; }
                     if (lease.DownloadPathOverride is { } path) { e.ResultFilePath = Path.Combine(path, Path.GetFileName(e.ResultFilePath ?? "download.bin")); e.Handled = true; }
-                    Track();
+                    Track(source);
                 }
                 catch (Exception) { try { e.Cancel = true; } catch (Exception) { } }
                 finally { try { deferral!.Complete(); } catch (Exception) { } }
@@ -900,6 +904,8 @@ public sealed class WebView2Lease : IRendererLease
     public Func<string, Uri?, bool, Task<bool>>? DownloadGate { get; set; }
     /// <summary>Measurement only: save into this folder without the engine's own save UI.</summary>
     public string? DownloadPathOverride { get; set; }
+    /// <summary>(file name, saved path, where from, finished, this is an agent's page). Set by the manager.</summary>
+    public Action<string, string, Uri?, bool, bool>? DownloadFinished { get; set; }
     // ---- live capture and calls, per document ----
     //
     // Keyed by the reporting document, never by the tab: a tab can hold a top-level page and several frames, each
@@ -1013,6 +1019,7 @@ public sealed class WebView2Lease : IRendererLease
         EngineFailed = null;
         PopupRequested = null;
         DownloadGate = null;
+        DownloadFinished = null;
     }
 
     internal void DropFrameMedia(CoreWebView2Frame frame)

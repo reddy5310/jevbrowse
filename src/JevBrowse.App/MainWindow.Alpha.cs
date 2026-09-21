@@ -346,13 +346,8 @@ public sealed partial class MainWindow
     private async void OnNextTabAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); await StepTabAsync(+1); }
     private async void OnPrevTabAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); await StepTabAsync(-1); }
 
-    private void Zoom(double delta, bool reset = false) => WithActiveLease(l =>
-    {
-        var v = l.View; v.Focus(FocusState.Programmatic);
-        _ = v.CoreWebView2?.ExecuteScriptAsync(reset ? "document.body.style.zoom='1'" : $"document.body.style.zoom=String(Math.max(.25, Math.min(5, (parseFloat(document.body.style.zoom||'1')) + ({delta.ToString(System.Globalization.CultureInfo.InvariantCulture)}))))");
-    });
-    private void OnZoomInAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); Zoom(0.1); }
-    private void OnZoomOutAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); Zoom(-0.1); }
+    private void OnZoomInAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); Zoom(1); }
+    private void OnZoomOutAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); Zoom(-1); }
     private void OnZoomResetAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e) { Handle(e); Zoom(0, reset: true); }
 
     // ---- Command palette (§26) ----

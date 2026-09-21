@@ -21,6 +21,8 @@
             <KeyboardAccelerator Key="Number0" Modifiers="Control" Invoked="OnZoomResetAccelerator"/>
             <KeyboardAccelerator Key="B" Modifiers="Control" Invoked="OnToggleSidebarAccelerator"/>
             <KeyboardAccelerator Key="D" Modifiers="Control" Invoked="OnBookmarkAccelerator"/>
+            <KeyboardAccelerator Key="H" Modifiers="Control" Invoked="OnHistoryAccelerator"/>
+            <KeyboardAccelerator Key="J" Modifiers="Control" Invoked="OnDownloadsAccelerator"/>
             <KeyboardAccelerator Key="O" Modifiers="Control,Shift" Invoked="OnBookmarksAccelerator"/>
         </Grid.KeyboardAccelerators>
         <Grid.RowDefinitions>
@@ -202,6 +204,8 @@
                                 <MenuFlyoutItem Text="Command palette" Click="OnPalette"/>
                                 <MenuFlyoutItem Text="Bookmarks and search engine" Click="OnBookmarks"/>
                                 <MenuFlyoutItem Text="Bookmark this page (Ctrl+D)" Click="OnBookmarkThis"/>
+                                <MenuFlyoutItem Text="History (Ctrl+H)" Click="OnHistory"/>
+                                <MenuFlyoutItem Text="Downloads (Ctrl+J)" Click="OnDownloads"/>
                                 <MenuFlyoutItem Text="Workspaces overview" Click="OnWorkspaceOverview"/>
                                 <MenuFlyoutItem Text="Agent activity" Click="OnAgentActivity"/>
                                 <MenuFlyoutItem Text="Help and welcome" Click="OnHelp"/>
