@@ -51,7 +51,7 @@ while (`$l.IsListening) {
   `$t = 'Page ' + `$p.Trim('/').ToUpper()
   if (`$p -eq '/slow') { Start-Sleep -Seconds 4 }
   `$extra = if (`$p -eq '/f') { '<iframe id="f" src="/a" width="220" height="90"></iframe>' } else { '' }
-  `$html = '<!doctype html><title>' + `$t + '</title><body><h1>' + `$t + '</h1>' + `$extra + '<script>document.body.addEventListener("click",function(){var f=document.getElementById("f");if(f)f.contentWindow.focus()});setInterval(function(){fetch("/report?p=' + `$p + '&z="+encodeURIComponent(document.documentElement.style.zoom||"1")+"&dpr="+window.devicePixelRatio+"&ae="+(document.activeElement?document.activeElement.tagName:""))},700)</script></body>'
+  `$html = '<!doctype html><title>' + `$t + '</title><body><h1>' + `$t + '</h1>' + `$extra + '<script>document.addEventListener("click",function(){var f=document.getElementById("f");if(f)f.contentWindow.focus()});setInterval(function(){fetch("/report?p=' + `$p + '&z="+encodeURIComponent(document.documentElement.style.zoom||"1")+"&dpr="+window.devicePixelRatio+"&top="+(window===window.top?1:0)+"&ae="+(document.activeElement?document.activeElement.tagName:""))},700)</script></body>'
   `$b = [Text.Encoding]::UTF8.GetBytes(`$html); `$c.Response.ContentType = 'text/html'; `$c.Response.OutputStream.Write(`$b,0,`$b.Length); `$c.Response.Close()
 }
 "@
@@ -89,7 +89,7 @@ function Ctrl-Wheel([int]$notches) {
     [W.U]::keybd_event(0x11, 0, 2, 0); Start-Sleep -Milliseconds 500
 }
 function Click-Page { Focus-Jev; $r = $script:win.Current.BoundingRectangle; [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]($r.X + $r.Width * 0.6), [int]($r.Y + $r.Height * 0.6)); Start-Sleep -Milliseconds 200; [W.U]::mouse_event(2, 0, 0, 0, 0); [W.U]::mouse_event(4, 0, 0, 0, 0); Start-Sleep -Milliseconds 600 }
-function Last-Report { if (Test-Path $reportLog) { @(Get-Content $reportLog -Tail 1)[0] } else { '' } }
+function Last-Report { if (Test-Path $reportLog) { @(Get-Content $reportLog -Tail 12 | Where-Object { $_ -match 'top=1' } | Select-Object -Last 1)[0] } else { '' } }   # the top document's report, not an iframe's
 function Names { @($script:win.FindAll($TS::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name }) }
 function ById($id) { $script:win.FindFirst($TS::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::AutomationIdProperty, $id))) }
 function ByName($name, $root = $null) { if (-not $root) { $root = $script:win }; $root.FindFirst($TS::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, $name))) }
@@ -263,8 +263,8 @@ try {
         if ($down -notmatch 'z=1&') { return "one notch down gave: '$down'" }
     }
     Try-Row '21 After Enter the address bar shows the page that was opened, not the typed words' {
-        Go "127.0.0.1:$port/addr"
-        if (-not (Wait-For { (Address) -eq "http://127.0.0.1:$port/addr" } 10)) { "the box shows '$(Address)'" }
+        Go "localhost:$port/addr"   # a bare host with a dot would default to https; localhost defaults to http
+        if (-not (Wait-For { (Address) -eq "http://localhost:$port/addr" } 10)) { "the box shows '$(Address)'" }
     }
     Try-Row '22 Typing in the address bar while a page is still loading is not overwritten' {
         Keys '^l'; Keys '^a'; Send-Text (U '127.0.0.1' '/slow'); Send-Text '{ENTER}'; Start-Sleep -Milliseconds 800
@@ -282,12 +282,12 @@ try {
         Keys '^l'; Send-Text 'abc'
         if ((Address) -ne 'abc') { return "Ctrl+L with the page focused did not focus the address bar (box shows '$(Address)')" }
         Keys '{ESC}'; Click-Page
-        $tabs0 = ((Names) | Where-Object { $_ -match '^\d+ tabs? open' } | Select-Object -First 1)
+        $tabs0 = ((Names) | Where-Object { $_ -match '^(\d+) tabs? open' } | ForEach-Object { [int]$Matches[1] } | Select-Object -First 1)
         Keys '^t'; Start-Sleep -Seconds 2
-        $tabs1 = ((Names) | Where-Object { $_ -match '^\d+ tabs? open' } | Select-Object -First 1)
+        $tabs1 = ((Names) | Where-Object { $_ -match '^(\d+) tabs? open' } | ForEach-Object { [int]$Matches[1] } | Select-Object -First 1)
         if ($tabs1 -eq $tabs0) { return "Ctrl+T with the page focused did not open a tab ('$tabs0' -> '$tabs1')" }
         Click-Page; Keys '^w'; Start-Sleep -Seconds 2
-        $tabs2 = ((Names) | Where-Object { $_ -match '^\d+ tabs? open' } | Select-Object -First 1)
+        $tabs2 = ((Names) | Where-Object { $_ -match '^(\d+) tabs? open' } | ForEach-Object { [int]$Matches[1] } | Select-Object -First 1)
         if ($tabs2 -ne $tabs0) { return "Ctrl+W with the page focused did not close it ('$tabs0' -> '$tabs2')" }
     }
 

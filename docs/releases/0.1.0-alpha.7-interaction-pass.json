@@ -1,7 +1,10 @@
 ﻿{
     "exe":  "D:\\Browser\\_ui-check\\accept\\app\\JevBrowse.App.exe",
-    "zipSha256":  "see report",
-    "at":  "2026-09-21T20:13:16.4346335Z",
+    "zipSha256":  "05990575e9d168f81895e947e7a6e0e0bc1f54c39bc2675a132d7e0fb90f3862",
+    "buildCommit":  "ef7f7f2bfdbe6eda109728ed2d674293be687e76",
+    "buildVersion":  "0.1.0-alpha.7",
+    "webView2":  "153.0.4234.48",
+    "at":  "2026-09-21T21:11:44.9684381Z",
     "os":  "Microsoft Windows NT 10.0.26200.0",
     "results":  {
                     "1 launch (unpackaged, own data folder; first-run tips skipped)":  {
@@ -40,10 +43,10 @@
                                                                                                                   "status":  "PASS",
                                                                                                                   "detail":  ""
                                                                                                               },
-                    "16c A download appears in Downloads (Ctrl+J) and Show in folder opens Explorer on it":  {
-                                                                                                                 "status":  "PASS",
-                                                                                                                 "detail":  ""
-                                                                                                             },
+                    "16c The download appears in Downloads (Ctrl+J) and Show in folder selects THAT file in Explorer":  {
+                                                                                                                            "status":  "PASS",
+                                                                                                                            "detail":  ""
+                                                                                                                        },
                     "17 Marking a site Sensitive removes its earlier history and stops recording it":  {
                                                                                                            "status":  "PASS",
                                                                                                            "detail":  ""
@@ -52,6 +55,26 @@
                                                                                                                                                               "status":  "PASS",
                                                                                                                                                               "detail":  ""
                                                                                                                                                           },
+                    "18b Zoom with the keyboard focus inside an IFRAME reaches the app once per press":  {
+                                                                                                             "status":  "PASS",
+                                                                                                             "detail":  ""
+                                                                                                         },
+                    "18c Ctrl+mouse wheel zooms one step per notch and back":  {
+                                                                                   "status":  "PASS",
+                                                                                   "detail":  ""
+                                                                               },
+                    "21 After Enter the address bar shows the page that was opened, not the typed words":  {
+                                                                                                               "status":  "PASS",
+                                                                                                               "detail":  ""
+                                                                                                           },
+                    "22 Typing in the address bar while a page is still loading is not overwritten":  {
+                                                                                                          "status":  "PASS",
+                                                                                                          "detail":  ""
+                                                                                                      },
+                    "23 Browser shortcuts work while the PAGE has keyboard focus (Ctrl+L, Ctrl+T, Ctrl+W)":  {
+                                                                                                                 "status":  "PASS",
+                                                                                                                 "detail":  ""
+                                                                                                             },
                     "19 Default browser: Make default / Settings hand-off / links from other programs":  {
                                                                                                              "status":  "NOT TESTED",
                                                                                                              "detail":  "the dialog registers JevBrowse in the current user registry before it asks; that changes the host, so it is left for the disposable guest"
