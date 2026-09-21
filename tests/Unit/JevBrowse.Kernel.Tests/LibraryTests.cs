@@ -120,3 +120,99 @@ public class LibraryTests : IDisposable
         Assert.Equal(1.0, z.Get("bad.example"));
     }
 }
+
+/// <summary>Corrective pass after review: what is stored must follow a class change, download ownership must never default to disk, and one data folder has one owner.</summary>
+public class LibraryPolicyTests : IDisposable
+{
+    private readonly BrowserDb _db = new(":memory:");
+    private readonly Dictionary<string, DataClass> _overrides = [];
+    private readonly TabKernel _k;
+    private readonly HistoryRepository _history;
+    private readonly SiteZoomRepository _zoom;
+    private readonly HistoryRecorder _recorder;
+
+    public LibraryPolicyTests()
+    {
+        _k = new TabKernel(new FakeLeaseManager { MaxLive = 6 }, new TabRepository(_db), new CheckpointRepository(_db), Path.GetTempPath(), null, new WorkspaceRepository(_db),
+            classifier: new DataClassifier(h => _overrides.TryGetValue(h, out var c) ? c : null));
+        _k.Load();
+        _history = new HistoryRepository(_db); _zoom = new SiteZoomRepository(_db);
+        _recorder = new HistoryRecorder(_k, _history, null, _zoom);
+    }
+    public void Dispose() => _db.Dispose();
+
+    [Fact]
+    public void Marking_a_site_Sensitive_removes_its_history_and_zoom_and_leaves_other_sites_alone()
+    {
+        var a = _k.Open(new Uri("https://clinic.example.net/records")); var b = _k.Open(new Uri("https://example.org/keep"));
+        _recorder.Record(a.Id); _recorder.Record(b.Id);
+        _zoom.Set("clinic.example.net", 1.5); _zoom.Set("example.org", 1.25);
+
+        _overrides["clinic.example.net"] = DataClass.Sensitive;   // the decision alone; the sweep is what must clean up
+        var removed = _recorder.Sweep();
+
+        Assert.Equal(1, removed);
+        Assert.Equal(["example.org"], _history.List().Select(v => v.Host));
+        Assert.Equal(1.0, _zoom.Get("clinic.example.net"));
+        Assert.Equal(1.25, _zoom.Get("example.org"));
+    }
+
+    [Fact]
+    public void A_page_that_turns_Sensitive_after_it_was_recorded_takes_its_saved_history_and_zoom_with_it()
+    {
+        var t = _k.Open(new Uri("https://shop.example.org/cart"));
+        _recorder.Record(t.Id); _zoom.Set("shop.example.org", 1.5);
+        Assert.Single(_history.List());
+
+        Assert.True(_k.RaiseClass(t.Id, DataClass.Sensitive));                    // e.g. a card field appeared
+
+        Assert.Empty(_history.List());
+        Assert.Equal(1.0, _zoom.Get("shop.example.org"));
+    }
+
+    [Fact]
+    public void A_Private_tab_on_the_same_site_does_not_erase_what_an_ordinary_tab_left()
+    {
+        var ordinary = _k.Open(new Uri("https://example.org/a")); _recorder.Record(ordinary.Id);
+        var priv = _k.CreateWorkspace("Private", IdentityContainer.Private);
+        var p = _k.OpenIn(priv.Id, new Uri("https://example.org/b"));
+        _k.RaiseClass(p.Id, DataClass.Secret);
+        Assert.Single(_history.List());
+    }
+
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData(IdentityContainer.Private, false)]
+    [InlineData(IdentityContainer.Disposable, false)]
+    [InlineData(IdentityContainer.Personal, true)]
+    [InlineData(IdentityContainer.Work, true)]
+    public void A_download_is_written_to_disk_only_when_its_owner_is_known_and_ordinary(IdentityContainer? owner, bool persists) =>
+        Assert.Equal(persists, DownloadOwnership.MayPersist(owner));
+
+    [Fact]
+    public void Startup_and_storage_share_one_data_folder_answer()
+    {
+        var local = Path.Combine(Path.GetTempPath(), "jev-local");
+        Assert.Equal(Path.GetFullPath(Path.Combine(local, "JevBrowse")), DataLocation.Resolve(null, local));
+        Assert.Equal(Path.GetFullPath(Path.Combine(local, "JevBrowse")), DataLocation.Resolve("  ", local));
+        var custom = Path.Combine(Path.GetTempPath(), "jev-custom");
+        Assert.Equal(Path.GetFullPath(custom), DataLocation.Resolve(custom, local));
+        Assert.Equal(DataLocation.Resolve(null, local), DataLocation.Resolve(null, local));   // independent of where the program was extracted
+    }
+
+    [Fact]
+    public void A_data_folder_has_one_owner_at_a_time()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "jev-lock-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var first = InstanceLock.TryAcquire(dir);
+            Assert.NotNull(first);
+            Assert.Null(InstanceLock.TryAcquire(dir));                             // a second copy is refused while the first runs
+            first!.Dispose();
+            using var again = InstanceLock.TryAcquire(dir);
+            Assert.NotNull(again);                                                 // and the lock is released when the owner goes
+        }
+        finally { try { Directory.Delete(dir, true); } catch (IOException) { } }
+    }
+}

@@ -1,24 +1,40 @@
 name: Release
 
-# Builds the portable zip with scripts/release.ps1 (tests, self-contained publish, symbols zip, SBOM, SHA256SUMS).
-#  - Push a tag like v0.1.0-alpha.7  -> a GitHub pre-release with the files attached.
-#  - Run it by hand (workflow_dispatch) -> the same build, kept as a workflow artifact only; nothing is published.
+# Two steps, always by hand, so the bytes a person tested are the bytes that get published:
+#
+#   1. action=package   Builds the portable zip with scripts/release.ps1 (tests, self-contained publish, SBOM, SHA256SUMS) and keeps it as a workflow
+#                       artifact. Nothing is published. Download THAT zip, run the clean-Windows checklist on it, and note its SHA-256.
+#   2. action=publish   Inputs: the version, the run id of step 1 and the SHA-256 you tested. It downloads the artifact of that run, refuses unless the zip's
+#                       SHA-256 equals the one you give AND matches SHA256SUMS.txt, then creates a GitHub pre-release from those exact bytes.
+#
+# A tag push does nothing. Symbols (they carry build-machine source paths) are kept as a separate artifact and are never attached to a release.
 # The zip is UNSIGNED: there is no code-signing certificate yet, and the release notes say so.
 
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
     inputs:
+      action:
+        description: 'package (build and keep as an artifact) or publish (pre-release the tested artifact)'
+        type: choice
+        options: [package, publish]
+        default: package
       version:
-        description: 'Version label for a manual (unpublished) build'
-        default: '0.0.0-manual'
+        description: 'Version, e.g. 0.1.0-alpha.7'
+        required: true
+      package_run_id:
+        description: 'publish only: the run id of the package run whose zip was tested'
+        required: false
+      tested_sha256:
+        description: 'publish only: the SHA-256 of the zip that passed the clean-Windows checklist'
+        required: false
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   package:
+    if: inputs.action == 'package'
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
@@ -26,27 +42,67 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
-      - name: Work out the version
-        id: v
-        shell: pwsh
-        run: |
-          $v = if ('${{ github.ref_type }}' -eq 'tag') { '${{ github.ref_name }}'.TrimStart('v') } else { '${{ inputs.version }}' }
-          "version=$v" >> $env:GITHUB_OUTPUT
       - name: Build the package
         shell: pwsh
-        run: ./scripts/release.ps1 -Version ${{ steps.v.outputs.version }}
-      - name: Keep the files
+        run: ./scripts/release.ps1 -Version ${{ inputs.version }}
+      - name: Keep the release files (zip, checksums, SBOM)
         uses: actions/upload-artifact@v4
         with:
-          name: JevBrowse-${{ steps.v.outputs.version }}
-          path: artifacts/release/${{ steps.v.outputs.version }}/*.*
-      - name: Publish a pre-release (tags only)
-        if: github.ref_type == 'tag'
+          name: JevBrowse-${{ inputs.version }}
+          path: |
+            artifacts/release/${{ inputs.version }}/JevBrowse-${{ inputs.version }}-win-x64.zip
+            artifacts/release/${{ inputs.version }}/SHA256SUMS.txt
+            artifacts/release/${{ inputs.version }}/sbom-packages.json
+      - name: Keep the symbols separately (never published)
+        uses: actions/upload-artifact@v4
+        with:
+          name: JevBrowse-${{ inputs.version }}-symbols
+          path: artifacts/release/${{ inputs.version }}/JevBrowse-${{ inputs.version }}-win-x64-symbols.zip
+      - name: Say what to do next
+        shell: pwsh
+        run: |
+          $zip = "artifacts/release/${{ inputs.version }}/JevBrowse-${{ inputs.version }}-win-x64.zip"
+          $h = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          "Run id: ${{ github.run_id }}`nZip SHA-256: $h`nDownload the artifact JevBrowse-${{ inputs.version }} from this run, test THAT zip, then run this workflow with action=publish, this run id and that hash." | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY
+
+  publish:
+    if: inputs.action == 'publish'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check the inputs
+        shell: pwsh
+        run: |
+          if (-not '${{ inputs.package_run_id }}' -or -not '${{ inputs.tested_sha256 }}') { throw 'publish needs package_run_id and tested_sha256' }
+          if ('${{ inputs.tested_sha256 }}' -notmatch '^[0-9a-fA-F]{64}$') { throw 'tested_sha256 must be the 64-character SHA-256 of the tested zip' }
+      - name: Download the tested artifact
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download ${{ inputs.package_run_id }} --repo ${{ github.repository }} --name JevBrowse-${{ inputs.version }} --dir stage
+      - name: Refuse unless these are the tested bytes
+        id: verify
+        shell: pwsh
+        run: |
+          $zip = "stage/JevBrowse-${{ inputs.version }}-win-x64.zip"
+          $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          $tested = '${{ inputs.tested_sha256 }}'.ToLower()
+          if ($actual -ne $tested) { throw "The artifact's zip is $actual, not the tested $tested. Nothing was published." }
+          $listed = (Get-Content stage/SHA256SUMS.txt | Where-Object { $_ -match 'win-x64\.zip$' -and $_ -notmatch 'symbols' }) -replace '\s.*$', ''
+          if ($listed -ne $actual) { throw "SHA256SUMS.txt lists $listed for the zip. Nothing was published." }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $z = [IO.Compression.ZipFile]::OpenRead((Resolve-Path $zip))
+          $entry = $z.Entries | Where-Object { $_.FullName -eq 'BUILD.json' }
+          $build = (New-Object IO.StreamReader($entry.Open())).ReadToEnd() | ConvertFrom-Json
+          $z.Dispose()
+          if ($build.version -ne '${{ inputs.version }}') { throw "BUILD.json says version $($build.version)." }
+          "commit=$($build.commit)" >> $env:GITHUB_OUTPUT
+          "verified $actual (commit $($build.commit))"
+      - name: Publish the pre-release from those exact files
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $d = "artifacts/release/${{ steps.v.outputs.version }}"
-          gh release create "${{ github.ref_name }}" --prerelease --title "JevBrowse ${{ steps.v.outputs.version }}" `
-            --notes "Unsigned alpha. Check the SHA-256 in SHA256SUMS.txt before running. What changed and what is not proven: docs/releases/ and docs/EVIDENCE_MATRIX.md." `
-            "$d/JevBrowse-${{ steps.v.outputs.version }}-win-x64.zip" "$d/SHA256SUMS.txt" "$d/sbom-packages.json" "$d/JevBrowse-${{ steps.v.outputs.version }}-win-x64-symbols.zip"
+          gh release create "v${{ inputs.version }}" --repo ${{ github.repository }} --target ${{ steps.verify.outputs.commit }} --prerelease --title "JevBrowse ${{ inputs.version }}" `
+            --notes "Unsigned alpha. Verify the SHA-256 in SHA256SUMS.txt before running. What changed and what is not proven: docs/releases/ and docs/EVIDENCE_MATRIX.md." `
+            "stage/JevBrowse-${{ inputs.version }}-win-x64.zip" "stage/SHA256SUMS.txt" "stage/sbom-packages.json"

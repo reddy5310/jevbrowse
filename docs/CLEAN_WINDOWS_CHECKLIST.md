@@ -3,7 +3,7 @@
 For a Windows 10/11 x64 account or VM with **no development tools** and **no `JEVBROWSE_*` or `WEBVIEW2_*` settings**. About 20 minutes. Write down PASS or FAIL and, for a
 FAIL, what you saw. Nothing here needs the source code.
 
-**Setup:** copy `JevBrowse-<version>-win-x64.zip` and `SHA256SUMS.txt` to the machine. In PowerShell: `Get-FileHash .\JevBrowse-<version>-win-x64.zip` must equal the hash in
+**Setup:** copy `JevBrowse-<version>-win-x64.zip` and `SHA256SUMS.txt` to the machine. **Use the zip from the release workflow's `package` run** (the artifact `JevBrowse-<version>`), not a locally built one: the same bytes are what gets published, and only if their SHA-256 is the one you write down here. In PowerShell: `Get-FileHash .\JevBrowse-<version>-win-x64.zip` must equal the hash in
 `SHA256SUMS.txt` (and in the release notes). Extract the ZIP to a normal folder (for example `Downloads\JevBrowse`).
 
 | # | Do this | Expect |
@@ -21,7 +21,14 @@ FAIL, what you saw. Nothing here needs the source code.
 | 11 | Kill the app from Task Manager (End task). Start it again. | It starts normally and your ordinary tabs are back. |
 | 12 | **Offline:** turn the network off, start JevBrowse. | It opens and stays up (pages will not load; Shield lists download later). |
 | 13 | **Missing runtime (VM only):** on a machine without the Microsoft Edge WebView2 Runtime, start JevBrowse. | A message names the WebView2 Runtime, offers **Get the WebView2 Runtime**, and **Quit** closes the app. Your data is not touched. |
-| 14 | Optional: run `.\scripts\packaged-smoke.ps1 -Zip <zip> -DefaultData` if you have the repository's `scripts` folder. | 0 failures. |
+| 14 | **Bookmarks:** on a page press **Ctrl+D** (status line says it was bookmarked), press it again (removed), press it once more, then **Ctrl+Shift+O**. In Chrome, Edge or Firefox export bookmarks as HTML, copy the file over, and in the panel press **Import bookmarks file…** and pick it. Click an imported bookmark. In a Private session press Ctrl+D. | The list shows the page; import reports how many were added (a second import says they were already saved); clicking opens it in a new tab; Private says it cannot add bookmarks. |
+| 15 | **Search engine:** in the same panel choose **Google** (or another), close the panel, type two words in the address bar and press Enter. | The search runs on the chosen engine; after a restart it is still chosen. |
+| 16 | **History (Ctrl+H) and Downloads (Ctrl+J):** visit two ordinary pages, open History, search for one, press **Forget** on it, then **Clear all history…** (Cancel once). Download a file, open Downloads, press **Show in folder**. In a Private session visit a page and download a file. | History lists the ordinary pages only (none from the Private session); Forget and Clear work and the dialog says bookmarks and downloads are not deleted; Show in folder opens Explorer on the file; the Private download is listed with a note that it is not kept, and is gone from the list after you end the Private session (the file stays). |
+| 17 | **Sensitive site:** in **This tab ▾** mark a site you visited as Sensitive (the class badge next to the address). Open History. | That site's earlier history entries are gone, and new visits to it are not recorded. |
+| 18 | **Zoom:** press **Ctrl+ +** twice on a site, reload, open another tab on the same site, then **Ctrl+0**. | 110%, then 125%; the same zoom returns on reload and on the other tab; Ctrl+0 returns to 100%. |
+| 19 | **Default browser:** More ▸ **Make JevBrowse your default browser…**, read the dialog, press **Open Settings**. In Settings choose JevBrowse for links, then click a web link in another program (an email, a document). While JevBrowse is open, click one more. Finally More ▸ **Remove JevBrowse from the browser list** and choose your usual browser again in Settings. | The link opens as a new tab in the running JevBrowse (a second window never appears); JevBrowse is listed in Settings only after the first step; you can put your own browser back. (Note which state Settings was in before, and restore it.) |
+| 20 | **One copy per data folder:** with JevBrowse open, extract the zip a second time to another folder and start that copy. | It does not open a second window on the same data: a message says the folder is already in use (or the link/window is handed to the running copy). |
+| 21 | Optional: run `.\scripts\packaged-smoke.ps1 -Zip <zip> -DefaultData` if you have the repository's `scripts` folder. | 0 failures. |
 
 **Backup and restore (also try once):** close JevBrowse, copy the whole `%LOCALAPPDATA%\JevBrowse` folder somewhere, start JevBrowse, change something, close it, put the copy
 back, start it: your earlier state returns.

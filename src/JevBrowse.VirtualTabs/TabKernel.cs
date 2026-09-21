@@ -164,6 +164,9 @@ public sealed class TabKernel
     /// happens to be on says nothing about the pages it visited earlier: a bank page followed by an ordinary one must not leave the bank address in the database. Anything
     /// mixed or Sensitive stays in memory (still useful while the app runs).
     /// </summary>
+    /// <summary>Whether an address, as classified now (site decisions included), may be kept in a list of visited pages.</summary>
+    public bool MayKeepAddress(Uri url) => _classifier.Classify(url, IdentityContainer.Personal, PageSignals.None) < DataClass.Sensitive;
+
     private bool HistoryMayBePersisted(VirtualTab tab, NavHistory history)
     {
         if (ClassOf(tab) >= DataClass.Sensitive) return false;

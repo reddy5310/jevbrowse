@@ -52,8 +52,8 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
     /// <summary>A page started a download: (the page, file name, where from, it is an agent's page) → allow it? Asked before anything is saved.</summary>
     public Func<ResourceId, string, Uri?, bool, Task<bool>>? OnDownloadRequested { get; set; }
     public string? DownloadPathOverride { get; set; }
-    /// <summary>A download ended: (the page, file name, saved path, where from, it finished rather than being interrupted, this is an agent's page).</summary>
-    public Action<ResourceId, string, string, Uri?, bool, bool>? OnDownloadFinished { get; set; }
+    /// <summary>A download ended: (the page, file name, saved path, where from, it finished rather than being interrupted, this is an agent's page, the identity container and workspace the page belonged to when the download STARTED; a null container means ownership is unknown).</summary>
+    public Action<ResourceId, string, string, Uri?, bool, bool, IdentityContainer?, ContextId>? OnDownloadFinished { get; set; }
     /// <summary>Resolves jev:// URLs to locally generated HTML (welcome/help). No network involved.</summary>
     public Func<Uri, string?>? LocalPage { get; set; }
 
@@ -120,7 +120,8 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
             lease.PopupRequested = (target, userInitiated, agent) => OnPopupRequested?.Invoke(id, target, userInitiated, agent);
             lease.DownloadGate = (name, source, agent) => OnDownloadRequested is { } ask ? ask(id, name, source, agent) : Task.FromResult(true);
             lease.DownloadPathOverride = DownloadPathOverride;
-            lease.DownloadFinished = (name, path, source, ok, agent) => OnDownloadFinished?.Invoke(id, name, path, source, ok, agent);
+            lease.OwnerContainer = container; lease.OwnerWorkspace = isolationKey;   // fixed now: the page may be gone by the time a download ends
+            lease.DownloadFinished = (name, path, source, ok, agent) => OnDownloadFinished?.Invoke(id, name, path, source, ok, agent, lease.OwnerContainer, lease.OwnerWorkspace);
             // Before anything else reacts: an environment whose browser process died cannot create new controls, so forget it NOW (the environment's own
             // exit event can arrive later than the failure that triggers the page's recovery).
             lease.EngineFailed += f => { if (f.WholeEngine) _envs.Remove(key); };
@@ -906,6 +907,9 @@ public sealed class WebView2Lease : IRendererLease
     public string? DownloadPathOverride { get; set; }
     /// <summary>(file name, saved path, where from, finished, this is an agent's page). Set by the manager.</summary>
     public Action<string, string, Uri?, bool, bool>? DownloadFinished { get; set; }
+    /// <summary>The identity the page belonged to when it was created. Null = unknown.</summary>
+    public IdentityContainer? OwnerContainer { get; set; }
+    public ContextId OwnerWorkspace { get; set; }
     // ---- live capture and calls, per document ----
     //
     // Keyed by the reporting document, never by the tab: a tab can hold a top-level page and several frames, each

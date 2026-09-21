@@ -27,9 +27,7 @@ namespace JevBrowse.App;
 
 public sealed partial class MainWindow : Window
 {
-    private static readonly string DataDir =
-        Environment.GetEnvironmentVariable("JEVBROWSE_DATA_DIR")
-        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "JevBrowse");
+    private static readonly string DataDir = DataLocation.Resolve();   // the same answer the crash log and the single-instance guard use
 
     public ObservableCollection<TabItem> Items { get; } = [];
 
@@ -567,6 +565,7 @@ public sealed partial class MainWindow : Window
         else foreach (var i in Items) i.Refresh();
 
         if (e.Kind is "loaded" or "restored" or "activated") ApplySiteZoom(e.Id);
+        if (e.Kind == "workspace-ended") { _sessionDownloads.RemoveAll(d => d.Workspace.ToString() == e.Reason); if (PanelOpen && _panelId == "downloads") RefreshPanel(force: true); }   // a Private session's download names go with it (the files stay)
         if (e.Kind == "activated")
         {
             _syncingSelection = true;
@@ -950,6 +949,7 @@ public sealed partial class MainWindow : Window
         // Apply it NOW, not at the next qualifying event: stricter means the previews, saved positions and indexed text this site no longer qualifies for
         // are deleted immediately, for every tab on it and for pages of it that were indexed earlier.
         _kernel.ReapplyPolicy();
+        _historyRecorder?.Sweep();   // history and saved zoom for a site that may no longer be kept
         if (chosen != DataClass.Public) _memory?.ForgetSite(site);
         UpdateClassBadge();
     }

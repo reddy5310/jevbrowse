@@ -20,21 +20,22 @@ public sealed partial class MainWindow
     private DownloadRepository? _downloads;
     private SiteZoomRepository? _siteZoom;
     private HistoryRecorder? _historyRecorder;
-    private readonly List<DownloadRecord> _sessionDownloads = [];   // Private-session downloads: memory only
+    // Private-session (or unknown-owner) downloads: memory only, each tied to the workspace it belongs to so ending that session forgets it.
+    private readonly List<(DownloadRecord Rec, ContextId Workspace)> _sessionDownloads = [];
 
     private void InitLibrary()
     {
         _history = new HistoryRepository(_db!);
         _downloads = new DownloadRepository(_db!);
         _siteZoom = new SiteZoomRepository(_db!);
-        _historyRecorder = new HistoryRecorder(_kernel!, _history);
-        _leases!.OnDownloadFinished = (id, name, path, source, ok, agent) =>
+        _historyRecorder = new HistoryRecorder(_kernel!, _history, siteZoom: _siteZoom);
+        _leases!.OnDownloadFinished = (id, name, path, source, ok, agent, container, workspace) =>
         {
             if (agent) return;   // an agent's downloads are not the person's; they are governed by the agent's own log
             var rec = new DownloadRecord(name, path, source?.Host ?? "", DateTimeOffset.UtcNow, ok);
-            var tab = _kernel!.Tabs.FirstOrDefault(t => t.Id == id);
-            var ephemeral = tab is not null && _kernel.ContainerOf(tab).IsEphemeral();
-            try { if (ephemeral) _sessionDownloads.Add(rec); else _downloads!.Add(rec); } catch (Exception) { }
+            // Ownership was fixed when the page was created, not looked up now: the tab may be closed by the time a download ends. Unknown owner is treated as Private.
+            var ordinary = DownloadOwnership.MayPersist(container);
+            try { if (!ordinary) _sessionDownloads.Add((rec, workspace)); else _downloads!.Add(rec); } catch (Exception) { }
             if (PanelOpen && _panelId == "downloads") RefreshPanel(force: true);
             StatusText.Text = ok ? $"Downloaded {name}. Ctrl+J shows your downloads." : $"The download of {name} did not finish.";
         };
@@ -126,7 +127,7 @@ public sealed partial class MainWindow
         if (_downloads is null) return null;
         var repo = _downloads;
         var list = new ListView { SelectionMode = ListViewSelectionMode.None };
-        var rows = _sessionDownloads.Select(d => (d, session: true)).Concat(repo.List().Select(d => (d, session: false))).OrderByDescending(x => x.d.FinishedAt).ToList();
+        var rows = _sessionDownloads.Select(d => (d: d.Rec, session: true)).Concat(repo.List().Select(d => (d, session: false))).OrderByDescending(x => x.d.FinishedAt).ToList();
         foreach (var (d, session) in rows)
         {
             var row = new Grid { ColumnSpacing = Tokens.Space(8), Padding = Tokens.Inset("JevInsetSlim") };

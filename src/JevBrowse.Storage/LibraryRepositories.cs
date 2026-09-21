@@ -49,6 +49,25 @@ public sealed class HistoryRepository
         return res;
     }
 
+    public IReadOnlyList<string> Hosts()
+    {
+        var res = new List<string>();
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT DISTINCT host FROM history_visits";
+        using var r = cmd.ExecuteReader();
+        while (r.Read()) res.Add(r.GetString(0));
+        return res;
+    }
+
+    /// <summary>Removes every recorded page of this exact host (used when the host stops being allowed in history).</summary>
+    public int RemoveHost(string host)
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "DELETE FROM history_visits WHERE host=$h COLLATE NOCASE";
+        cmd.Parameters.AddWithValue("$h", host);
+        return cmd.ExecuteNonQuery();
+    }
+
     public bool Remove(string url)
     {
         using var cmd = _db.Connection.CreateCommand();
@@ -114,6 +133,16 @@ public sealed class SiteZoomRepository
         cmd.CommandText = "SELECT zoom FROM site_zoom WHERE host=$h";
         cmd.Parameters.AddWithValue("$h", host.ToLowerInvariant());
         return cmd.ExecuteScalar() is double d ? ZoomLevels.Sanitize(d) : ZoomLevels.Default;
+    }
+
+    public IReadOnlyList<string> Hosts()
+    {
+        var res = new List<string>();
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT host FROM site_zoom";
+        using var r = cmd.ExecuteReader();
+        while (r.Read()) res.Add(r.GetString(0));
+        return res;
     }
 
     public void Set(string host, double zoom)

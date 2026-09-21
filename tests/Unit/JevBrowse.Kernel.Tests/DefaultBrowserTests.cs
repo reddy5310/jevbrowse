@@ -29,7 +29,7 @@ public class DefaultBrowserTests
         Assert.All(e, x => Assert.DoesNotContain("HKEY_LOCAL_MACHINE", x.Key, StringComparison.OrdinalIgnoreCase));
         Assert.Contains(e, x => x.Key.EndsWith(@"URLAssociations") && x.Name == "http" && x.Value == DefaultBrowser.UrlProgId);
         Assert.Contains(e, x => x.Key.EndsWith(@"URLAssociations") && x.Name == "https");
-        Assert.Contains(e, x => x.Key.EndsWith(@"FileAssociations") && x.Name == ".html");
+        Assert.DoesNotContain(e, x => x.Key.Contains("FileAssociations") || x.Key.Contains("HTML"));   // local files are not opened by the launch path, so none are claimed
         Assert.Contains(e, x => x.Key.EndsWith(@"shell\open\command") && x.Value == $"\"{exe}\" \"%1\"");   // a path with spaces stays one argument
         Assert.Contains(e, x => x.Key == "RegisteredApplications" && x.Name == "JevBrowse");
     }

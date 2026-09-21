@@ -205,6 +205,9 @@ public sealed partial class MainWindow
             await k.SwitchWorkspaceAsync(priv.Id); await k.ActivateAsync(pt.Id);
             Zoom(1);
             Step("in a Private session zoom works but is never written", _siteZoom.Get(pt.Url.Host) == 1.0);
+            var sessionBefore = _sessionDownloads.Count;
+            await k.EndPrivateSessionAsync(priv.Id, ContextId.Default);
+            Step("ending the Private session forgets its download names (the files stay)", sessionBefore >= 1 && _sessionDownloads.Count == 0 && Directory.GetFiles(downloads).Length >= 1, $"before={sessionBefore} after={_sessionDownloads.Count} files={Directory.GetFiles(downloads).Length}");
         }
         catch (Exception ex) { Step("no exception", false, ex.ToString()); }
         finally { try { idp.Stop(); app.Stop(); } catch (Exception) { } DownloadAnswerForCheck = null; }

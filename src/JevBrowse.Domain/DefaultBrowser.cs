@@ -44,16 +44,12 @@ public static class DefaultBrowser
             new($@"Classes\{UrlProgId}", null, "JevBrowse URL"),
             new($@"Classes\{UrlProgId}", "URL Protocol", ""),
             new($@"Classes\{UrlProgId}\shell\open\command", null, open),
-            new($@"Classes\{HtmlProgId}", null, "JevBrowse HTML Document"),
-            new($@"Classes\{HtmlProgId}\shell\open\command", null, open),
             new($@"Clients\StartMenuInternet\{AppKey}", null, "JevBrowse"),
             new($@"Clients\StartMenuInternet\{AppKey}\shell\open\command", null, $"\"{exePath}\""),
             new(cap, "ApplicationName", "JevBrowse"),
             new(cap, "ApplicationDescription", "A private, low-memory browser with workspaces."),
             new($@"{cap}\URLAssociations", "http", UrlProgId),
             new($@"{cap}\URLAssociations", "https", UrlProgId),
-            new($@"{cap}\FileAssociations", ".htm", HtmlProgId),
-            new($@"{cap}\FileAssociations", ".html", HtmlProgId),
             new("RegisteredApplications", AppKey, $@"Software\{cap}"),
         ];
     }

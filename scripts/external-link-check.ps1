@@ -57,6 +57,28 @@ else {
     Check 'an address that is not http or https is not opened' ($cx -and $addr2 -match 'jev-external-link') "now: $addr2"
     Check 'the first instance closes normally' (Close-App $a)
 
+    # A copy that starts while some other process holds this data folder must refuse to open it (the lock does not depend on the app-instance service).
+    $lockFile = Join-Path $data 'instance.lock'
+    $held = $null
+    try {
+        $held = [IO.File]::Open($lockFile, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+        $e = Start-App $data
+        $AE = [System.Windows.Automation.AutomationElement]
+        $dlg = Window $e 20
+        $texts = @(); $okBtn = $null
+        if ($dlg) {
+            $texts = @($dlg.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name })
+            $okBtn = $dlg.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)))
+        }
+        Check 'the refused copy tells the person why (a message, not a silent exit)' (($texts -join ' ') -match 'already using this data folder') ($texts -join ' | ')
+        if ($dlg) { try { $dlg.SetFocus() } catch { }; Add-Type -AssemblyName System.Windows.Forms; Start-Sleep -Milliseconds 500; [System.Windows.Forms.SendKeys]::SendWait('{ENTER}') }   # a native message box exposes no invokable button
+        $ex = $e.WaitForExit(30000)
+        Check 'a copy started while the data folder is held by another process refuses to open it' ($ex -and $e.ExitCode -eq 1) "exited=$ex code=$(if ($ex) { $e.ExitCode })"
+        if (-not $ex -and (Test-Same $e.Id)) { Stop-Process -Id $e.Id -Force }
+    } catch { Check 'a copy started while the data folder is held by another process refuses to open it' $false $_.Exception.Message }
+    finally { if ($held) { $held.Dispose() } }
+    Start-Sleep -Seconds 1
+
     $d = Start-App $data @('https://example.org/jev-cold-start')
     $wd = Window $d
     $addr3 = $null; for ($i = 0; $i -lt 60 -and $addr3 -notmatch 'jev-cold-start'; $i++) { Start-Sleep -Milliseconds 500; $addr3 = AddressText $wd }
