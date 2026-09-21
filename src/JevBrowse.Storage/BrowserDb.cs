@@ -9,7 +9,7 @@ namespace JevBrowse.Storage;
 /// </summary>
 public sealed class BrowserDb : IDisposable
 {
-    public const int LatestVersion = 9;
+    public const int LatestVersion = 10;
 
     private static readonly (int Version, string Sql)[] Steps =
     [
@@ -136,19 +136,28 @@ public sealed class BrowserDb : IDisposable
             ALTER TABLE tabs ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
             CREATE INDEX tabs_pinned ON tabs(workspace_id, pinned DESC, ordinal);
             """),
+        // Per-site decisions were keyed by the last two hostname labels, so one.co.uk and two.co.uk (or two github.io users) shared a key and marking one
+        // Public loosened the other. New decisions are keyed by the exact host (exact_host = 1). Rows that already exist keep exact_host = 0: they are
+        // honoured only where they can be honoured safely (see SiteSettingsRepository.DataClassOverrideForHost).
+        (10, """
+            ALTER TABLE site_settings ADD COLUMN exact_host INTEGER NOT NULL DEFAULT 0;
+            """),
     ];
 
     /// <param name="targetVersion">Migrate only up to this version (used by recovery tests; production uses the latest).</param>
     /// <param name="beforeCommit">Test seam: called with the step's version after the step's SQL ran and BEFORE its transaction commits, so a crash test can
     /// kill the process at the one moment a migration is half-done. Null in production.</param>
-    public BrowserDb(string path, int? targetVersion = null, Action<int>? beforeCommit = null)
+    public BrowserDb(string path, int? targetVersion = null, Action<int>? beforeCommit = null, int busyTimeoutSeconds = 30)
     {
         _beforeCommit = beforeCommit;
         if (path != ":memory:") Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        Connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Cache = SqliteCacheMode.Shared }.ToString());
+        Connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Cache = SqliteCacheMode.Shared, DefaultTimeout = busyTimeoutSeconds }.ToString());
         try
         {
             Connection.Open();
+            // Read the version BEFORE changing anything about the file: a database written by a newer build may use tables, meanings or invariants this build
+            // does not know, so this build must neither write to it nor quietly downgrade it. The person is told to update; the file is left exactly as it was.
+            if (targetVersion is null && UserVersion > LatestVersion) throw new UnsupportedDatabaseVersionException(UserVersion, LatestVersion);
             Exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;");
             Migrate(targetVersion ?? LatestVersion);
         }
@@ -167,10 +176,10 @@ public sealed class BrowserDb : IDisposable
     /// build) is thrown as before, because moving a healthy file aside would lose the person's data for no reason.
     /// </summary>
     /// <param name="quarantinedTo">Where the damaged file went, or null when nothing was wrong.</param>
-    public static BrowserDb OpenOrRecover(string path, out string? quarantinedTo, Func<DateTimeOffset>? clock = null)
+    public static BrowserDb OpenOrRecover(string path, out string? quarantinedTo, Func<DateTimeOffset>? clock = null, int busyTimeoutSeconds = 30)
     {
         quarantinedTo = null;
-        try { return OpenChecked(path); }
+        try { return OpenChecked(path, busyTimeoutSeconds); }
         catch (SqliteException ex) when (IsDamage(ex))
         {
             SqliteConnection.ClearAllPools();   // release every handle on the damaged file so it can be renamed
@@ -181,7 +190,7 @@ public sealed class BrowserDb : IDisposable
             foreach (var suffix in new[] { "-wal", "-shm" })
                 if (File.Exists(path + suffix)) File.Move(path + suffix, target + suffix);
             quarantinedTo = target;
-            return OpenChecked(path);
+            return OpenChecked(path, busyTimeoutSeconds);
         }
     }
 
@@ -190,9 +199,9 @@ public sealed class BrowserDb : IDisposable
 
     private const long FullCheckLimitBytes = 256L * 1024 * 1024;
 
-    private static BrowserDb OpenChecked(string path)
+    private static BrowserDb OpenChecked(string path, int busyTimeoutSeconds)
     {
-        var db = new BrowserDb(path);
+        var db = new BrowserDb(path, busyTimeoutSeconds: busyTimeoutSeconds);
         try
         {
             // The core tables are small and always read at start; a full page-level check is affordable for any file up to the limit (about a second at most).
@@ -250,4 +259,14 @@ public sealed class BrowserDb : IDisposable
     }
 
     public void Dispose() => Connection.Dispose();
+}
+
+/// <summary>
+/// The database was written by a NEWER build of JevBrowse. Not damage: it is never moved aside or modified. Update JevBrowse, or use the newer build.
+/// </summary>
+public sealed class UnsupportedDatabaseVersionException(int found, int supported)
+    : Exception($"This data was saved by a newer version of JevBrowse (database version {found}; this build understands up to {supported}). Nothing was changed. Please update JevBrowse.")
+{
+    public int Found { get; } = found;
+    public int Supported { get; } = supported;
 }

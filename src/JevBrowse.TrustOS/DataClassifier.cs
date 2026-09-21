@@ -26,7 +26,7 @@ public sealed class DataClassifier
 
         // An explicit user decision about a site outranks heuristics (their site, their call), but a page that is
         // actually asking for a password or card number is SECRET whatever the user said.
-        if (_userOverride(Site(url.Host)) is { } over)
+        if (_userOverride(HostKey(url.Host)) is { } over)
             return signals.HasFlag(PageSignals.PasswordField) || signals.HasFlag(PageSignals.PaymentField) ? DataClass.Secret : over;
 
         if (known > DataClass.Public) return known;     // something concrete points at sensitivity
@@ -69,11 +69,12 @@ public sealed class DataClassifier
     private static readonly string[] KnownPublicSuffixes =
         ["wikipedia.org", "wikimedia.org", "wiktionary.org", "learn.microsoft.com", "developer.mozilla.org", "docs.python.org", "w3.org", "rfc-editor.org", "gnu.org", "archive.org"];
 
-    public static string Site(string host)
-    {
-        var labels = host.ToLowerInvariant().Split('.');
-        return labels.Length <= 2 ? host.ToLowerInvariant() : string.Join('.', labels[^2..]);
-    }
+    /// <summary>
+    /// The key a per-site decision is stored under: the EXACT host (lower-cased, without a trailing dot). It used to be the last two labels, which made
+    /// one.co.uk and two.co.uk both "co.uk" and every github.io page one site, so marking one Public loosened unrelated sites. Without a public-suffix
+    /// list the only safe key is the host the person was actually looking at.
+    /// </summary>
+    public static string HostKey(string host) => host.Trim().TrimEnd('.').ToLowerInvariant();
 
     private static readonly string[] SensitiveHostWords = ["bank", "banking", "hdfc", "icici", "sbi.", "axisbank", "kotak", "paypal", "payroll", "health", "medical", "patient", "insurance", "upstox", "zerodha", "dhan.", "kite.", "tax", "irs.gov", "incometax"];
     private static readonly string[] SensitivePathWords = ["/checkout", "/payment", "/billing", "/wallet", "/transfer", "/statement"];

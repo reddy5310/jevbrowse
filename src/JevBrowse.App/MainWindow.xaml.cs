@@ -51,6 +51,8 @@ public sealed partial class MainWindow : Window
     private DevSpaceAdapter? _dev;
     private AgentGateway.AgentGateway? _agents;
     private LocalAgentHost? _agentHost;
+
+    private void OnAgentHostFault(Exception ex) => DispatcherQueue.TryEnqueue(() => StatusText.Text = "Agent housekeeping failed: " + ex.Message);
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _tick;
     private ResourcePlan? _lastPlan;
     private bool _syncingSelection;
@@ -72,6 +74,13 @@ public sealed partial class MainWindow : Window
             _shutdownInProgress = true;
             _tick?.Stop();
             Root.IsHitTestVisible = false;
+            // Agent sessions end FIRST and asynchronously: their pages must be released on this thread, before the window and the engine go away.
+            try
+            {
+                if (_agentHost is not null) await _agentHost.StopEndpointAsync().WaitAsync(TimeSpan.FromSeconds(6));
+                await EndFinishedAgentProfilesAsync();
+            }
+            catch (Exception) { /* the renderers are closed below regardless; nothing an agent holds survives the process */ }
             try { await _kernel.CheckpointAllAsync(new CancellationTokenSource(TimeSpan.FromSeconds(4)).Token); }
             catch (Exception) { }
             await _productModeGate.WaitAsync();
@@ -88,12 +97,61 @@ public sealed partial class MainWindow : Window
             Close();
         };
         Closed += (_, _) => { _agentHost?.Dispose(); _leases?.Shutdown(); _db?.Dispose(); };
-        _ = InitAsync();
+        // Nothing can be clicked until the kernel exists: New tab, the address bar and every accelerator dereference it. Startup problems are shown, not lost.
+        Root.IsHitTestVisible = false;
+        Root.PreviewKeyDown += (_, e) => { if (!_ready) e.Handled = true; };   // and no shortcut either, until the kernel exists
+        StatusText.Text = "Starting JevBrowse…";
+        _ = InitSafeAsync();
+    }
+
+    private async Task InitSafeAsync()
+    {
+        // This starts inside the constructor. Let the constructor finish and the window come up first: a failure that happened before that could not show its dialog,
+        // and quitting from inside the constructor tears the window down before it is activated.
+        await Task.Yield();
+        try { await InitAsync(); }
+        catch (UnsupportedDatabaseVersionException ex) { await FatalStartupAsync("Update JevBrowse to open this data", ex.Message, ex); }
+        catch (Exception ex) { await FatalStartupAsync("JevBrowse could not finish starting", "Something went wrong while starting up. Your saved data was not changed by this message.\n\n" + ex.Message, ex); }
+    }
+
+    private async Task FatalStartupAsync(string title, string message, Exception ex)
+    {
+        try { File.WriteAllText(Path.Combine(DataDir, "startup-error.txt"), $"{DateTimeOffset.UtcNow:o}\n{ex}"); } catch (Exception) { }
+        StatusText.Text = title;
+        try
+        {
+            for (var i = 0; i < 100 && Content.XamlRoot is null; i++) await Task.Delay(50);   // a dialog needs a window that is on screen
+            Root.IsHitTestVisible = true;   // a dialog must be answerable
+            await new ContentDialog { Title = title, Content = new TextBlock { Text = message + "\n\nDetails were saved next to your data in startup-error.txt.", TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true }, CloseButtonText = "Quit", DefaultButton = ContentDialogButton.Close, XamlRoot = Content.XamlRoot }.ShowSerializedAsync();
+        }
+        catch (Exception) { }
+        _shutdownCheckpointDone = true;
+        try { _leases?.Shutdown(); } catch (Exception) { }
+        Application.Current.Exit();
     }
 
     private bool _shutdownCheckpointDone;
     private int _restoreEpoch;
     private bool _shutdownInProgress;
+    private volatile bool _ready;
+    private readonly HashSet<string> _agentProfilesEnded = [];
+
+    /// <summary>
+    /// A finished agent session (stopped, expired, or refused) has nothing left to do, so its throwaway profile (cookies, storage of the pages it visited) is
+    /// deleted as soon as its engine processes are gone, not left until the next start.
+    /// </summary>
+    private async Task EndFinishedAgentProfilesAsync()
+    {
+        try
+        {
+            foreach (var s in (_agentHost?.Sessions ?? []).Where(x => x.CleanedUp).ToList())
+            {
+                if (!_agentProfilesEnded.Add(s.Id)) continue;
+                await _leases!.EndEphemeralSessionAsync(IdentityContainer.Disposable, s.WorkspaceId);   // whatever cannot be deleted yet is swept at the next start
+            }
+        }
+        catch (Exception) { /* best effort: the start-up sweep is the backstop */ }
+    }
     private string? _startupNotice;   // something the person should know about how this start went (for example a damaged database that was set aside)
 
     // ---- First run / help ----
@@ -167,8 +225,14 @@ public sealed partial class MainWindow : Window
             StatusText.Text = $"{t?.Url.Host ?? "site"} showed an anti-adblock wall. Shield panel → 'Disable for site' if you need the page; Shield stays honest about what it can and cannot do.";
         });
         _leases.OnCoreDisposed = id => { _shield.Detach(id); _dev.Detach(id); };
+        _leases.OnPopupRequested = OnPopupRequested;
         if (!_filters.HasActiveLists && Environment.GetEnvironmentVariable("JEVBROWSE_NO_FILTER_UPDATE") is null)
-            await UpdateFilterListsAsync();
+        {
+            // First run with no lists: do not hold the whole window hostage to the network. Wait a few seconds, then start; the download finishes and
+            // compiles in the background (its own failure is reported in the status line, never thrown).
+            var update = UpdateFilterListsAsync().ContinueWith(t => { if (t.IsFaulted) DispatcherQueue.TryEnqueue(() => StatusText.Text = "Shield: could not download filter lists (" + t.Exception!.GetBaseException().Message + ")"); });
+            await Task.WhenAny(update, Task.Delay(TimeSpan.FromSeconds(5)));
+        }
         else
             CompileFilters();
 
@@ -180,7 +244,7 @@ public sealed partial class MainWindow : Window
             d => _decisions.Append(d.At, string.IsNullOrEmpty(d.Task) ? "?" : d.Task + (d.Automatic ? " (automatic)" : " (explicit)"), d.Source.ToString(), d.Rule, d.Model, string.IsNullOrEmpty(d.DataClassName) ? "?" : d.DataClassName, d.Redacted, d.RedactionCount, d.InputChars, d.Output, d.Version),
             decisions: _jev);
 
-        var classifier = new DataClassifier(site => _siteSettings.DataClassOverride(site) is { } c ? (DataClass)c : null);
+        var classifier = new DataClassifier(host => _siteSettings.DataClassOverrideForHost(host) is { } c ? (DataClass)c : null);
         _kernel = new TabKernel(_leases, new TabRepository(_db), new CheckpointRepository(_db), Path.Combine(DataDir, "thumbnails"), null, new WorkspaceRepository(_db), new DefaultTrustPolicy(), classifier);
         _kernel.Changed += OnKernelChanged;
         _kernel.Load();
@@ -193,7 +257,7 @@ public sealed partial class MainWindow : Window
         AgentGateway.AgentGateway.RemoveLegacyScreenshotFiles(Path.Combine(DataDir, "agents", "screenshots"));   // pictures are memory-only now
         _agents = new AgentGateway.AgentGateway(_kernel, _leases, Path.Combine(DataDir, "agents", "screenshots"), ConfirmAgentActionAsync,
             (s, e) => File.AppendAllText(Path.Combine(auditDir, s.Id + ".jsonl"), JsonSerializer.Serialize(new { e.At, s.Manifest.Agent, e.Action, e.Target, e.Allowed, e.Reason }) + "\n"));
-        _agents.SessionsChanged += () => DispatcherQueue.TryEnqueue(UpdateAgentIndicator);
+        _agents.SessionsChanged += () => DispatcherQueue.TryEnqueue(() => { UpdateAgentIndicator(); _ = EndFinishedAgentProfilesAsync(); });
 
         // Browser Memory: indexes only what Trust OS allows (PUBLIC by default); 200 MB budget.
         _memory = new BrowserMemory(_db);
@@ -315,6 +379,7 @@ public sealed partial class MainWindow : Window
                         // A real endpoint and a real session, so the agent panel can be looked at with something in it.
                         var ceiling = new AgentCeiling { Limits = new AgentManifest { Agent = "ceiling", AllowDomains = ["example.com"], Actions = [AgentAction.Navigate, AgentAction.Read], SessionMinutes = 30, MaxLivePages = 2, MaxActions = 100 } };
                         _agentHost = new LocalAgentHost(_agents, ceiling);
+                        _agentHost.BackgroundFault += OnAgentHostFault;
                         _agentHost.Start();
                         var (demo, _) = await _agentHost.GrantAsync(new AgentManifest { Agent = "Claude Code", AllowDomains = ["example.com"], Actions = [AgentAction.Navigate, AgentAction.Read], SessionMinutes = 30, MaxLivePages = 2 });
                         await _agents.ExecuteAsync(demo, new AgentRequest(AgentAction.Navigate, "https://example.com/"), default);
@@ -363,7 +428,7 @@ public sealed partial class MainWindow : Window
             });
         }
 
-        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--private-session-check") || args.Contains("--agent-check") || args.Contains("--agent-window-check") || args.Contains("--agent-screenshot-stage-check") || args.Contains("--agent-frame-secret-check") || args.Contains("--agent-show-during-capture-check") || args.Contains("--agent-indicator-check") || args.Contains("--idle-invariants-check") || args.Contains("--media-check") || args.Contains("--site-sweep") || args.Any(a => a.StartsWith("--join=", StringComparison.Ordinal)))
+        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--private-session-check") || args.Contains("--agent-check") || args.Contains("--agent-window-check") || args.Contains("--agent-screenshot-stage-check") || args.Contains("--agent-frame-secret-check") || args.Contains("--agent-show-during-capture-check") || args.Contains("--agent-indicator-check") || args.Contains("--idle-invariants-check") || args.Contains("--nav-check") || args.Contains("--media-check") || args.Contains("--site-sweep") || args.Any(a => a.StartsWith("--join=", StringComparison.Ordinal)))
         {
             Directory.CreateDirectory(Path.Combine(DataDir, "benchmarks"));
             try
@@ -379,6 +444,7 @@ public sealed partial class MainWindow : Window
                 else if (args.Contains("--agent-show-during-capture-check")) await RunAgentShowDuringCaptureCheckAsync();
                 else if (args.Contains("--agent-indicator-check")) await RunAgentIndicatorCheckAsync();
                 else if (args.Contains("--idle-invariants-check")) await RunIdleInvariantsCheckAsync();
+                else if (args.Contains("--nav-check")) await RunNavCheckAsync();
                 else if (args.Contains("--privacy-check")) await RunPrivacyCheckAsync();
                 else if (args.Contains("--memory-lab")) await RunMemoryLabAsync();
                 else if (args.Contains("--restore-bench")) await RunRestoreBenchAsync();
@@ -402,6 +468,9 @@ public sealed partial class MainWindow : Window
         if (!_kernel.TabsIn(_kernel.ActiveWorkspace).Any())
             _kernel.Open(new Uri(!string.IsNullOrWhiteSpace(startUrl) && Uri.IsWellFormedUriString(startUrl, UriKind.Absolute) ? startUrl : firstRun ? WelcomePage.Url : "https://example.com"));
         await _kernel.ActivateAsync(_kernel.TabsIn(_kernel.ActiveWorkspace).First().Id);
+        _ready = true;
+        Root.IsHitTestVisible = true;
+        StatusText.Text = "";
         if (_startupNotice is not null)
         {
             // Data was set aside: that is worth an explicit acknowledgement rather than a status line that the next page load overwrites.
@@ -413,6 +482,40 @@ public sealed partial class MainWindow : Window
     }
 
     // ---- kernel → UI ----
+
+    private readonly Dictionary<ResourceId, List<DateTimeOffset>> _engineRecoveries = [];
+
+    /// <summary>
+    /// A page's engine died and the kernel released it. If it was the page in front, bring it back on a fresh renderer (at most twice a minute per tab, so a
+    /// page that crashes the engine every time is not reloaded in a loop); otherwise it stays asleep and wakes when it is next opened.
+    /// </summary>
+    private void OnEngineFailed(KernelEvent e)
+    {
+        var host = _kernel?.Tabs.FirstOrDefault(t => t.Id == e.Id)?.Url.Host ?? "this page";
+        if (!e.Reason.Contains("was in front", StringComparison.Ordinal))
+        {
+            StatusText.Text = $"A background page ({host}) crashed and was put to sleep. It will reload when you open it.";
+            return;
+        }
+        var now = DateTimeOffset.UtcNow;
+        var recent = _engineRecoveries.TryGetValue(e.Id, out var l) ? l : _engineRecoveries[e.Id] = [];
+        recent.RemoveAll(t => now - t > TimeSpan.FromMinutes(1));
+        if (recent.Count >= 2)
+        {
+            StatusText.Text = $"{host} keeps crashing the browser engine, so it was not reloaded again. Select the tab to try once more.";
+            return;
+        }
+        recent.Add(now);
+        StatusText.Text = $"{host} crashed. Reloading it…";
+        _ = ReactivateAfterCrashAsync(e.Id);
+    }
+
+    private async Task ReactivateAfterCrashAsync(ResourceId id)
+    {
+        try { if (_kernel is not null && _kernel.Tabs.Any(t => t.Id == id)) await _kernel.ActivateAsync(id); }
+        catch (Exception ex) { StatusText.Text = "Could not reload the crashed page: " + ex.Message; }
+    }
+
 
     private void OnKernelChanged(KernelEvent e)
     {
@@ -426,7 +529,13 @@ public sealed partial class MainWindow : Window
             _syncingSelection = true;
             TabList.SelectedItem = Items.FirstOrDefault(i => i.Id == e.Id);
             _syncingSelection = false;
-            AddressBox.Text = _kernel!.Active?.Url.ToString() ?? "";
+            SetAddress(_kernel!.Active?.Url.ToString() ?? "");
+        }
+        else if (e.Kind == "navigated" && _kernel?.Active?.Id == e.Id && !IsEditingAddress)
+        {
+            // A followed link, a redirect, script navigation, Back and Forward all arrive here. The tab in FRONT shows where it really is, unless the person is
+            // in the middle of typing (their text is never overwritten). Another tab's navigation, an agent's page in the background, never touches the bar.
+            SetAddress(_kernel.Active.Url.ToString());
         }
         if (e.Kind is "activated" or "navigated" or "signals") { UpdateClassBadge(); UpdateEnvChrome(); }
         if (e.Kind is "activated" or "navigated") RefreshPanel();
@@ -434,6 +543,7 @@ public sealed partial class MainWindow : Window
         // The restore panel, its timer and its buttons belong to the page in front of the person. Work done in the background (an
         // agent's page coming live) raises the same kernel events but must not touch any of it: it once replaced the tracked restore
         // with its own, so the person's real restore finished unnoticed and the panel stayed up.
+        if (e.Kind == "engine-failed") OnEngineFailed(e);
         if (e.Kind == "restoring" && !e.Background) ShowRestoring(e.Id, e.Reason.StartsWith("with"));
         if ((e.Kind is "restored" or "loaded") && !e.Background) FinishRestore(e.Id);
         UpdateIdlePanel();
@@ -693,7 +803,7 @@ public sealed partial class MainWindow : Window
     private async void OnRestoreOpenAddress(object s, RoutedEventArgs e)
     {
         if (_restoringId is not { } id || _kernel?.Tabs.FirstOrDefault(t => t.Id == id) is not { } tab) return;
-        AddressBox.Text = tab.Url.ToString();
+        SetAddress(tab.Url.ToString());
         await _kernel.VirtualizeAsync(id, Cause.User);
         ShowRestoring(id, false);
         await _kernel.ActivateAsync(id);
@@ -767,13 +877,14 @@ public sealed partial class MainWindow : Window
     private async void OnClassBadgeTapped(object s, RoutedEventArgs e)
     {
         if (_kernel?.Active is not { } t) return;
-        var site = DataClassifier.Site(t.Url.Host);
+        var site = DataClassifier.HostKey(t.Url.Host);
         var current = _kernel.ClassOf(t);
         // Bound to the enum values, not to positions: adding a class must not silently re-point saved overrides.
         var choices = new DataClass?[] { null, DataClass.Public, DataClass.Authenticated, DataClass.Sensitive };
         var box = new ComboBox { HorizontalAlignment = HorizontalAlignment.Stretch };
         foreach (var c in choices) box.Items.Add(c is null ? "Let JevBrowse decide" : ClassLabel(c.Value));
-        var over = _siteSettings!.DataClassOverride(site);
+        var over = _siteSettings!.ExactDataClassOverride(site);
+        var olderApplies = over is null && _siteSettings.DataClassOverrideForHost(site) is not null;
         box.SelectedIndex = Math.Max(0, Array.FindIndex(choices, c => (int?)c == over));
         var dlg = new ContentDialog
         {
@@ -781,11 +892,17 @@ public sealed partial class MainWindow : Window
             Content = new StackPanel { Spacing = Tokens.Space(8), Children = {
                 new TextBlock { Text = $"Now: {ClassLabel(current)}. {ClassExplanation(current)}", TextWrapping = TextWrapping.Wrap },
                 box,
+                new TextBlock { Text = olderApplies ? "An older decision that covered several sites is still applied here because it is stricter. Choose below to decide for this address only." : "", TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = 0.7, Visibility = olderApplies ? Visibility.Visible : Visibility.Collapsed },
                 new TextBlock { Text = "A page asking for a password or card number is always treated as Secret, whatever you choose here.", TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = 0.7 } } },
             PrimaryButtonText = "Save", CloseButtonText = "Cancel", XamlRoot = Content.XamlRoot,
         };
         if (await dlg.ShowSerializedAsync() != ContentDialogResult.Primary) return;
-        _siteSettings.SetDataClassOverride(site, (int?)choices[Math.Max(0, box.SelectedIndex)]);
+        var chosen = choices[Math.Max(0, box.SelectedIndex)];
+        _siteSettings.SetDataClassOverrideForHost(site, (int?)chosen);
+        // Apply it NOW, not at the next qualifying event: stricter means the previews, saved positions and indexed text this site no longer qualifies for
+        // are deleted immediately, for every tab on it and for pages of it that were indexed earlier.
+        _kernel.ReapplyPolicy();
+        if (chosen != DataClass.Public) _memory?.ForgetSite(site);
         UpdateClassBadge();
     }
 
@@ -985,12 +1102,14 @@ public sealed partial class MainWindow : Window
             };
             if (ceiling.Limits.AllowDomains.Count == 0 || ceiling.Limits.Actions.Count == 0) { StatusText.Text = "agent endpoint not started: approve at least one domain and one action"; return; }
             _agentHost = new LocalAgentHost(_agents, ceiling, ApproveAgentSessionAsync, approveScreenshots: ApproveScreenshotsAsync);
+            _agentHost.BackgroundFault += OnAgentHostFault;
             _agentHost.Start();
             StatusText.Text = $"agent endpoint listening on 127.0.0.1:{_agentHost.Port} (token in Agents panel); grant limited to {string.Join(", ", ceiling.Limits.AllowDomains)}";
         }
         else if (!toggle.IsOn && running)
         {
-            _agentHost!.Dispose(); _agentHost = null;
+            await _agentHost!.StopEndpointAsync();   // revokes what it granted; awaited, so the window never blocks on its own cleanup
+            _agentHost.Dispose(); _agentHost = null;
             UpdateAgentIndicator();
             StatusText.Text = "agent endpoint stopped";
         }
@@ -1701,6 +1820,7 @@ public sealed partial class MainWindow : Window
         var hiddenAtStart = AgentGroup.Visibility == Visibility.Collapsed;
         var ceiling = new AgentCeiling { Limits = new AgentManifest { Agent = "ceiling", AllowDomains = ["example.org"], Actions = [AgentAction.Navigate, AgentAction.Read], SessionMinutes = 10, MaxLivePages = 2, MaxActions = 100 } };
         _agentHost = new LocalAgentHost(_agents!, ceiling);
+        _agentHost.BackgroundFault += OnAgentHostFault;
         var (session, _) = await _agentHost.GrantAsync(new AgentManifest { Agent = "indicator-probe", AllowDomains = ["example.org"], Actions = [AgentAction.Navigate, AgentAction.Read], SessionMinutes = 10, MaxLivePages = 2 });
         await _agents!.ExecuteAsync(session, new AgentRequest(AgentAction.Navigate, "https://example.org/"), default);
         await Task.Delay(1500);
@@ -2805,7 +2925,8 @@ public sealed partial class MainWindow : Window
 
     private async void OnNewTab(object s, RoutedEventArgs e)
     {
-        var t = _kernel!.Open(new Uri("https://duckduckgo.com"));
+        if (_kernel is null) return;
+        var t = _kernel.Open(new Uri("https://duckduckgo.com"));
         await _kernel.ActivateAsync(t.Id);
         AddressBox.Focus(FocusState.Programmatic);
         AddressBox.SelectAll();
@@ -2813,10 +2934,8 @@ public sealed partial class MainWindow : Window
 
     private async void OnCloseTab(object s, RoutedEventArgs e)
     {
-        if ((s as Button)?.Tag is not ResourceId id) return;
-        var wasActive = _kernel!.Active?.Id == id;
-        await _kernel.CloseAsync(id);
-        if (wasActive && _kernel.Tabs.Count > 0) await _kernel.ActivateAsync(_kernel.Tabs[^1].Id);
+        if ((s as Button)?.Tag is not ResourceId id || _kernel is null) return;
+        await _kernel.CloseAndSelectNextAsync(id);   // the same rule as Ctrl+W: stay inside this workspace
     }
 
     /// <summary>Protection flags in the words a person would use, for the cases that are not live media.</summary>
@@ -2890,16 +3009,85 @@ public sealed partial class MainWindow : Window
         if (_kernel?.Active is { } t && _leases!.TryGet(t.Id, out var l)) a((WebView2Lease)l);
     }
 
+    // ---- address bar ----
+
+    private bool _addressEditing;
+    private string _lastPopupDiag = "";
+    private bool _settingAddress;
+
+    /// <summary>Shows an address the app decided on (not the person's typing) and ends any editing.</summary>
+    private string _addressSetByApp = "";
+
+    private void SetAddress(string text)
+    {
+        _settingAddress = true;
+        try { _addressSetByApp = text; AddressBox.Text = text; }
+        finally { _settingAddress = false; }
+        _addressEditing = false;
+    }
+
+    // WinUI raises TextChanged AFTER the assignment returns, so a flag around the assignment is not enough: what counts as the person's typing is text that
+    // is not the one the app put there.
+    private void OnAddressTextChanged(object s, TextChangedEventArgs e) { if (!_settingAddress && AddressBox.Text != _addressSetByApp) _addressEditing = true; }
+
+    /// <summary>True when the box holds something the app did not put there, that is, the person's own typing. Judged from the text itself at the moment it matters,
+    /// not from an event that might not have been raised yet.</summary>
+    private bool IsEditingAddress => _addressEditing || AddressBox.Text != _addressSetByApp;
+
+    /// <summary>Leaving the box without pressing Enter abandons the edit: show where the page in front really is.</summary>
+    private void OnAddressLostFocus(object s, RoutedEventArgs e)
+    {
+        if (IsEditingAddress && _kernel?.Active is { } t) SetAddress(t.Url.ToString());
+    }
+
     private async void OnAddressKeyDown(object s, KeyRoutedEventArgs e)
     {
-        if (e.Key != VirtualKey.Enter || _kernel is null) return;
-        var t = AddressBox.Text.Trim();
-        if (!t.Contains("://")) t = t.Contains('.') && !t.Contains(' ')
-            ? "https://" + t
-            : "https://duckduckgo.com/?q=" + Uri.EscapeDataString(t);
-        var url = new Uri(t);
-        if (_kernel.Active is null) { var nt = _kernel.Open(url); await _kernel.ActivateAsync(nt.Id); return; }
-        WithActiveLease(l => l.Navigate(url));
+        try
+        {
+            if (_kernel is null) return;
+            if (e.Key == VirtualKey.Escape)
+            {
+                if (_kernel.Active is { } cur) SetAddress(cur.Url.ToString());
+                return;
+            }
+            if (e.Key != VirtualKey.Enter) return;
+            var r = AddressInput.Resolve(AddressBox.Text);
+            if (r.Kind == AddressKind.Invalid) { if (!string.IsNullOrEmpty(r.Message)) StatusText.Text = r.Message; return; }
+            var url = r.Url!;
+            _addressEditing = false;
+            if (_kernel.Active is null) { var nt = _kernel.Open(url); await _kernel.ActivateAsync(nt.Id); return; }
+            WithActiveLease(l => l.Navigate(url));
+        }
+        catch (Exception ex) { StatusText.Text = "Could not open that address: " + ex.Message; }   // an async void handler must never let one escape
+    }
+
+    // ---- pop-ups ----
+
+    /// <summary>
+    /// A page asked for a new window. The engine never gets to make one: an allowed request becomes an ordinary tab in the SAME workspace as its opener
+    /// (so a Private page's window is Private), created and admitted like any other; everything else is refused and the person is told once.
+    /// Note the trade-off: the new tab has no link back to its opener, so sign-in pop-ups that report back to the opening page do not work.
+    /// </summary>
+    private void OnPopupRequested(ResourceId opener, Uri? target, bool userInitiated, bool agentPage)
+    {
+        DispatcherQueue.TryEnqueue(async () =>
+        {
+            try
+            {
+                if (_kernel is null) return;
+                var src = _kernel.Tabs.FirstOrDefault(t => t.Id == opener);
+                var decision = PopupPolicy.Decide(userInitiated, agentPage, src is not null && _kernel.Active?.Id == opener, target?.Scheme);
+                _lastPopupDiag = $"userInitiated={userInitiated} agent={agentPage} inFront={src is not null && _kernel.Active?.Id == opener} -> {(decision.Allow ? "allow" : "block")}";
+                if (!decision.Allow || src is null || target is null)
+                {
+                    StatusText.Text = $"Blocked a pop-up from {src?.Url.Host ?? "a page"}: {decision.Reason}.";
+                    return;
+                }
+                var t = _kernel.OpenIn(src.WorkspaceId, target);
+                await _kernel.ActivateAsync(t.Id);
+            }
+            catch (Exception ex) { StatusText.Text = "Could not open the new window: " + ex.Message; }
+        });
     }
 
     // ---- Memory Lab (Phase 0 benchmark, kept as CI hook) ----

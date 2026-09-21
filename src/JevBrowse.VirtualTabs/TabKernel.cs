@@ -134,8 +134,20 @@ public sealed class TabKernel
         if (_leases.TryGet(t.Id, out var lease)) lease.AllowThumbnails = thumbs;
         if (!thumbs) { DeleteThumb(ThumbPath(t.Id)); DeleteThumb(ThumbPath(t.Id) + ".tmp"); }
         if (!May(t, DataOperation.PersistCheckpoint).Allowed) _checkpoints.Delete(t.Id);
+        // A checkpoint that survives (scroll position only) must not keep pointing at a preview that was just deleted.
+        else if (!thumbs && _checkpoints.Get(t.Id) is { ThumbnailPath: not null } kept) _checkpoints.Upsert(kept with { ThumbnailPath = null });
         if (!May(t, DataOperation.PersistTabRow).Allowed) _repo.Delete(t.Id);
         if (!May(t, DataOperation.IndexContent).Allowed) Changed?.Invoke(new("policy-tightened", t.Id, "index"));
+    }
+
+    /// <summary>
+    /// The person changed a site's class (or anything else the classifier reads): apply the CURRENT class to every tab now, so a stricter decision deletes
+    /// the thumbnails, checkpoints and indexed content it no longer allows immediately, not whenever the next qualifying event happens to occur.
+    /// </summary>
+    public void ReapplyPolicy()
+    {
+        foreach (var t in _tabs.ToList()) EnforcePolicy(t);
+        Changed?.Invoke(new("signals", Active?.Id ?? default, "policy-reapplied"));
     }
 
     private void Hide(VirtualTab t)
@@ -432,6 +444,11 @@ public sealed class TabKernel
             Changed?.Invoke(new("navigated", tab.Id, n.Title));
         };
         lease.DetectedProtectionChanged += f => { if (!IsCurrent()) return; tab.SetDetected(f); Changed?.Invoke(new("protection", tab.Id, f.ToString())); };
+        lease.EngineFailed += f =>
+        {
+            if (!IsCurrent()) return;
+            _ = RecoverFromEngineFailureAsync(id, f.Kind);   // observed inside: it never throws
+        };
         lease.PageSignalsChanged += s =>
         {
             if (!IsCurrent()) return;
@@ -453,6 +470,41 @@ public sealed class TabKernel
         };
         if (checkpoint is not null) lease.ApplyCheckpoint(checkpoint);
         return lease;
+    }
+
+    /// <summary>
+    /// The engine behind a live page died. Its lease still looks registered, so left alone the next activation would reuse a dead control. Release it, mark
+    /// the tab Virtual (a crash outranks protection: there is nothing left to protect), keep the last checkpoint, and tell listeners so they can bring the page
+    /// back on a fresh renderer. Nothing is captured: the page is gone.
+    /// </summary>
+    public Task RecoverFromEngineFailureAsync(ResourceId id, string reason) => SerializedAsync(async () =>
+    {
+        var tab = _tabs.FirstOrDefault(t => t.Id == id);
+        if (tab is null || !tab.State.HasLiveRenderer()) return;
+        var wasActive = Active?.Id == id;
+        tab.RestoreState(ResourceState.Virtual, _clock(), ProtectionFlags.None);
+        _signals.Remove(id);
+        try { Persist(tab); } catch (Exception) { /* the durable row still describes the last good state */ }
+        try { await _leases.ReleaseAsync(id, ReleaseDisposition.Dispose, default); } catch (Exception) { /* the manager forgets a lease whose control is dead */ }
+        if (wasActive) Active = null;
+        Changed?.Invoke(new("engine-failed", id, reason + (wasActive ? " (was in front)" : "")));
+    }, default);
+
+    /// <summary>
+    /// Closes a tab and, if it was the one in front, brings up the last tab of the SAME workspace. It never reaches into another workspace: closing a tab
+    /// must not surface a Private session, or an agent page, that the person was not looking at. If nothing is left in the workspace, nothing is activated.
+    /// </summary>
+    public async Task<VirtualTab?> CloseAndSelectNextAsync(ResourceId id, CancellationToken ct = default)
+    {
+        var tab = _tabs.FirstOrDefault(t => t.Id == id);
+        if (tab is null) return null;
+        var workspace = tab.WorkspaceId;
+        var wasActive = Active?.Id == id;
+        await CloseAsync(id, ct);
+        if (!wasActive) return null;
+        var next = TabsIn(workspace).LastOrDefault();
+        if (next is not null) await ActivateAsync(next.Id, ct);
+        return next;
     }
 
     public Task ActivateAsync(ResourceId id, CancellationToken ct = default) =>

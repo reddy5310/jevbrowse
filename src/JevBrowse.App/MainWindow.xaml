@@ -149,7 +149,7 @@
                                 AutomationProperties.Name="How this page is treated">
                             <TextBlock x:Name="ClassBadgeText" FontSize="10.5" FontWeight="SemiBold" Text="PERSONAL" Foreground="{ThemeResource JevBadgeTextBrush}"/>
                         </Button>
-                        <TextBox x:Name="AddressBox" Grid.Column="1" PlaceholderText="Search or enter address" KeyDown="OnAddressKeyDown" BorderThickness="0" Background="Transparent" FontSize="13.5"/>
+                        <TextBox x:Name="AddressBox" Grid.Column="1" PlaceholderText="Search or enter address" KeyDown="OnAddressKeyDown" TextChanged="OnAddressTextChanged" LostFocus="OnAddressLostFocus" BorderThickness="0" Background="Transparent" FontSize="13.5"/>
                     </Grid>
                 </Border>
                 <!-- The trust and tab controls travel as ONE group. Wide: right of the address bar. Narrow: a second row, so

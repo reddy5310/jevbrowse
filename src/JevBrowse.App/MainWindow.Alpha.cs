@@ -323,9 +323,7 @@ public sealed partial class MainWindow
         if (_kernel?.Active is not { } t) return;
         // Remember it for Ctrl+Shift+T, except where the identity promises no trace (Private/Disposable).
         if (!_kernel.ContainerOf(t).IsEphemeral() && t.Url.Scheme is "http" or "https") { _closedTabs.Push(t.Url); if (_closedTabs.Count > 20) { var keep = _closedTabs.Take(20).Reverse().ToList(); _closedTabs.Clear(); foreach (var u in keep) _closedTabs.Push(u); } }
-        await _kernel.CloseAsync(t.Id);
-        var next = _kernel.TabsIn(_kernel.ActiveWorkspace).LastOrDefault();
-        if (next is not null) await _kernel.ActivateAsync(next.Id);
+        await _kernel.CloseAndSelectNextAsync(t.Id);   // same workspace only: never surfaces a Private or agent page
     }
 
     private async void OnReopenClosedAccelerator(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs e)
@@ -471,6 +469,7 @@ public sealed partial class MainWindow
         {
             var ceiling = new AgentCeiling { Limits = new AgentManifest { Agent = "ceiling", AllowDomains = [.. manifest.AllowDomains], Actions = [.. manifest.Actions], SessionMinutes = minutes, MaxLivePages = manifest.MaxLivePages, MaxActions = manifest.MaxActions, DestructiveActions = "confirm", Container = IdentityContainer.Disposable } };
             _agentHost = new LocalAgentHost(_agents, ceiling, ApproveAgentSessionAsync);
+            _agentHost.BackgroundFault += OnAgentHostFault;
             _agentHost.Start();
         }
         var (s, _) = await _agentHost.GrantAsync(manifest);   // registered with the host, so the HTTP routes below can find it

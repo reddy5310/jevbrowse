@@ -62,12 +62,18 @@ public sealed class FakeLeaseManager : IRendererLeaseManager
         return l;
     }
 
-    public Task ReleaseAsync(ResourceId id, ReleaseDisposition d, CancellationToken ct)
+    /// <summary>Awaited inside every release, so a test can make it take real time and resume on whatever context it was called from.</summary>
+    public Func<Task>? ReleaseGate { get; set; }
+    /// <summary>Managed thread ids the release ran on (a real renderer must be released on the thread that owns it).</summary>
+    public List<int> ReleaseThreads { get; } = [];
+
+    public async Task ReleaseAsync(ResourceId id, ReleaseDisposition d, CancellationToken ct)
     {
+        ReleaseThreads.Add(Environment.CurrentManagedThreadId);
+        if (ReleaseGate is not null) await ReleaseGate();
         if (FailNextRelease) { FailNextRelease = false; throw new IOException("Simulated renderer release failure"); }
         if (d == ReleaseDisposition.Dispose) { _live.Remove(id); Disposes++; }
         else { _live[id].IsSuspended = true; Suspends++; }
-        return Task.CompletedTask;
     }
 
     public FakeLease this[ResourceId id] => _live[id];
@@ -165,7 +171,13 @@ public sealed class FakeLease(ResourceId id, Uri url, FakeLeaseManager owner) : 
     public PageMap? Map { get; set; }
     public List<string> Clicked { get; } = [];
     public List<(string Selector, string Text)> Typed { get; } = [];
-    public Task<PageMap?> GetPageMapAsync(CancellationToken ct) => Task.FromResult<PageMap?>(Map ?? new PageMap(Url, "t", [], [], [], ""));
+    /// <summary>Lets a test hold the page-map read open while it changes the world.</summary>
+    public Func<Task>? MapGate { get; set; }
+    public async Task<PageMap?> GetPageMapAsync(CancellationToken ct)
+    {
+        if (MapGate is not null) await MapGate();
+        return Map ?? new PageMap(Url, "t", [], [], [], "");
+    }
     public Task<ActionResult> ClickAsync(string selector, CancellationToken ct) { Clicked.Add(selector); return Task.FromResult(new ActionResult(true, "clicked")); }
     public Task<ActionResult> TypeAsync(string selector, string text, CancellationToken ct)
     {
@@ -186,4 +198,6 @@ public sealed class FakeLease(ResourceId id, Uri url, FakeLeaseManager owner) : 
     public void RaiseLoaded() => Loaded?.Invoke();
     public void RaiseDetected(ProtectionFlags f) => DetectedProtectionChanged?.Invoke(f);
     public void RaiseSignals(PageSignals s) => PageSignalsChanged?.Invoke(s);
+    public event Action<EngineFailure>? EngineFailed;
+    public void RaiseEngineFailure(bool whole = true) => EngineFailed?.Invoke(new(whole, whole ? "BrowserProcessExited" : "RenderProcessExited"));
 }

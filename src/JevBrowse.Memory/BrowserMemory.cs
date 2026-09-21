@@ -73,6 +73,15 @@ public sealed class BrowserMemory
         cmd.ExecuteNonQuery();
     }
 
+    /// <summary>Forget everything indexed from one host, for every page and every tab (the person told us how to treat that site).</summary>
+    public int ForgetSite(string host)
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "DELETE FROM memory_docs WHERE site=$h";
+        cmd.Parameters.AddWithValue("$h", host.Trim().TrimEnd('.').ToLowerInvariant());
+        return cmd.ExecuteNonQuery();
+    }
+
     /// <summary>Forget everything indexed from a tab (explicit user request).</summary>
     public void ForgetTab(ResourceId id)
     {

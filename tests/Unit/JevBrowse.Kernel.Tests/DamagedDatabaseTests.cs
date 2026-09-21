@@ -81,7 +81,7 @@ public class DamagedDatabaseTests : IDisposable
         holder.Open();
         using (var cmd = holder.CreateCommand()) { cmd.CommandText = "PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE;"; cmd.ExecuteNonQuery(); }
 
-        var ex = Record.Exception(() => BrowserDb.OpenOrRecover(Db, out _));
+        var ex = Record.Exception(() => BrowserDb.OpenOrRecover(Db, out _, busyTimeoutSeconds: 1));
 
         Assert.IsType<SqliteException>(ex);
         Assert.True(File.Exists(Db));

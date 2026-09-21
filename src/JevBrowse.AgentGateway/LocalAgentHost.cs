@@ -44,6 +44,31 @@ public sealed class LocalAgentHost : IDisposable
     private readonly Func<AgentSession, Task>? _onOpened;
     private CancellationTokenSource? _cts;
     private System.Threading.Timer? _sweeper;
+    private int _sweeping;
+
+    // Everything that reaches a renderer (WebView2 is single-threaded-apartment, UI-thread-only) must run on the thread that owns the window. The host is
+    // created on that thread, so its context is remembered; the sweeper timer fires on a thread-pool thread and must hop back, and shutdown must not BLOCK
+    // that thread while the cleanup it waits for needs it.
+    private readonly SynchronizationContext? _owner = SynchronizationContext.Current;
+
+    /// <summary>How often expired sessions are swept. Settable for tests.</summary>
+    public TimeSpan SweepInterval { get; set; } = TimeSpan.FromSeconds(15);
+
+    /// <summary>Something in the background (the sweeper, an unawaited shutdown) failed. Never silent: the owner decides what to do with it.</summary>
+    public event Action<Exception>? BackgroundFault;
+
+    /// <summary>Runs on the owning thread when there is one, and completes when the work does. Exceptions surface through the task and <see cref="BackgroundFault"/>.</summary>
+    private Task RunOwnedAsync(Func<Task> work)
+    {
+        if (_owner is null || SynchronizationContext.Current == _owner) return work();
+        var done = new TaskCompletionSource();
+        _owner.Post(async _ =>
+        {
+            try { await work(); done.SetResult(); }
+            catch (Exception ex) { done.SetException(ex); }
+        }, null);
+        return done.Task;
+    }
 
     /// <param name="ceiling">
     /// What the user has approved. Requests are clamped to it (agents can narrow, never widen). With no ceiling the
@@ -109,15 +134,36 @@ public sealed class LocalAgentHost : IDisposable
         _listener.Start();
         _cts = new CancellationTokenSource();
         _ = LoopAsync(_cts.Token);
-        _sweeper = new System.Threading.Timer(async _ => { try { await SweepExpiredAsync(); } catch (Exception) { } }, null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
+        _sweeper = new System.Threading.Timer(_ => _ = SweepOnOwnerAsync(), null, SweepInterval, SweepInterval);
     }
 
+    private async Task SweepOnOwnerAsync()
+    {
+        if (Interlocked.Exchange(ref _sweeping, 1) == 1) return;   // the previous sweep is still releasing pages
+        try { await RunOwnedAsync(async () => { await SweepExpiredAsync(); }); }
+        catch (Exception ex) { BackgroundFault?.Invoke(ex); }
+        finally { Volatile.Write(ref _sweeping, 0); }
+    }
+
+    /// <summary>
+    /// Turns the endpoint off: refuses new requests at once, then revokes what it granted and waits for those pages to be released. Awaitable, so a caller
+    /// on the UI thread can wait without blocking it.
+    /// </summary>
+    public async Task StopEndpointAsync(CancellationToken ct = default)
+    {
+        _sweeper?.Dispose();
+        _cts?.Cancel();
+        if (_listener.IsListening) _listener.Stop();
+        await StopAllAsync(ct);
+    }
+
+    /// <summary>Non-blocking: the endpoint stops accepting now, and the revocation continues on the owning thread. Prefer <see cref="StopEndpointAsync"/> where a caller can wait.</summary>
     public void Stop()
     {
         _sweeper?.Dispose();
-        try { StopAllAsync().GetAwaiter().GetResult(); } catch (Exception) { }   // turning the endpoint off revokes what it granted
         _cts?.Cancel();
         if (_listener.IsListening) _listener.Stop();
+        _ = RunOwnedAsync(async () => { await StopAllAsync(); }).ContinueWith(t => { if (t.Exception is { } e) BackgroundFault?.Invoke(e.GetBaseException()); }, TaskContinuationOptions.OnlyOnFaulted);
     }
 
     private async Task LoopAsync(CancellationToken ct)

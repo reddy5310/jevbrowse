@@ -19,6 +19,21 @@ public class BrowserMemoryTests : IDisposable
         string.Join(' ', Enumerable.Range(0, words).Select(i => i % 7 == 0 ? topic : "filler")) + " " + topic + " renderer process model explained in depth.";
 
     [Fact]
+    public void ForgetSite_removes_every_page_of_that_host_and_only_that_host()
+    {
+        var m = new BrowserMemory(_db, clock: () => _now);
+        var tab = ResourceId.New();
+        m.Index(tab, new Uri("https://news.example.org/a"), "A", ContextId.Default, Article("alpha"));
+        m.Index(tab, new Uri("https://news.example.org/b"), "B", ContextId.Default, Article("alpha"));
+        m.Index(ResourceId.New(), new Uri("https://other.example.org/c"), "C", ContextId.Default, Article("alpha"));
+
+        Assert.Equal(2, m.ForgetSite("News.Example.org."));
+
+        Assert.Equal(1, m.Stats().Docs);
+        Assert.Single(m.Search("alpha"));
+    }
+
+    [Fact]
     public void Index_and_search_roundtrip_with_snippet()
     {
         var m = new BrowserMemory(_db, clock: () => _now);

@@ -100,6 +100,7 @@ public class UpgradeFromHistoricDatabasesTests : IDisposable
                 Assert.Equal(2, Scalar(db, "SELECT data_class FROM site_settings WHERE site='example.com'"));
                 Assert.Equal(3, Scalar(db, "SELECT data_class FROM site_settings WHERE site='example.org'"));
                 Assert.Equal(4, Scalar(db, "SELECT data_class FROM site_settings WHERE site='example.net'"));
+                Assert.Equal(0, Scalar(db, "SELECT COUNT(*) FROM site_settings WHERE exact_host<>0"));   // older decisions stay marked as two-label rows
             }
 
             // And the app's own repository can read it.
@@ -113,14 +114,22 @@ public class UpgradeFromHistoricDatabasesTests : IDisposable
     }
 
     [Fact]
-    public void A_database_written_by_a_NEWER_build_is_left_alone_not_downgraded()
+    public void A_database_written_by_a_NEWER_build_is_refused_untouched_and_never_quarantined()
     {
         var path = Copy(9);
-        using (var c = new SqliteConnection($"Data Source={path}")) { c.Open(); using var cmd = c.CreateCommand(); cmd.CommandText = "PRAGMA user_version=99"; cmd.ExecuteNonQuery(); }
+        using (var c = new SqliteConnection($"Data Source={path};Pooling=False")) { c.Open(); using var cmd = c.CreateCommand(); cmd.CommandText = "PRAGMA user_version=99"; cmd.ExecuteNonQuery(); }
         SqliteConnection.ClearAllPools();
-        using var db = new BrowserDb(path);
-        Assert.Equal(99, db.UserVersion);                       // no step runs, nothing is rewritten
-        Assert.Equal(2, Scalar(db, "SELECT COUNT(*) FROM tabs"));
+        var before = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
+
+        var ex = Assert.Throws<UnsupportedDatabaseVersionException>(() => new BrowserDb(path));
+        Assert.Equal((99, BrowserDb.LatestVersion), (ex.Found, ex.Supported));
+        // The recovery path must not mistake it for damage: a newer database is somebody's healthy data.
+        Assert.Throws<UnsupportedDatabaseVersionException>(() => BrowserDb.OpenOrRecover(path, out _));
+        SqliteConnection.ClearAllPools();
+
+        Assert.Equal(before, Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))));   // byte for byte: not written, not migrated, not moved
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(path)!, "*.corrupt-*"));
+        Assert.False(File.Exists(path + "-wal") && new FileInfo(path + "-wal").Length > 0, "no write reached a WAL");
     }
 
     // Recorded from the source history (git show of each commit's BrowserDb.cs), independently of the current file. If one of these fails,
@@ -128,7 +137,7 @@ public class UpgradeFromHistoricDatabasesTests : IDisposable
     private static readonly Dictionary<int, string> Shipped = new()
     {
         [1] = "f30c0fe528c4", [2] = "f06179841d31", [3] = "0aa4f761c50a", [4] = "a45e01e80dda", [5] = "bbc57c72b4ff",
-        [6] = "0ad8f3f247fd", [7] = "9f6b81febe53", [8] = "0b5e602eae91", [9] = "1054a3ea79a3",
+        [6] = "0ad8f3f247fd", [7] = "9f6b81febe53", [8] = "0b5e602eae91", [9] = "1054a3ea79a3", [10] = "abd187375ead",
     };
 
     [Fact]

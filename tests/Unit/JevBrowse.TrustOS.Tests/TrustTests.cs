@@ -44,7 +44,7 @@ public class DataClassifierTests
     [Fact]
     public void User_override_cannot_hide_a_password_field_but_does_outrank_url_heuristics()
     {
-        var c = new DataClassifier(site => site == "corp.test" ? DataClass.Public : null);
+        var c = new DataClassifier(site => site == "accounts.corp.test" ? DataClass.Public : null);
         Assert.Equal(DataClass.Public, c.Classify(new Uri("https://accounts.corp.test/login"), IdentityContainer.Personal, PageSignals.None));      // user's own site, their call
         Assert.Equal(DataClass.Secret, c.Classify(new Uri("https://accounts.corp.test/login"), IdentityContainer.Personal, PageSignals.PasswordField));
         Assert.Equal(DataClass.Secret, c.Classify(new Uri("https://accounts.corp.test/pay"), IdentityContainer.Personal, PageSignals.PaymentField));
@@ -67,7 +67,7 @@ public class DataClassifierTests
         // Only two routes to PUBLIC. A structurally public host…
         Assert.Equal(DataClass.Public, C.Classify(new Uri("https://en.wikipedia.org/wiki/Cat"), IdentityContainer.Personal, PageSignals.None));
         // …or the user saying so for that site.
-        var told = new DataClassifier(site => site == "somecompany.example" ? DataClass.Public : null);
+        var told = new DataClassifier(site => site == "reports.somecompany.example" ? DataClass.Public : null);
         Assert.Equal(DataClass.Public, told.Classify(unknown, IdentityContainer.Personal, PageSignals.None));
     }
 
@@ -106,11 +106,11 @@ public class DataClassifierTests
     [Fact]
     public void User_override_applies_but_password_still_raises_to_secret()
     {
-        var c = new DataClassifier(site => site == "example.com" ? DataClass.Sensitive : null);
+        var c = new DataClassifier(site => site == "www.example.com" ? DataClass.Sensitive : null);
         Assert.Equal(DataClass.Sensitive, c.Classify(new Uri("https://www.example.com/"), IdentityContainer.Personal, PageSignals.None));
         Assert.Equal(DataClass.Secret, c.Classify(new Uri("https://www.example.com/"), IdentityContainer.Personal, PageSignals.PasswordField));
         // override can also lower a heuristic: user says their intranet "dashboard." host is public
-        var lower = new DataClassifier(site => site == "intranet.test" ? DataClass.Public : null);
+        var lower = new DataClassifier(site => site == "dashboard.intranet.test" ? DataClass.Public : null);
         Assert.Equal(DataClass.Public, lower.Classify(new Uri("https://dashboard.intranet.test/"), IdentityContainer.Personal, PageSignals.None));
     }
 }

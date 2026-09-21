@@ -75,7 +75,15 @@ public interface IRendererLease
     event Action<ProtectionFlags>? DetectedProtectionChanged;
     /// <summary>Live-page signals Trust OS classifies on: password field, payment field.</summary>
     event Action<PageSignals>? PageSignalsChanged;
+    /// <summary>
+    /// The engine process behind this page exited (the whole browser process, or the page's renderer). The control is no longer trustworthy: the only
+    /// correct response is to release it and create a new one, which the kernel does. Unresponsive pages and GPU or frame failures are NOT reported here.
+    /// </summary>
+    event Action<EngineFailure>? EngineFailed;
 }
+
+/// <param name="WholeEngine">True when the browser process itself exited (the control must be recreated); false when just the page's renderer did.</param>
+public sealed record EngineFailure(bool WholeEngine, string Kind);
 
 /// <summary>Architecture §18. Bounded pool of live renderers; the kernel decides who gets one.</summary>
 public interface IRendererLeaseManager

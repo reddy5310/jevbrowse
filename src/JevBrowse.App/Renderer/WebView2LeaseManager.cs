@@ -47,6 +47,8 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
     /// </summary>
     public Func<CoreWebView2, ResourceId, IdentityContainer, ContextId, Uri, Task>? OnCoreCreated { get; set; }
     public Action<ResourceId>? OnCoreDisposed { get; set; }
+    /// <summary>A page asked for a new window: (the page, where to, the person clicked or typed, it is an agent's page).</summary>
+    public Action<ResourceId, Uri?, bool, bool>? OnPopupRequested { get; set; }
     /// <summary>Resolves jev:// URLs to locally generated HTML (welcome/help). No network involved.</summary>
     public Func<Uri, string?>? LocalPage { get; set; }
 
@@ -69,6 +71,9 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
         env.BrowserProcessExited += (_, args) =>
         {
             if (_runningBrowsers.TryGetValue(key, out var running)) running.Remove(args.BrowserProcessId);
+            // A browser process that FAILED leaves an environment object that cannot serve new controls. Forget it, so the next renderer for this identity
+            // creates a fresh one on the same profile folder (a normal exit, after the last control closed, keeps working with the same object).
+            if (args.BrowserProcessExitKind == CoreWebView2BrowserProcessExitKind.Failed) _envs.Remove(key);
         };
         _envs[key] = env;
         return env;
@@ -107,6 +112,10 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
             ThrowIfEnded(key);
             // In force before the first Navigate below, so an allowed URL that redirects out of scope is stopped.
             if (_navPolicies.TryGetValue(id, out var policy)) lease.NavigationGuard = policy;
+            lease.PopupRequested = (target, userInitiated, agent) => OnPopupRequested?.Invoke(id, target, userInitiated, agent);
+            // Before anything else reacts: an environment whose browser process died cannot create new controls, so forget it NOW (the environment's own
+            // exit event can arrive later than the failure that triggers the page's recovery).
+            lease.EngineFailed += f => { if (f.WholeEngine) _envs.Remove(key); };
             _live[id] = lease;
             _identities[id] = key;
             if (initialUrl.Scheme == "jev" && LocalPage is not null && LocalPage(initialUrl) is { } html) view.CoreWebView2.NavigateToString(html);
@@ -147,9 +156,16 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
 
     public sealed record SessionCleanup(bool RenderersClosed, bool ProfileDataDeleted);
 
-    public async Task<SessionCleanup> EndPrivateSessionAsync(ContextId isolation)
+    public Task<SessionCleanup> EndPrivateSessionAsync(ContextId isolation) => EndEphemeralSessionAsync(IdentityContainer.Private, isolation);
+
+    /// <summary>
+    /// Ends an ephemeral identity (a Private session, or a Disposable agent workspace): no new renderer may be created for it, and once its engine
+    /// processes have exited its throwaway profile folder is deleted. Not deleted yet means it stays for the start-up sweep.
+    /// </summary>
+    public async Task<SessionCleanup> EndEphemeralSessionAsync(IdentityContainer container, ContextId isolation)
     {
-        var key = IdentityKey(IdentityContainer.Private, isolation);
+        if (!container.IsEphemeral()) throw new ArgumentException("only ephemeral identities can be ended", nameof(container));
+        var key = IdentityKey(container, isolation);
         _endedIdentities.Add(key);
         if (_identities.Values.Contains(key)) return new(false, false);
         // File deletion alone is insufficient: the engine could still write its final profile updates.
@@ -318,6 +334,14 @@ public sealed class WebView2Lease : IRendererLease
             if (!e.IsRedirected) lease.ResetSignals();
         };
         core.NavigationCompleted += (_, _) => { lease.ClearDetected(ProtectionFlags.DirtyForm); lease.Loaded?.Invoke(); };
+        // The engine's default for a new-window request is to open an UNMANAGED window that skips renderer admission, Shield and the permission adapter.
+        // It is never allowed to: the request is always handled here, and the app decides whether it becomes a managed tab or is refused.
+        core.NewWindowRequested += (_, e) =>
+        {
+            e.Handled = true;
+            Uri.TryCreate(e.Uri, UriKind.Absolute, out var target);
+            lease.PopupRequested?.Invoke(target, e.IsUserInitiated, lease.NavigationGuard is not null);
+        };
         core.IsDocumentPlayingAudioChanged += (_, _) => lease.SetDetected(ProtectionFlags.Audible, core.IsDocumentPlayingAudio);
         core.DownloadStarting += (_, e) =>
         {
@@ -396,7 +420,12 @@ public sealed class WebView2Lease : IRendererLease
         {
             if (e.ProcessFailedKind is CoreWebView2ProcessFailedKind.BrowserProcessExited
                                     or CoreWebView2ProcessFailedKind.RenderProcessExited)
+            {
                 lease.DropAllMedia();
+                // The registered lease would otherwise be handed back on the next activation while its control is dead (WebView2 requires recreating
+                // the control after BrowserProcessExited). Tell the kernel, which releases it and brings the page back on a new one.
+                lease.EngineFailed?.Invoke(new EngineFailure(e.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited, e.ProcessFailedKind.ToString()));
+            }
         };
         await core.AddScriptToExecuteOnDocumentCreatedAsync(PageScript);
         return lease;
@@ -727,6 +756,9 @@ public sealed class WebView2Lease : IRendererLease
 
     public event Action<NavigationInfo>? NavigationChanged;
     public event Action? Loaded;
+    public event Action<EngineFailure>? EngineFailed;
+    /// <summary>(address, the person did it with a click or key, this is an agent's page). Set by the manager.</summary>
+    public Action<Uri?, bool, bool>? PopupRequested { get; set; }
     // ---- live capture and calls, per document ----
     //
     // Keyed by the reporting document, never by the tab: a tab can hold a top-level page and several frames, each
@@ -835,6 +867,8 @@ public sealed class WebView2Lease : IRendererLease
         PageSignalsChanged = null;
         NavigationChanged = null;
         Loaded = null;
+        EngineFailed = null;
+        PopupRequested = null;
     }
 
     internal void DropFrameMedia(CoreWebView2Frame frame)

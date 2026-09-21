@@ -1,0 +1,106 @@
+{
+  "pass": true,
+  "steps": [
+    {
+      "name": "start page shown in the address bar",
+      "ok": true,
+      "detail": "http://127.0.0.1:47950/a | windows: WinUIDesktopWin32WindowClass|JevBrowse|96,96 1440x740|owner=False; Chrome_WidgetWin_1|about:blank|456,220 1057x565|owner=False"
+    },
+    {
+      "name": "following a link updates the address bar",
+      "ok": true,
+      "detail": "bar=http://127.0.0.1:47950/b engine=http://127.0.0.1:47950/b"
+    },
+    {
+      "name": "Back shows the previous address",
+      "ok": true,
+      "detail": "http://127.0.0.1:47950/a"
+    },
+    {
+      "name": "Forward shows the next address",
+      "ok": true,
+      "detail": "http://127.0.0.1:47950/b"
+    },
+    {
+      "name": "a redirect shows where it ended up, not where it started",
+      "ok": true,
+      "detail": "http://127.0.0.1:47950/b"
+    },
+    {
+      "name": "what the person is typing is not overwritten by a navigation",
+      "ok": true,
+      "detail": "half typed sear"
+    },
+    {
+      "name": "abandoning the edit shows the real address again",
+      "ok": true,
+      "detail": "http://127.0.0.1:47950/b"
+    },
+    {
+      "name": "background agent navigation succeeded",
+      "ok": true,
+      "detail": "navigated | windows: WinUIDesktopWin32WindowClass|JevBrowse|96,96 1440x740|owner=False; Chrome_WidgetWin_1|B|456,220 1057x565|owner=False"
+    },
+    {
+      "name": "\u2026and did not change the address bar or the tab in front",
+      "ok": true,
+      "detail": "http://127.0.0.1:47950/b active=True"
+    },
+    {
+      "name": "a pop-up nobody clicked for is blocked (no new tab, no window)",
+      "ok": true,
+      "detail": "tabs 2-\u003E2; userInitiated=False agent=False inFront=True -\u003E block"
+    },
+    {
+      "name": "\u2026and no window of any kind appeared outside the app\u0027s own",
+      "ok": true,
+      "detail": "visible windows 2-\u003E2: Chrome_WidgetWin_0||455,754 153x33|owner=True; WinUIDesktopWin32WindowClass|JevBrowse|96,96 1440x740|owner=False; Chrome_WidgetWin_1||455,754 153x33|owner=True; Chrome_WidgetWin_1|A|456,220 1057x565|owner=False"
+    },
+    {
+      "name": "\u2026and the person is told",
+      "ok": true,
+      "detail": "Blocked a pop-up from 127.0.0.1: the page opened it without a click or key press."
+    },
+    {
+      "name": "a clicked link with target=_blank becomes a managed tab",
+      "ok": true,
+      "detail": "tabs=3"
+    },
+    {
+      "name": "\u2026in the same workspace as its opener",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "\u2026and it is a tab, not a window (no extra top-level window)",
+      "ok": true,
+      "detail": "visible windows 2-\u003E2"
+    },
+    {
+      "name": "\u2026brought to the front through the normal path (a managed renderer, address shown)",
+      "ok": true,
+      "detail": "http://127.0.0.1:47950/popup"
+    },
+    {
+      "name": "closing it returns to the opener in the same workspace",
+      "ok": true,
+      "detail": "True"
+    },
+    {
+      "name": "a killed browser process is replaced with a new renderer for the page in front",
+      "ok": true,
+      "detail": "127.0.0.1 crashed. Reloading it\u2026; state=Hot active=True lease=new"
+    },
+    {
+      "name": "\u2026and the page loads again",
+      "ok": true,
+      "detail": "http://127.0.0.1:47950/a"
+    },
+    {
+      "name": "\u2026and the address bar still shows it",
+      "ok": true,
+      "detail": "http://127.0.0.1:47950/a"
+    }
+  ],
+  "scope": "Real WebView2 and the real address bar. Popup clicks are trusted DevTools input events. Not covered: OAuth pop-ups that need window.opener (they are opened as ordinary tabs without one)."
+}

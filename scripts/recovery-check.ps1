@@ -15,7 +15,7 @@
   directory is new and unique under -Root; nothing is deleted. Does not change Windows settings.
 #>
 param(
-    [ValidateSet('crash', 'clean-shutdown', 'corrupt-db', 'all')][string]$Scenario = 'all',
+    [ValidateSet('crash', 'clean-shutdown', 'corrupt-db', 'agent-close', 'newer-db', 'all')][string]$Scenario = 'all',
     [string]$Configuration = 'debug',
     [string]$ExePath = '',
     [string]$Root = 'D:\Browser\_ui-check\recovery'
@@ -213,9 +213,69 @@ function Test-CorruptDb {
     }
 }
 
+function Test-AgentClose {
+    Write-Host '[agent-close] an agent has a live page; the window is closed normally'
+    $data = Join-Path $run 'data-agentclose'; New-Item -ItemType Directory -Path "$data\benchmarks" -Force | Out-Null
+    '{"firstRunDone":true}' | Set-Content "$data\settings.json" -Encoding ascii
+    $p = Start-App $data @('--agent-hidden-load=static:1')
+    $win = Find-Window $p
+    $state = "$data\benchmarks\hidden-load-state.json"
+    for ($i = 0; $i -lt 120 -and -not (Test-Path $state) -and -not $p.HasExited; $i++) { Start-Sleep -Milliseconds 500 }
+    if (-not (Test-Path $state)) { Add-Check 'agent-close' 'seed reached' $false 'the app never reached the seeded state'; $script:inconclusive = $true; if (-not $p.HasExited) { Stop-Leftovers (@(Get-Tree $p.Id) + $p.Id) }; return }
+    $eph = Join-Path $data 'profiles\ephemeral'
+    $pages = @((Get-Content $state -Raw | ConvertFrom-Json).agentPages)
+    Add-Check 'agent-close' 'an agent session has a live page while the window is open' ($pages.Count -eq 1) "$($pages.Count) agent page(s); $(@(Get-ChildItem $eph -Directory -ErrorAction SilentlyContinue).Count) throwaway profile(s)"
+    $tree = @(Get-Tree $p.Id)
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    $null = $p.CloseMainWindow()
+    $exited = $p.WaitForExit(40000)
+    Add-Check 'agent-close' 'the window closes by itself with a live agent (no deadlock)' $exited "$([int]$watch.Elapsed.TotalSeconds) s"
+    if (-not $exited) { Stop-Process -Id $p.Id -Force }
+    Start-Sleep 4
+    $left = @($tree | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+    Add-Check 'agent-close' 'no app or engine process from the run survives' ($left.Count -eq 0) "$($left.Count) left"
+    Stop-Leftovers $left
+    $dirs = @(Get-ChildItem $eph -Directory -ErrorAction SilentlyContinue)
+    Add-Check 'agent-close' 'the agent''s throwaway profile is deleted' ($dirs.Count -eq 0) "$($dirs.Count) dir(s)"
+}
+
+function Test-NewerDb {
+    Write-Host '[newer-db] starting the app on a database written by a newer build'
+    if (-not $havePython) { Add-Check 'newer-db' 'python available to make the database' $false; $script:inconclusive = $true; return }
+    $data = Join-Path $run 'data-newer'; New-Item -ItemType Directory -Path "$data\db" -Force | Out-Null
+    '{"firstRunDone":true}' | Set-Content "$data\settings.json" -Encoding ascii
+    $mk = Join-Path $run 'mknewer.py'
+    @'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.execute("create table tabs(id text)")
+c.execute("insert into tabs values ('keep-me')")
+c.execute("pragma user_version=99")
+c.commit(); c.close()
+'@ | Set-Content $mk -Encoding ascii
+    python $mk "$data\db\browser.db"
+    $before = (Get-FileHash "$data\db\browser.db").Hash
+    $p = Start-App $data @()
+    $win = Find-Window $p
+    Start-Sleep -Seconds 12
+    Add-Check 'newer-db' 'the app stays up and shows the person why (it does not vanish or hang silently)' ($win -and -not $p.HasExited)
+    $texts = @(); try { $texts = @($win.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name }) } catch { }
+    Add-Check 'newer-db' 'the message says the data is from a newer version and to update' (@($texts | Where-Object { $_ -match 'newer version' -and $_ -match 'update' }).Count -ge 1)
+    try { $q = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition((New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, 'Quit')), (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button))))); Add-Check 'newer-db' 'there is a Quit button' ([bool]$q); if ($q) { $q.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } } catch { Add-Check 'newer-db' 'there is a Quit button' $false $_.Exception.Message }
+    $tree = @(Get-Tree $p.Id)
+    $exited = $p.WaitForExit(20000)
+    Add-Check 'newer-db' 'Quit closes the app' $exited
+    if (-not $exited) { Stop-Process -Id $p.Id -Force }
+    Start-Sleep 3; Stop-Leftovers @($tree | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+    $after = (Get-FileHash "$data\db\browser.db").Hash
+    Add-Check 'newer-db' 'the newer database is byte-for-byte unchanged and was not moved' ($before -eq $after -and -not (Get-ChildItem "$data\db" -Filter '*.corrupt-*' -ErrorAction SilentlyContinue))
+}
+
 if ($Scenario -in 'crash', 'all') { Test-Crash }
 if ($Scenario -in 'clean-shutdown', 'all') { Test-CleanShutdown }
 if ($Scenario -in 'corrupt-db', 'all') { Test-CorruptDb }
+if ($Scenario -in 'agent-close', 'all') { Test-AgentClose }
+if ($Scenario -in 'newer-db', 'all') { Test-NewerDb }
 
 $failed = @($results.Values | ForEach-Object { $_.GetEnumerator() } | Where-Object { -not $_.Value.pass })
 $total = @($results.Values | ForEach-Object { $_.GetEnumerator() }).Count

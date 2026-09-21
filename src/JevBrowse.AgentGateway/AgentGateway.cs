@@ -232,13 +232,18 @@ public sealed partial class AgentGateway : IAgentGateway
         {
             case AgentAction.Read:
             {
+                var document = lease.DocumentGeneration;
                 var map = await lease.GetPageMapAsync(ct);
+                // The page map is a picture of a moment. If the session ended, expired, or the page became a different document, or was reclassified,
+                // while the engine was gathering it, it describes something the checks above never looked at: it is not delivered.
+                if (await StillValidAsync(s, cur, lease, document, ct) is { } gone) return Deny("read_discarded:" + gone);
                 Record(s, "read", current.Url.ToString(), true, $"{map?.Links.Count ?? 0} links, {map?.Fields.Count ?? 0} fields");
                 return new(true, "page map", map);
             }
             case AgentAction.Click:
             {
                 if (string.IsNullOrWhiteSpace(r.Selector)) return Deny("missing_selector");
+                var document = lease.DocumentGeneration;
                 // Judge what the selector actually hits (its text, label, href, form method), not just the caller's words:
                 // "#confirm-delete" and a generic "button.primary" that says "Delete repository" are the same click.
                 var target2 = await lease.DescribeAsync(r.Selector, ct);
@@ -246,8 +251,12 @@ public sealed partial class AgentGateway : IAgentGateway
                 if (looksDestructive)
                 {
                     if (s.Manifest.DestructiveActions == "deny") return Deny("destructive_denied_by_manifest");
-                    if (s.Manifest.DestructiveActions != "allow" && !await _confirm(s, r)) return Deny("destructive_not_confirmed_by_user");
+                    // A person may take minutes to answer. Stop and expiry end the wait at once (the answer would be discarded anyway).
+                    if (s.Manifest.DestructiveActions != "allow" && !await _confirm(s, r).WaitAsync(ct)) return Deny("destructive_not_confirmed_by_user");
                 }
+                // Whatever was waited for (the description, a human), the click must still be on the same document, in a live and unexpired session.
+                // "Yes, delete it" was said about the page that was described, not about whatever is on screen now.
+                if (await StillValidAsync(s, cur, lease, document, ct) is { } gone) return Deny("click_discarded:" + gone);
                 var res = await lease.ClickAsync(r.Selector, ct);
                 Record(s, "click", r.Selector, res.Ok, res.Message);
                 return new(res.Ok, res.Message);
@@ -256,6 +265,7 @@ public sealed partial class AgentGateway : IAgentGateway
             {
                 if (string.IsNullOrWhiteSpace(r.Selector) || r.Text is null) return Deny("missing_selector_or_text");
                 if (SecretSelector().IsMatch(r.Selector)) return Deny("hard:secret_field_selector");
+                if (await StillValidAsync(s, cur, lease, lease.DocumentGeneration, ct) is { } gone) return Deny("type_discarded:" + gone);
                 var res = await lease.TypeAsync(r.Selector, r.Text, ct);
                 Record(s, "type", r.Selector, res.Ok, res.Message + $" ({r.Text.Length} chars)");
                 return new(res.Ok, res.Message);
@@ -420,6 +430,22 @@ public sealed partial class AgentGateway : IAgentGateway
 
     private static bool DomainAllowed(AgentManifest m, string host) =>
         m.AllowDomains.Any(d => host.Equals(d, StringComparison.OrdinalIgnoreCase) || host.EndsWith("." + d, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// After anything that awaited (an engine call, a person): is the request still about the same thing? Null = yes. Otherwise the reason. Expiry is a fact about
+    /// the clock, so it releases the session here rather than waiting for a sweep.
+    /// </summary>
+    private async Task<string?> StillValidAsync(AgentSession s, ResourceId cur, IRendererLease lease, long document, CancellationToken ct)
+    {
+        if (s.Closed || ct.IsCancellationRequested) return "session_closed";
+        if (_clock() > s.ExpiresAt) { await CloseAsync(s, CancellationToken.None); return "session_expired"; }
+        if (!_leases.TryGet(cur, out var now) || !ReferenceEquals(now, lease) || lease.DocumentGeneration != document) return "page_changed";
+        var tab = _kernel.Tabs.FirstOrDefault(t => t.Id == cur);
+        if (tab is null || !DomainAllowed(s.Manifest, tab.Url.Host)) return "page_changed";
+        var cls = _kernel.ContentClassOf(tab);
+        if (cls == DataClass.Secret || s.Manifest.DenyDataClasses.Contains(cls)) return "page_changed";
+        return null;
+    }
 
     private static bool LooksDestructive(string selector, string? text) => Destructive().IsMatch(selector + " " + (text ?? ""));
 

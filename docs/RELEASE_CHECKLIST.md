@@ -32,6 +32,20 @@ and opt-in agent access. Extensions, sync, a built-in password manager and local
 | Clean-machine install / upgrade / uninstall | Open | Never run on a machine other than the dev machine. Needs a VM or second PC; uninstall must keep or offer to remove user data |
 | WebView2 runtime handling | Open | Evergreen runtime assumed present; behaviour when it is missing or too old is untested |
 
+## 2b. The private alpha itself
+
+See [FIRST_RELEASE_PLAN.md](FIRST_RELEASE_PLAN.md) for the ten review findings (all fixed with regressions) and the ordered steps.
+
+| Item | Status | Evidence / what is missing |
+|---|---|---|
+| Review findings 1-10 | Done | Each has a regression that fails without its fix; 6 also on the real app |
+| Freeze a commit, CI green | Open (do last) | |
+| Release ZIP + checksum + SBOM | Ready to run | `scripts/release.ps1`; smoke: `scripts/packaged-smoke.ps1` |
+| Packaged smoke on the extracted ZIP | Open (run at the freeze) | |
+| Clean Windows account / VM run, offline, missing runtime | **Blocked** | Needs you or a VM |
+| Downloads/uploads, real sign-in persistence | Open | Private-session downloads go to the ordinary Downloads folder |
+| Release notes: commit, checksum, prerequisites, data location, backup, limitations | Open (template in the plan) | |
+
 ## 3. Everyday browsing
 
 | Item | Status | Evidence / what is missing |

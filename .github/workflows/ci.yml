@@ -121,6 +121,22 @@ jobs:
         shell: powershell
         continue-on-error: true
         run: ./scripts/recovery-check.ps1 -Scenario all -ExePath "$env:GITHUB_WORKSPACE/out/app/JevBrowse.App.exe" -Root "$env:RUNNER_TEMP/recovery"
+      - name: Navigation check on the real engine (report only)
+        shell: powershell
+        continue-on-error: true
+        run: |
+          $d = "$env:RUNNER_TEMP/navcheck"; New-Item -ItemType Directory "$d/benchmarks" -Force | Out-Null
+          '{"firstRunDone":true}' | Set-Content "$d/settings.json" -Encoding ascii
+          $env:JEVBROWSE_DATA_DIR = $d; $env:JEVBROWSE_NO_FILTER_UPDATE = '1'; $env:JEVBROWSE_AI = '0'
+          $p = Start-Process "$env:GITHUB_WORKSPACE/out/app/JevBrowse.App.exe" -ArgumentList '--nav-check' -PassThru
+          if (-not $p.WaitForExit(180000)) { Stop-Process $p -Force; Write-Warning 'nav-check timed out' }
+          if (Test-Path "$d/benchmarks/nav-check.json") { $j = Get-Content "$d/benchmarks/nav-check.json" -Raw | ConvertFrom-Json; "nav-check pass: $($j.pass)"; $j.steps | ForEach-Object { "{0} {1} {2}" -f $(if ($_.ok) { 'PASS' } else { 'FAIL' }), $_.name, $_.detail } }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nav-check
+          path: ${{ runner.temp }}/navcheck/benchmarks/nav-check.json
+          if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         if: always()
         with:
