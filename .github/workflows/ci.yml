@@ -31,6 +31,10 @@ jobs:
         shell: powershell
         run: ./scripts/idle-benchmark.selftest.ps1
 
+      - name: Process-cleanup scope (self-test, real processes)
+        shell: powershell
+        run: ./scripts/process-scope.selftest.ps1
+
       - name: Restore
         run: dotnet restore
 

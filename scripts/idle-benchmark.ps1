@@ -45,6 +45,7 @@ param(
     [int]$MaxMinutes = 0   # stop starting new runs after this long (0 = no limit); what was not run is reported as not run, never as a result
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'ProcessScope.ps1')
 . (Join-Path $PSScriptRoot 'IdleBenchmark.Lib.ps1')
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 Add-Type @'
@@ -119,8 +120,8 @@ function Get-ProcessMap([int]$rootPid) {
 }
 
 function Stop-Tree([int]$rootPid) {
-    foreach ($id in @((Get-ProcessMap $rootPid).Keys)) { if ($id -ne $rootPid) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue } }
-    Stop-Process -Id $rootPid -Force -ErrorAction SilentlyContinue
+    $root = Get-Process -Id $rootPid -ErrorAction SilentlyContinue
+    if ($root) { Stop-OwnedProcesses (Get-OwnedProcesses $root) }   # id AND start time, never an id alone
 }
 
 function Read-Json($path) { if (Test-Path $path) { try { Get-Content $path -Raw | ConvertFrom-Json } catch { $null } } else { $null } }

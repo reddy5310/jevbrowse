@@ -83,6 +83,29 @@ public sealed class PermissionAdapter
         };
     }
 
+    /// <summary>Remembered decisions in force for this container and exact origin (persisted ones, or this session's in-memory ones for Private and Disposable).</summary>
+    public IReadOnlyList<PermissionGrant> Saved(IdentityContainer container, ContextId isolation, Uri origin)
+    {
+        var key = PermissionKey.For(container, isolation, origin);
+        var now = _clock();
+        if (!PermissionKey.MayPersist(container))
+            return _memory.Where(m => m.Key.Key == key && (m.Value.ExpiresAt is null || m.Value.ExpiresAt > now)).Select(m => m.Value).OrderBy(g => g.Kind).ToList();
+        return _repo.ListForKey(key, now).Select(r => new PermissionGrant(key, (PermissionKind)r.Kind, r.Allowed, r.ExpiresAt)).ToList();
+    }
+
+    /// <summary>
+    /// Forgets the saved decision (one kind, or all) for this container and exact origin, so the next request is decided as if it were the first: the policy
+    /// asks again. It does not reach into the engine: a camera or microphone stream the page already holds keeps running until the page stops it or the tab closes.
+    /// </summary>
+    public int Reset(IdentityContainer container, ContextId isolation, Uri origin, PermissionKind? kind = null)
+    {
+        var key = PermissionKey.For(container, isolation, origin);
+        if (PermissionKey.MayPersist(container)) return _repo.Delete(key, kind is null ? null : (int)kind);
+        var doomed = _memory.Keys.Where(k => k.Key == key && (kind is null || k.Kind == kind)).ToList();
+        foreach (var k in doomed) _memory.Remove(k);
+        return doomed.Count;
+    }
+
     internal int SessionGrantCount(IdentityContainer container, ContextId isolation) =>
         _memory.Keys.Count(k => k.Key.StartsWith($"{container}:{isolation}|", StringComparison.Ordinal));
 

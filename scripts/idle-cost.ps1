@@ -37,6 +37,7 @@ param(
     [string]$AgentLoad = ''
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'ProcessScope.ps1')
 . (Join-Path $PSScriptRoot 'env.ps1') | Out-Null
 
 $rootFull = [IO.Path]::GetFullPath($Root).TrimEnd('\')
@@ -183,6 +184,5 @@ try {
 }
 finally {
     # Children first, then the app: only what THIS script started.
-    foreach ($id in (Get-Descendants $proc.Id)) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
-    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    Stop-OwnedProcesses (Get-OwnedProcesses $proc)   # id AND start time (scripts\ProcessScope.ps1)
 }

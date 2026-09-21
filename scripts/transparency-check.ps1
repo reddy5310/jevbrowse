@@ -22,6 +22,7 @@ param(
     [string]$Configuration = 'debug'
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'ProcessScope.ps1')
 $script:exitCode = 3
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Drawing
 Add-Type @'
@@ -109,7 +110,7 @@ function Get-Tree([int]$rootPid) {
     while ($q.Count) { $p = $q.Dequeue(); foreach ($c in ($all | Where-Object { $_.ParentProcessId -eq $p })) { if (-not $found.Contains([int]$c.ProcessId)) { $found.Add([int]$c.ProcessId); $q.Enqueue([int]$c.ProcessId) } } }
     $found
 }
-function Stop-Ours($proc) { foreach ($id in (Get-Tree $proc.Id)) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }; Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+function Stop-Ours($proc) { Stop-OwnedProcesses (Get-OwnedProcesses $proc) }   # id AND start time (scripts\ProcessScope.ps1)
 function New-Data([string]$tag, [string]$theme) {
     $d = Join-Path $rootFull ('tr-{0}-{1}' -f $tag, [guid]::NewGuid().ToString('N').Substring(0, 8)); New-Item -ItemType Directory $d | Out-Null
     '{"firstRunDone":true}' | Set-Content "$d\settings.json" -Encoding ascii

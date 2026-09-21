@@ -49,6 +49,9 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
     public Action<ResourceId>? OnCoreDisposed { get; set; }
     /// <summary>A page asked for a new window: (the page, where to, the person clicked or typed, it is an agent's page).</summary>
     public Action<ResourceId, Uri?, bool, bool>? OnPopupRequested { get; set; }
+    /// <summary>A page started a download: (the page, file name, where from, it is an agent's page) → allow it? Asked before anything is saved.</summary>
+    public Func<ResourceId, string, Uri?, bool, Task<bool>>? OnDownloadRequested { get; set; }
+    public string? DownloadPathOverride { get; set; }
     /// <summary>Resolves jev:// URLs to locally generated HTML (welcome/help). No network involved.</summary>
     public Func<Uri, string?>? LocalPage { get; set; }
 
@@ -113,6 +116,8 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
             // In force before the first Navigate below, so an allowed URL that redirects out of scope is stopped.
             if (_navPolicies.TryGetValue(id, out var policy)) lease.NavigationGuard = policy;
             lease.PopupRequested = (target, userInitiated, agent) => OnPopupRequested?.Invoke(id, target, userInitiated, agent);
+            lease.DownloadGate = (name, source, agent) => OnDownloadRequested is { } ask ? ask(id, name, source, agent) : Task.FromResult(true);
+            lease.DownloadPathOverride = DownloadPathOverride;
             // Before anything else reacts: an environment whose browser process died cannot create new controls, so forget it NOW (the environment's own
             // exit event can arrive later than the failure that triggers the page's recovery).
             lease.EngineFailed += f => { if (f.WholeEngine) _envs.Remove(key); };
@@ -345,13 +350,34 @@ public sealed class WebView2Lease : IRendererLease
         core.IsDocumentPlayingAudioChanged += (_, _) => lease.SetDetected(ProtectionFlags.Audible, core.IsDocumentPlayingAudio);
         core.DownloadStarting += (_, e) =>
         {
-            lease._activeDownloads++;
-            lease.SetDetected(ProtectionFlags.DownloadActive, true);
-            e.DownloadOperation.StateChanged += (d, _) =>
+            var gate = lease.DownloadGate;
+            var deferral = gate is null ? null : e.GetDeferral();
+            void Track()
             {
-                if (d.State == CoreWebView2DownloadState.InProgress) return;
-                if (--lease._activeDownloads <= 0) { lease._activeDownloads = 0; lease.SetDetected(ProtectionFlags.DownloadActive, false); }
-            };
+                lease._activeDownloads++;
+                lease.SetDetected(ProtectionFlags.DownloadActive, true);
+                e.DownloadOperation.StateChanged += (d, _) =>
+                {
+                    if (d.State == CoreWebView2DownloadState.InProgress) return;
+                    if (--lease._activeDownloads <= 0) { lease._activeDownloads = 0; lease.SetDetected(ProtectionFlags.DownloadActive, false); }
+                };
+            }
+            if (gate is null) { Track(); return; }
+            // The person (or the policy) is asked BEFORE anything is written. Cancel and failure both mean nothing is saved.
+            var pending = Decide();   // observed inside: it never throws
+            async Task Decide()
+            {
+                try
+                {
+                    var name = Path.GetFileName(e.ResultFilePath ?? "") is { Length: > 0 } n ? n : "a file";
+                    Uri.TryCreate(e.DownloadOperation.Uri, UriKind.Absolute, out var source);
+                    if (!await gate(name, source, lease.NavigationGuard is not null)) { e.Cancel = true; return; }
+                    if (lease.DownloadPathOverride is { } path) { e.ResultFilePath = Path.Combine(path, Path.GetFileName(e.ResultFilePath ?? "download.bin")); e.Handled = true; }
+                    Track();
+                }
+                catch (Exception) { try { e.Cancel = true; } catch (Exception) { } }
+                finally { try { deferral!.Complete(); } catch (Exception) { } }
+            }
         };
         void OnCoreMessage(CoreWebView2 _, CoreWebView2WebMessageReceivedEventArgs e)
         {
@@ -759,6 +785,10 @@ public sealed class WebView2Lease : IRendererLease
     public event Action<EngineFailure>? EngineFailed;
     /// <summary>(address, the person did it with a click or key, this is an agent's page). Set by the manager.</summary>
     public Action<Uri?, bool, bool>? PopupRequested { get; set; }
+    /// <summary>(file name, where from, this is an agent's page) → may it be saved? Set by the manager; null = no question is asked.</summary>
+    public Func<string, Uri?, bool, Task<bool>>? DownloadGate { get; set; }
+    /// <summary>Measurement only: save into this folder without the engine's own save UI.</summary>
+    public string? DownloadPathOverride { get; set; }
     // ---- live capture and calls, per document ----
     //
     // Keyed by the reporting document, never by the tab: a tab can hold a top-level page and several frames, each
@@ -869,6 +899,7 @@ public sealed class WebView2Lease : IRendererLease
         Loaded = null;
         EngineFailed = null;
         PopupRequested = null;
+        DownloadGate = null;
     }
 
     internal void DropFrameMedia(CoreWebView2Frame frame)

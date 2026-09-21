@@ -42,6 +42,7 @@ param(
     [switch]$Shots
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'ProcessScope.ps1')
 $script:exitCode = 3
 
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Drawing, System.Windows.Forms
@@ -105,8 +106,7 @@ function Get-Descendants([int]$rootPid) {
 }
 function Stop-OurTree {
     # Children first, then the app. Nothing that is not a descendant of the process WE started is ever touched.
-    foreach ($id in (Get-Descendants $proc.Id)) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
-    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    Stop-OwnedProcesses (Get-OwnedProcesses $proc)   # id AND start time (scripts\ProcessScope.ps1)
 }
 
 try {

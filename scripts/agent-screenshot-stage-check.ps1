@@ -24,6 +24,7 @@ param(
     [int]$SaveEveryNth = 0
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'ProcessScope.ps1')
 $script:exitCode = 3
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Drawing
 Add-Type -ReferencedAssemblies System.Drawing @'
@@ -163,8 +164,7 @@ catch {
     elseif ($report.verdict -eq 'INCONCLUSIVE') { $script:exitCode = 2 }
 }
 finally {
-    foreach ($id in (Get-Tree $proc.Id)) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
-    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    Stop-OwnedProcesses (Get-OwnedProcesses $proc)   # id AND start time (scripts\ProcessScope.ps1)
 }
 $report | ConvertTo-Json -Depth 5
 exit $script:exitCode

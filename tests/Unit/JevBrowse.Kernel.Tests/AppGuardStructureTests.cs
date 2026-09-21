@@ -107,4 +107,30 @@ public class AppGuardStructureTests
         Assert.Contains("await _agentHost.StopEndpointAsync().WaitAsync(", closing);
         Assert.DoesNotContain(".GetAwaiter().GetResult()", Read("..", "JevBrowse.AgentGateway", "LocalAgentHost.cs").Replace("JevBrowse.App", ""));
     }
+
+    [Fact]
+    public void Downloads_are_asked_about_for_private_sessions_and_never_allowed_for_agent_pages()
+    {
+        var d = Body(Read("MainWindow.SiteData.cs"), "private async Task<bool> ConfirmDownloadAsync(");
+        Assert.Contains("if (agentPage) return false;", d);
+        Assert.Contains("IsEphemeral()", d);
+        Assert.Contains("stays on your computer after the Private session ends", Read("MainWindow.SiteData.cs"));
+        Assert.Contains("lease.DownloadGate = ", Read("Renderer", "WebView2LeaseManager.cs"));
+    }
+
+    [Fact]
+    public void The_resume_point_is_never_written_for_private_or_disposable_tabs_and_holds_ids_only()
+    {
+        var w = Body(Read("MainWindow.SiteData.cs"), "private void RememberResumePoint(");
+        Assert.Contains("ContainerOf(t).IsEphemeral()) return;", w);
+        Assert.DoesNotContain("Url", w);
+    }
+
+    [Fact]
+    public void A_missing_WebView2_runtime_is_checked_before_anything_needs_it_and_explained()
+    {
+        var src = Read("MainWindow.xaml.cs");
+        Assert.True(src.IndexOf("WebView2RuntimeAvailable(out var runtimeProblem)", StringComparison.Ordinal) < src.IndexOf("await InitAsync();", StringComparison.Ordinal));
+        Assert.Contains("go.microsoft.com/fwlink/p/?LinkId=2124703", src);
+    }
 }

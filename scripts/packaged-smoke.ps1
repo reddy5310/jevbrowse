@@ -133,6 +133,25 @@ if (-not $SkipRecovery) {
     if ($LASTEXITCODE -eq 2) { $inconclusive = $true }
 }
 
+# ---- the private-alpha additions against THIS build (each wait has a timeout; a timeout is a failure, never a pass)
+Write-Host '[additions: restart resume, missing WebView2 runtime, permissions, clear data, Private download prompt]'
+foreach ($n in (Get-ChildItem Env: | Where-Object { $_.Name -like 'JEVBROWSE_*' -or $_.Name -like 'WEBVIEW2_*' }).Name) { Remove-Item "Env:\$n" }
+& powershell -NoProfile -File (Join-Path $PSScriptRoot 'additions-check.ps1') -ExePath $exe -Root (Join-Path $run 'additions') | Select-Object -Last 2 | ForEach-Object { Write-Host "  $_" }
+Check 'restart resume and missing-runtime checks passed on the packaged build' ($LASTEXITCODE -eq 0) "exit $LASTEXITCODE"
+if ($LASTEXITCODE -eq 2) { $script:inconclusive = $true }
+$ad = Join-Path $run 'additions-engine'; New-Item -ItemType Directory -Path "$ad\benchmarks" -Force | Out-Null
+'{"firstRunDone":true}' | Set-Content "$ad\settings.json" -Encoding ascii
+$env:JEVBROWSE_DATA_DIR = $ad; $env:JEVBROWSE_NO_FILTER_UPDATE = '1'; $env:JEVBROWSE_AI = '0'; $env:JEVBROWSE_MODE = 'Simple'
+$pa = Start-Process $exe -ArgumentList '--additions-check' -PassThru
+$done = $pa.WaitForExit(150000)
+if (-not $done) { Stop-Process -Id $pa.Id -Force }   # $pa is a handle we hold, so its id cannot have been reused
+$resFile = "$ad\benchmarks\additions-check.json"
+if ($done -and (Test-Path $resFile)) {
+    $r = Get-Content $resFile -Raw | ConvertFrom-Json
+    Check 'permission reset, per-profile data clearing, Private-download prompt and the recorded popup-login behaviour (engine checks)' ($r.pass -eq $true) "$(@($r.steps).Count) steps; failed: $((@($r.steps | Where-Object { -not $_.ok }) | ForEach-Object { $_.name }) -join '; ')"
+} else { Check 'permission reset, per-profile data clearing, Private-download prompt and the recorded popup-login behaviour (engine checks)' $false 'timed out or produced no result (a failure, not a pass)' }
+Remove-Item Env:\JEVBROWSE_DATA_DIR, Env:\JEVBROWSE_NO_FILTER_UPDATE, Env:\JEVBROWSE_AI, Env:\JEVBROWSE_MODE -ErrorAction SilentlyContinue
+
 $failed = @($results.GetEnumerator() | Where-Object { -not $_.Value.pass }).Count
 $verdict = if ($inconclusive -and $failed -eq 0) { 'INCONCLUSIVE' } elseif ($failed) { 'FAIL' } else { 'PASS' }
 [ordered]@{ verdict = $verdict; zip = $Zip; sha256 = (Get-FileHash $Zip -Algorithm SHA256).Hash.ToLower(); commit = $build.commit; version = $build.version; defaultDataLocation = [bool]$DefaultData

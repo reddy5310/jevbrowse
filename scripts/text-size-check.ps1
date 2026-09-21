@@ -24,6 +24,7 @@ param(
     [string]$Configuration = 'debug'
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'ProcessScope.ps1')
 $script:exitCode = 3
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Drawing
 Add-Type @'
@@ -113,7 +114,7 @@ function Get-Tree([int]$rootPid) {
     while ($q.Count) { $p = $q.Dequeue(); foreach ($c in ($all | Where-Object { $_.ParentProcessId -eq $p })) { if (-not $found.Contains([int]$c.ProcessId)) { $found.Add([int]$c.ProcessId); $q.Enqueue([int]$c.ProcessId) } } }
     $found
 }
-function Stop-Ours($proc) { foreach ($id in (Get-Tree $proc.Id)) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }; Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+function Stop-Ours($proc) { Stop-OwnedProcesses (Get-OwnedProcesses $proc) }   # id AND start time (scripts\ProcessScope.ps1)
 
 # What the app itself reports it sees, so a setting that never reached the app is INCONCLUSIVE, not "fine at that size".
 function New-Data([string]$tag) {

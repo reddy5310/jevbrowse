@@ -43,7 +43,7 @@ See [FIRST_RELEASE_PLAN.md](FIRST_RELEASE_PLAN.md) for the ten review findings (
 | Release ZIP + checksum + SBOM | Ready to run | `scripts/release.ps1`; smoke: `scripts/packaged-smoke.ps1` |
 | Packaged smoke on the extracted ZIP | Open (run at the freeze) | |
 | Clean Windows account / VM run, offline, missing runtime | **Blocked** | Needs you or a VM |
-| Downloads/uploads, real sign-in persistence | Open | Private-session downloads go to the ordinary Downloads folder |
+| Downloads/uploads, real sign-in persistence | Open (clean-Windows checklist rows 3, 5, 6) | Private-session downloads now ask first |
 | Release notes: commit, checksum, prerequisites, data location, backup, limitations | Open (template in the plan) | |
 
 ## 3. Everyday browsing

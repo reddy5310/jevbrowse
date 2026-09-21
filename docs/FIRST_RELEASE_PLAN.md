@@ -29,7 +29,7 @@ Sensitive re-class left the checkpoint pointing at a deleted preview; the agent'
 | Startup, first run, restore | **Done** | Gated, observed, bounded. Not yet run offline on a clean machine |
 | Address bar, navigation, popups | **Done (this pass)** | OAuth pop-ups that need `window.opener` open as ordinary tabs and will not report back |
 | Tab lifecycle, restore, scheduler, crash recovery | **Done** | Real-engine crash recovery now covered |
-| Privacy: data classes, Private sessions, Shield | **Done** | Private-session downloads go to the ordinary Downloads folder: **Open** |
+| Privacy: data classes, Private sessions, Shield | **Done** | Private-session downloads now ask first (the file outlives the session); permissions can be reset; website data can be cleared per profile |
 | Storage: migrations, crash, upgrade, damage, newer DB | **Done** | Power loss not simulated |
 | Agents (Navigate/Read/Click/Type/Screenshot) | **Done for an experimental alpha** | Screenshot stays experimental and off by default. If a further agent defect appears, ship with the agent endpoint off |
 | Packaging | **Partial** | `scripts/release.ps1` (self-contained portable ZIP, SBOM, checksums) and now `scripts/packaged-smoke.ps1`. Unsigned, no installer, no auto-update |
@@ -54,6 +54,11 @@ Sensitive re-class left the checkpoint pointing at a deleted preview; the agent'
 
 ## 4. Known limitations to state in the alpha notes
 
-Unsigned (SmartScreen will warn); portable only, no installer or updates; pop-ups from sign-in flows that need their opener do not report back; downloads use the
-ordinary Downloads folder even from a Private session; Screenshot is experimental and its "never visible even briefly" claim is unproven; display scaling above
+Unsigned (SmartScreen will warn); portable only, no installer or updates; **popup-based sign-in is not supported** (the sign-in window opens as a tab without an opener and cannot
+return to the page); a Private-session download is asked about, and a saved file stays after the session ends; clearing website data is per identity profile, not per site; Screenshot is experimental and its "never visible even briefly" claim is unproven; display scaling above
 100%, high contrast and a screen reader are untested; one Windows machine and one WebView2 version were used; power loss can lose the last few saved changes.
+
+## 5. Private-alpha additions (0.1.0-alpha.2)
+
+Site permissions (see, reset), clear website data (per profile), resume the previous ordinary workspace and tab, Private-session download prompt, and a documented decision on
+popup sign-in (unsupported; recorded by a check). The short manual gate for the clean machine is [CLEAN_WINDOWS_CHECKLIST.md](CLEAN_WINDOWS_CHECKLIST.md).

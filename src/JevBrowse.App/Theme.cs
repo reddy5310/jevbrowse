@@ -10,7 +10,7 @@ public enum ThemePreference { Dark, Light, System }
 /// Small, non-secret interface preferences. One file, read and written whole, so saving one setting can never erase
 /// another (the earlier settings file was overwritten by first-run and lost everything else in it).
 /// </summary>
-public sealed record UiPrefs(bool SidebarCollapsed = false, ThemePreference Theme = ThemePreference.Dark)
+public sealed record UiPrefs(bool SidebarCollapsed = false, ThemePreference Theme = ThemePreference.Dark, string? LastWorkspace = null, string? LastTab = null)
 {
     private static string PathFor(string dataDir) => System.IO.Path.Combine(dataDir, "ui-prefs.json");
 
@@ -24,14 +24,15 @@ public sealed record UiPrefs(bool SidebarCollapsed = false, ThemePreference Them
             var r = d.RootElement;
             var theme = r.TryGetProperty("theme", out var t) && t.ValueKind == JsonValueKind.String
                         && Enum.TryParse<ThemePreference>(t.GetString(), true, out var parsed) ? parsed : ThemePreference.Dark;
-            return new UiPrefs(r.TryGetProperty("sidebarCollapsed", out var s) && s.ValueKind == JsonValueKind.True, theme);
+            string? Str(string name) => r.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+            return new UiPrefs(r.TryGetProperty("sidebarCollapsed", out var s) && s.ValueKind == JsonValueKind.True, theme, Str("lastWorkspace"), Str("lastTab"));
         }
         catch (Exception) { return new UiPrefs(); }
     }
 
     public void Save(string dataDir)
     {
-        try { File.WriteAllText(PathFor(dataDir), JsonSerializer.Serialize(new { sidebarCollapsed = SidebarCollapsed, theme = Theme.ToString().ToLowerInvariant() })); }
+        try { File.WriteAllText(PathFor(dataDir), JsonSerializer.Serialize(new { sidebarCollapsed = SidebarCollapsed, theme = Theme.ToString().ToLowerInvariant(), lastWorkspace = LastWorkspace, lastTab = LastTab })); }
         catch (Exception) { /* a preference, not data */ }
     }
 }

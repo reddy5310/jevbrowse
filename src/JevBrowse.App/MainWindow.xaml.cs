@@ -109,12 +109,20 @@ public sealed partial class MainWindow : Window
         // This starts inside the constructor. Let the constructor finish and the window come up first: a failure that happened before that could not show its dialog,
         // and quitting from inside the constructor tears the window down before it is activated.
         await Task.Yield();
+        if (!WebView2RuntimeAvailable(out var runtimeProblem))
+        {
+            await FatalStartupAsync("JevBrowse needs the Microsoft Edge WebView2 Runtime",
+                "JevBrowse shows web pages with the Microsoft Edge WebView2 Runtime, and it is not installed on this computer (or could not be started).\n\n"
+                + "Install it (free, from Microsoft), then start JevBrowse again. Your data is not affected.\n\nDetails: " + runtimeProblem,
+                new InvalidOperationException(runtimeProblem), "Get the WebView2 Runtime", "https://go.microsoft.com/fwlink/p/?LinkId=2124703");
+            return;
+        }
         try { await InitAsync(); }
         catch (UnsupportedDatabaseVersionException ex) { await FatalStartupAsync("Update JevBrowse to open this data", ex.Message, ex); }
         catch (Exception ex) { await FatalStartupAsync("JevBrowse could not finish starting", "Something went wrong while starting up. Your saved data was not changed by this message.\n\n" + ex.Message, ex); }
     }
 
-    private async Task FatalStartupAsync(string title, string message, Exception ex)
+    private async Task FatalStartupAsync(string title, string message, Exception ex, string? actionText = null, string? actionUrl = null)
     {
         try { File.WriteAllText(Path.Combine(DataDir, "startup-error.txt"), $"{DateTimeOffset.UtcNow:o}\n{ex}"); } catch (Exception) { }
         StatusText.Text = title;
@@ -122,7 +130,8 @@ public sealed partial class MainWindow : Window
         {
             for (var i = 0; i < 100 && Content.XamlRoot is null; i++) await Task.Delay(50);   // a dialog needs a window that is on screen
             Root.IsHitTestVisible = true;   // a dialog must be answerable
-            await new ContentDialog { Title = title, Content = new TextBlock { Text = message + "\n\nDetails were saved next to your data in startup-error.txt.", TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true }, CloseButtonText = "Quit", DefaultButton = ContentDialogButton.Close, XamlRoot = Content.XamlRoot }.ShowSerializedAsync();
+            var result = await new ContentDialog { Title = title, Content = new TextBlock { Text = message + "\n\nDetails were saved next to your data in startup-error.txt.", TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true }, PrimaryButtonText = actionText ?? "", CloseButtonText = "Quit", DefaultButton = ContentDialogButton.Close, XamlRoot = Content.XamlRoot }.ShowSerializedAsync();
+            if (result == ContentDialogResult.Primary && actionUrl is not null) { try { await Windows.System.Launcher.LaunchUriAsync(new Uri(actionUrl)); } catch (Exception) { } }
         }
         catch (Exception) { }
         _shutdownCheckpointDone = true;
@@ -226,6 +235,7 @@ public sealed partial class MainWindow : Window
         });
         _leases.OnCoreDisposed = id => { _shield.Detach(id); _dev.Detach(id); };
         _leases.OnPopupRequested = OnPopupRequested;
+        _leases.OnDownloadRequested = ConfirmDownloadAsync;
         if (!_filters.HasActiveLists && Environment.GetEnvironmentVariable("JEVBROWSE_NO_FILTER_UPDATE") is null)
         {
             // First run with no lists: do not hold the whole window hostage to the network. Wait a few seconds, then start; the download finishes and
@@ -336,6 +346,7 @@ public sealed partial class MainWindow : Window
         _leases.LocalPage = u => u.Scheme == "jev" && u.Host == "welcome" ? WelcomePage.Html(_providers.Any(p => p.IsConfigured), _jev?.IsConfigured == true) : null;
 
         var uiDialog = args.FirstOrDefault(a => a.StartsWith("--ui-dialog=", StringComparison.Ordinal)) is { } ud0 ? ud0["--ui-dialog=".Length..] : null;
+        if (args.Contains("--resume-seed")) _ = RunResumeSeedAsync();   // scripts/additions-check.ps1 then closes the app and starts it again
         if (args.Contains("--recovery-seed"))
             _ = RunRecoverySeedAsync();   // scripts/recovery-check.ps1 then kills or closes the app and inspects what is left
         if (args.FirstOrDefault(a => a.StartsWith("--idle-scenario=", StringComparison.Ordinal)) is { } idleScenario)
@@ -428,7 +439,7 @@ public sealed partial class MainWindow : Window
             });
         }
 
-        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--private-session-check") || args.Contains("--agent-check") || args.Contains("--agent-window-check") || args.Contains("--agent-screenshot-stage-check") || args.Contains("--agent-frame-secret-check") || args.Contains("--agent-show-during-capture-check") || args.Contains("--agent-indicator-check") || args.Contains("--idle-invariants-check") || args.Contains("--nav-check") || args.Contains("--media-check") || args.Contains("--site-sweep") || args.Any(a => a.StartsWith("--join=", StringComparison.Ordinal)))
+        if (args.Contains("--memory-lab") || args.Contains("--restore-bench") || args.Contains("--shield-check") || args.Contains("--memory-check") || args.Contains("--youtube-check") || args.Contains("--privacy-check") || args.Contains("--private-session-check") || args.Contains("--agent-check") || args.Contains("--agent-window-check") || args.Contains("--agent-screenshot-stage-check") || args.Contains("--agent-frame-secret-check") || args.Contains("--agent-show-during-capture-check") || args.Contains("--agent-indicator-check") || args.Contains("--idle-invariants-check") || args.Contains("--nav-check") || args.Contains("--additions-check") || args.Contains("--media-check") || args.Contains("--site-sweep") || args.Any(a => a.StartsWith("--join=", StringComparison.Ordinal)))
         {
             Directory.CreateDirectory(Path.Combine(DataDir, "benchmarks"));
             try
@@ -445,6 +456,7 @@ public sealed partial class MainWindow : Window
                 else if (args.Contains("--agent-indicator-check")) await RunAgentIndicatorCheckAsync();
                 else if (args.Contains("--idle-invariants-check")) await RunIdleInvariantsCheckAsync();
                 else if (args.Contains("--nav-check")) await RunNavCheckAsync();
+                else if (args.Contains("--additions-check")) await RunAdditionsCheckAsync();
                 else if (args.Contains("--privacy-check")) await RunPrivacyCheckAsync();
                 else if (args.Contains("--memory-lab")) await RunMemoryLabAsync();
                 else if (args.Contains("--restore-bench")) await RunRestoreBenchAsync();
@@ -465,9 +477,17 @@ public sealed partial class MainWindow : Window
         // Development and measurement only: lets a check open a known page (for example a deliberately animated one, as a
         // positive control for the idle-cost script) without a code change. Unset, behaviour is exactly as before.
         var startUrl = Environment.GetEnvironmentVariable("JEVBROWSE_START_URL");
-        if (!_kernel.TabsIn(_kernel.ActiveWorkspace).Any())
-            _kernel.Open(new Uri(!string.IsNullOrWhiteSpace(startUrl) && Uri.IsWellFormedUriString(startUrl, UriKind.Absolute) ? startUrl : firstRun ? WelcomePage.Url : "https://example.com"));
-        await _kernel.ActivateAsync(_kernel.TabsIn(_kernel.ActiveWorkspace).First().Id);
+        // Pick up where the person left off: the last ordinary workspace and its active tab, restored lazily (only that tab gets a renderer). A start URL from
+        // the environment (measurement only) always wins; anything missing falls back to the normal start.
+        var resume = string.IsNullOrWhiteSpace(startUrl) ? ResumeChoiceFromPrefs() : null;
+        if (resume is { Tab: { } resumeTab }) { await _kernel.ActivateAsync(resumeTab); }
+        else
+        {
+            if (resume is not null) await _kernel.SwitchWorkspaceAsync(resume.Workspace);
+            if (!_kernel.TabsIn(_kernel.ActiveWorkspace).Any())
+                _kernel.Open(new Uri(!string.IsNullOrWhiteSpace(startUrl) && Uri.IsWellFormedUriString(startUrl, UriKind.Absolute) ? startUrl : firstRun ? WelcomePage.Url : "https://example.com"));
+            await _kernel.ActivateAsync(_kernel.TabsIn(_kernel.ActiveWorkspace).First().Id);
+        }
         _ready = true;
         Root.IsHitTestVisible = true;
         StatusText.Text = "";
@@ -537,6 +557,7 @@ public sealed partial class MainWindow : Window
             // in the middle of typing (their text is never overwritten). Another tab's navigation, an agent's page in the background, never touches the bar.
             SetAddress(_kernel.Active.Url.ToString());
         }
+        if (e.Kind == "activated") RememberResumePoint();
         if (e.Kind is "activated" or "navigated" or "signals") { UpdateClassBadge(); UpdateEnvChrome(); }
         if (e.Kind is "activated" or "navigated") RefreshPanel();
         if (e.Kind is "activated" or "pinned" or "protection" or "loaded") UpdateTabControls();
@@ -3085,6 +3106,7 @@ public sealed partial class MainWindow : Window
                 }
                 var t = _kernel.OpenIn(src.WorkspaceId, target);
                 await _kernel.ActivateAsync(t.Id);
+                StatusText.Text = "Opened in a new tab. Pop-up sign-in windows that must report back to the page are not supported in this alpha.";
             }
             catch (Exception ex) { StatusText.Text = "Could not open the new window: " + ex.Message; }
         });
