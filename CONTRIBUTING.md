@@ -25,6 +25,18 @@ Read `docs/PRODUCT_CONSTITUTION.md` first. It is the contract every change is me
 | AgentGateway | scopes, page maps, quotas, audit | raw host access |
 | App | WinUI shell and WebView2 adapters | policy |
 
+## Your first change in ten minutes
+1. `.\scripts\dev.ps1 test` (about a minute), then `.\scripts\dev.ps1 run` to see the app.
+2. Pick something small and pure: `src/JevBrowse.Domain` has no dependencies (address input, bookmark import, zoom steps, search engines). Add a search engine to `SearchEngines.All` and a test beside `BookmarkAndSearchTests`, or make bookmark import understand another export format.
+3. `.\scripts\dev.ps1 check` before you open the PR.
+
+## How a change is checked
+- **A fix needs a regression that fails without the fix.** Show it: temporarily undo the fix, run the test, watch it fail, restore. (Twice this has caught a test that could never fail: a `javascript:` import test passed only because a different check caught it.)
+- **Privacy rules are tests, not comments.** If a feature records something (history, zoom, downloads), a test must show Private sessions, agent sessions and Sensitive pages leave nothing behind. `LibraryTests` is the pattern.
+- **Database changes are new migrations, never edits.** Add a step to `BrowserDb`; `UpgradeFromHistoricDatabasesTests` pins each released step by hash and upgrades real old database files.
+- **UI behaviour that needs the real engine** goes in a `--*-check` mode (`MainWindow.*Check.cs`) or a script in `scripts/`; every wait has a timeout, and a timeout is a failure, never a pass.
+- **Say what you did not verify** in the PR. "Tested by calling the same code path, not by clicking" is a fine sentence; leaving it out is not.
+
 ## Workflow
 1. `. .\scripts\env.ps1` (keeps SDK, caches and data on the drive you choose), `dotnet test`.
 2. Branch from `main`; one concern per PR.

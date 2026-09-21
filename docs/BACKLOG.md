@@ -6,12 +6,12 @@ Checked by searching the source, not from memory. "Not implemented" means no cod
 |---|---|---|
 | Preserve Back/Forward history when a tab sleeps and wakes | **Done as address-based replay (alpha.6)** | Saved with the tab; Back and Forward walk it by replacing the page (no engine API can recreate entries). `--history-check`, 13 steps. Not full session history: POST state, form state and per-entry scroll are not restored. A history containing any Sensitive address is kept in memory only |
 | Protect unfinished work during automatic sleep | **Done in alpha.3** | Gaps found and fixed: password-only typing, typing inside an iframe, upload in flight, long silent video. Already covered: typing, downloads, sound, camera, microphone, screen share, calls. `--protection-check` |
-| Download manager (progress, cancel/retry, Show in folder) | Not implemented | Only "a download is running" protection and the Private-session prompt exist |
-| Bookmarks (import/export) | Not implemented | |
-| Browsing-history screen | Not implemented | Browser Memory (searchable saved pages) and Time Travel (workspace contexts) are different things |
+| Download list with Show in folder | **Done (alpha.7 work)** | Finished and interrupted downloads, newest first; files are shown in their folder, never opened from the list. Private-session downloads are listed in memory only. Not built: live progress, cancel and retry |
+| Bookmarks (import) | **Done (alpha.7 work)** | Ctrl+D, searchable list, import from the HTML export every major browser writes (web addresses only). Not built: export, folders as a tree, a bookmarks bar |
+| Browsing-history screen | **Done (alpha.7 work)** | Ctrl+H; ordinary workspaces only, never Sensitive/Secret, Private or agent pages; per-entry Forget and Clear all |
 | Rename/delete ordinary workspaces | **Done (alpha.6)** | Deletion is terminal (Time Travel records removed; stale restore refused). Workspaces panel: Rename… and Delete… (Default and temporary sessions excluded), with a confirmation that states what is and is not deleted |
-| Open links from other applications, default-browser registration | Not implemented | No URL-scheme registration or single-instance hand-off |
-| Preferences: search engine, remembered memory mode, persistent per-site zoom | Not implemented | Search is fixed to DuckDuckGo (`AddressInput.SearchUrl`); no zoom code |
+| Open links from other applications, default-browser registration | **Done (alpha.7 work)** | Current-user registration, Windows still makes the person choose; one browser per data folder hands links to the running one. Verified with two real processes; registration verified against a scratch registry key, not by changing the real default |
+| Preferences: search engine, per-site zoom | **Done (alpha.7 work)** | Six built-in engines (fixed list on purpose); zoom on the browser ladder, remembered by exact host, applied as page zoom (differs on viewport-unit layouts). Not built: remembered memory mode |
 | Full-screen video | Not implemented; unverified | No full-screen handling exists. Behaviour with the engine defaults is untested |
 | Signed packaging, secure update path | Open | Unsigned portable ZIP only |
 | Display scaling, high contrast, screen reader | Open | Need your participation or approval |

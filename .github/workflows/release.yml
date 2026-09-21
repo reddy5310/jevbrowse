@@ -1,0 +1,52 @@
+name: Release
+
+# Builds the portable zip with scripts/release.ps1 (tests, self-contained publish, symbols zip, SBOM, SHA256SUMS).
+#  - Push a tag like v0.1.0-alpha.7  -> a GitHub pre-release with the files attached.
+#  - Run it by hand (workflow_dispatch) -> the same build, kept as a workflow artifact only; nothing is published.
+# The zip is UNSIGNED: there is no code-signing certificate yet, and the release notes say so.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version label for a manual (unpublished) build'
+        default: '0.0.0-manual'
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Work out the version
+        id: v
+        shell: pwsh
+        run: |
+          $v = if ('${{ github.ref_type }}' -eq 'tag') { '${{ github.ref_name }}'.TrimStart('v') } else { '${{ inputs.version }}' }
+          "version=$v" >> $env:GITHUB_OUTPUT
+      - name: Build the package
+        shell: pwsh
+        run: ./scripts/release.ps1 -Version ${{ steps.v.outputs.version }}
+      - name: Keep the files
+        uses: actions/upload-artifact@v4
+        with:
+          name: JevBrowse-${{ steps.v.outputs.version }}
+          path: artifacts/release/${{ steps.v.outputs.version }}/*.*
+      - name: Publish a pre-release (tags only)
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $d = "artifacts/release/${{ steps.v.outputs.version }}"
+          gh release create "${{ github.ref_name }}" --prerelease --title "JevBrowse ${{ steps.v.outputs.version }}" `
+            --notes "Unsigned alpha. Check the SHA-256 in SHA256SUMS.txt before running. What changed and what is not proven: docs/releases/ and docs/EVIDENCE_MATRIX.md." `
+            "$d/JevBrowse-${{ steps.v.outputs.version }}-win-x64.zip" "$d/SHA256SUMS.txt" "$d/sbom-packages.json" "$d/JevBrowse-${{ steps.v.outputs.version }}-win-x64-symbols.zip"
