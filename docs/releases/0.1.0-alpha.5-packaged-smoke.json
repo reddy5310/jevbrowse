@@ -1,0 +1,88 @@
+﻿{
+    "verdict":  "PASS",
+    "zip":  "D:\\Browser\\jevbrowse\\artifacts\\release\\0.1.0-alpha.5\\JevBrowse-0.1.0-alpha.5-win-x64.zip",
+    "sha256":  "6ab03725ae346c7d43a1f630979688e69ab3236f2af01d85aedf5d9e8ebc1baf",
+    "commit":  "a10e3b510db96a937374ba307576c5761db64738",
+    "version":  "0.1.0-alpha.5",
+    "defaultDataLocation":  false,
+    "at":  "2026-09-21T18:05:21.3697261Z",
+    "machine":  "Microsoft Windows NT 10.0.26200.0, 16 logical cores",
+    "results":  {
+                    "zip matches its published SHA-256":  {
+                                                              "pass":  true,
+                                                              "detail":  "6ab03725ae346c7d43a1f630979688e69ab3236f2af01d85aedf5d9e8ebc1baf"
+                                                          },
+                    "the zip contains the app":  {
+                                                     "pass":  true,
+                                                     "detail":  ""
+                                                 },
+                    "BUILD.json records the commit and version":  {
+                                                                      "pass":  true,
+                                                                      "detail":  "0.1.0-alpha.5 a10e3b510db96a937374ba307576c5761db64738"
+                                                                  },
+                    "no development leftovers (.env, dev settings, debug symbols) in the package":  {
+                                                                                                        "pass":  true,
+                                                                                                        "detail":  ""
+                                                                                                    },
+                    "first launch shows a window":  {
+                                                        "pass":  true,
+                                                        "detail":  ""
+                                                    },
+                    "the welcome page is showing":  {
+                                                        "pass":  true,
+                                                        "detail":  "Help and welcome"
+                                                    },
+                    "the first-run tips appear on a first launch":  {
+                                                                        "pass":  true,
+                                                                        "detail":  ""
+                                                                    },
+                    "the window closes by itself":  {
+                                                        "pass":  true,
+                                                        "detail":  ""
+                                                    },
+                    "first-run is remembered after the tips":  {
+                                                                   "pass":  true,
+                                                                   "detail":  ""
+                                                               },
+                    "second launch shows a window":  {
+                                                         "pass":  true,
+                                                         "detail":  ""
+                                                     },
+                    "no first-run tips the second time":  {
+                                                              "pass":  true,
+                                                              "detail":  ""
+                                                          },
+                    "the saved tab is back":  {
+                                                  "pass":  true,
+                                                  "detail":  "Welcome to JevBrowse. open • local page."
+                                              },
+                    "a launch with no reachable network shows a window":  {
+                                                                              "pass":  true,
+                                                                              "detail":  ""
+                                                                          },
+                    "it stays up (does not hang or crash)":  {
+                                                                 "pass":  true,
+                                                                 "detail":  ""
+                                                             },
+                    "recovery checks passed on the packaged build":  {
+                                                                         "pass":  true,
+                                                                         "detail":  "exit 0"
+                                                                     },
+                    "restart resume and missing-runtime checks passed on the packaged build":  {
+                                                                                                   "pass":  true,
+                                                                                                   "detail":  "exit 0"
+                                                                                               },
+                    "permission reset, per-profile data clearing, Private-download prompt and the recorded popup-login behaviour (engine checks)":  {
+                                                                                                                                                        "pass":  true,
+                                                                                                                                                        "detail":  "16 steps; failed: "
+                                                                                                                                                    },
+                    "unfinished work keeps a tab awake (password-only typing, iframe typing, upload, silent video)":  {
+                                                                                                                          "pass":  true,
+                                                                                                                          "detail":  "19 steps; failed: "
+                                                                                                                      },
+                    "Back and Forward keep working after a tab sleeps and wakes":  {
+                                                                                       "pass":  true,
+                                                                                       "detail":  "13 steps; failed: "
+                                                                                   }
+                }
+}
