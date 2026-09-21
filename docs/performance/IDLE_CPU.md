@@ -73,6 +73,14 @@ Warm-up 30 s, sampling 60 s. Medians, with min to max in brackets; percent of on
   tree), and this scenario also holds memory that `idle-cost.ps1 -AgentLoad` reports. GPU was still reading about 0.
 - Run-to-run variation of the fixed build: shell spread 0.08 to 0.25 points, WebView2 up to 0.5, on this machine, this session.
 
+## First hosted-runner result (CI run for `c4037b1`, report-only)
+
+The `idle-cpu` job ran on a GitHub-hosted runner (Windows Server 2025, EPYC 7763, 2 logical cores, Release self-contained build, 3 runs, 20 s warm-up, 40 s
+sampling) and **all 15 runs were valid** and the positive control was detected (busy page 21-27% WebView2 CPU, about 1.7-1.9% GPU, against 0.2-0.4% for
+static). Shell CPU read 0.2-0.5% across scenarios. These numbers are **not comparable** with the table above (different machine, Release build, different
+warm-up and sampling), and three runs per scenario is the minimum, so the job publishes them and decides nothing. It is `continue-on-error`, so an
+unusable desktop on a future runner image would show up as inconclusive runs, not as a failed merge.
+
 ## What went wrong along the way (kept, because it is the evidence the harness can be trusted)
 
 1. **Silent GPU zeros.** A first campaign (`fixedA/B`, `regressA/B`, not published as results) read GPU as 0 for the busy page too, because counter objects
