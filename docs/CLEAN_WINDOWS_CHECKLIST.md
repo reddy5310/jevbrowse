@@ -14,7 +14,7 @@ FAIL, what you saw. Nothing here needs the source code.
 | 4 | Click a link that opens in a new tab (`target=_blank`). | It opens as a tab. (Pop-up **sign-in** windows that must return to the page are not supported in this alpha.) |
 | 5 | Download a file from an ordinary tab, then upload a file (any site with an upload button). | Both work; the file lands where you chose. |
 | 6 | Close the window normally, start it again. | The same tab is in front, you are still signed in, and only that tab is awake (others load when opened). |
-| 7 | **Site permissions:** on a site that asks for camera, microphone or location, allow it "always". Then **This tab ▾ ▸ Site permissions…** and press **Reset**. Reload. | The permission was listed; after Reset the site asks again. |
+| 7 | **Site permissions:** on a site that asks for camera, microphone or location, choose **For 1 hour** (the prompt offers "Just this time" or "For 1 hour"; only the latter is remembered). Then **This tab ▾ ▸ Site permissions…** and press **Reset**. Reload. | The permission was listed; after Reset the site asks again. |
 | 8 | **This tab ▾ ▸ Clear website data…**, read the dialog, choose Cancel once; then clear. | The dialog names the profile, says you will be signed out, and that downloads and Browser Memory are not deleted. After clearing you are signed out; downloaded files are still there. |
 | 9 | Start a **Private** session (Product mode ▸ Private). Open a site. Download a file. | A prompt says the file stays after the session ends. Cancel saves nothing; Continue uses the normal save dialog. |
 | 10 | With the Private session still open, close the window. Start JevBrowse again. | No Private tabs or data come back; the ordinary tab you had is in front. |

@@ -685,7 +685,8 @@ public sealed class TabKernel
         {
             var ws = _workspaceList.FirstOrDefault(w => w.Id == workspace);
             if (ws is null && _endedPrivateSessions.Contains(workspace)) return;
-            if (ws?.Container != IdentityContainer.Private) throw new InvalidOperationException("Not a private session.");
+            // A Private session, or an agent's Disposable workspace: both leave nothing behind, and once over neither may be selected again.
+            if (ws is null || !ws.Container.IsEphemeral()) throw new InvalidOperationException("Not a private session.");
             RequireOpenWorkspace(returnWorkspace);
             if (workspace == returnWorkspace) throw new InvalidOperationException("Choose another workspace to return to.");
             _endedPrivateSessions.Add(workspace); // before any await: late callbacks cannot recreate state

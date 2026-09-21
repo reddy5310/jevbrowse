@@ -133,4 +133,43 @@ public class AppGuardStructureTests
         Assert.True(src.IndexOf("WebView2RuntimeAvailable(out var runtimeProblem)", StringComparison.Ordinal) < src.IndexOf("await InitAsync();", StringComparison.Ordinal));
         Assert.Contains("go.microsoft.com/fwlink/p/?LinkId=2124703", src);
     }
+
+    [Fact]
+    public void Typing_is_unfinished_work_until_its_document_is_replaced_not_until_it_finishes_loading()
+    {
+        var lease = Read("Renderer", "WebView2LeaseManager.cs");
+        var completed = Regex.Match(lease, @"core\.NavigationCompleted \+= \(_, _\) => \{[^
+]*\};").Value;
+        Assert.DoesNotContain("DirtyForm", completed);
+        Assert.Matches(@"OnContentLoading\(CoreWebView2 _, CoreWebView2ContentLoadingEventArgs __\) \{[^
+]*ClearDetected\(ProtectionFlags\.DirtyForm\)", lease);
+    }
+
+    [Fact]
+    public void A_buffering_video_stays_protected_and_video_free_pages_run_no_timer()
+    {
+        var lease = Read("Renderer", "WebView2LeaseManager.cs");
+        Assert.DoesNotContain("readyState < 3", lease);
+        Assert.DoesNotContain("setInterval(() => { if (videoOn || document.querySelector('video')) syncVideo(); }, 4000);", lease);   // an unconditional timer in every document
+        Assert.Contains("if (videoOn && !videoTimer) videoTimer = setInterval(", lease);
+    }
+
+    [Fact]
+    public void Finished_agent_cleanup_uses_the_real_container_retires_the_workspace_and_only_counts_deleted_profiles_as_done()
+    {
+        var w = Body(Read("MainWindow.xaml.cs"), "private async Task EndFinishedAgentProfilesAsync(");
+        Assert.DoesNotContain("IdentityContainer.Disposable", w);
+        Assert.Contains("EndPrivateSessionAsync(s.WorkspaceId", w);
+        Assert.Contains("if (result.RenderersClosed && result.ProfileDataDeleted) _agentCleanupDone.Add(s.Id);", w);
+        Assert.DoesNotContain("_agentProfilesEnded", Read("MainWindow.xaml.cs"));
+        Assert.Contains("_ = EndFinishedAgentProfilesAsync();", Body(Read("MainWindow.xaml.cs"), "private async Task SchedulerTickAsync("));   // retried
+    }
+
+    [Fact]
+    public void Show_its_page_and_tab_selection_handle_a_stopped_agent_safely()
+    {
+        var agents = Read("MainWindow.Agents.cs");
+        Assert.Contains("session0.Closed || session0.CleanedUp", agents);
+        Assert.Contains("That page belonged to a session that has ended.", Read("MainWindow.xaml.cs"));
+    }
 }

@@ -30,8 +30,10 @@ public sealed partial class MainWindow
                 HttpListenerContext c; try { c = await listener.GetContextAsync(); } catch (Exception) { break; }
                 var path = c.Request.Url!.AbsolutePath;
                 if (path == "/slow") { try { using var _ = c.Request.InputStream; await Task.Delay(7000); } catch (Exception) { } try { c.Response.StatusCode = 200; c.Response.Close(); } catch (Exception) { } continue; }
+                if (path == "/slowimg") { try { await Task.Delay(6000); c.Response.ContentType = "image/gif"; var gif = Convert.FromBase64String("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"); c.Response.ContentLength64 = gif.Length; await c.Response.OutputStream.WriteAsync(gif); c.Response.Close(); } catch (Exception) { } continue; }
                 var body = path switch
                 {
+                    "/late" => "<!doctype html><title>late</title><input id=i style='margin:30px;width:300px;height:30px'><img src='/slowimg' width=1 height=1>",
                     "/idle" => "<!doctype html><title>idle</title><p>nothing to lose here</p>",
                     "/pw" => "<!doctype html><title>pw</title><input id=p type=password style='margin:30px;width:300px;height:30px'>",
                     "/frame" => "<!doctype html><title>frame</title><iframe src='/pw' style='position:absolute;left:20px;top:20px;width:400px;height:200px;border:0'></iframe>",
@@ -98,6 +100,21 @@ public sealed partial class MainWindow
             Step("…and the scheduler is refused", !upSleep.Allowed, upSleep.Reason);
             Step("…and it is released when the upload finishes", await Until(() => !Has(up, ProtectionFlags.UploadActive), 20000), up.Protection.ToString());
 
+            // typing while the page is STILL LOADING must survive the load finishing
+            var late = await Open("/late");
+            await Click(Lease(late), 100, 70);
+            await Lease(late).View.CoreWebView2.CallDevToolsProtocolMethodAsync("Input.insertText", JsonSerializer.Serialize(new { text = "typed during load" }));
+            var typedWhileLoading = await Until(() => Has(late, ProtectionFlags.DirtyForm), 4000);
+            var stillLoading = JsonSerializer.Deserialize<string>(await Lease(late).View.CoreWebView2.ExecuteScriptAsync("document.readyState")) != "complete";
+            Step("typing while the page is still loading is unfinished work", typedWhileLoading && stillLoading, $"{late.Protection}; loading={stillLoading}");
+            for (var i = 0; i < 150; i++)   // an async wait: blocking here would deadlock the window's own thread
+            {
+                if (JsonSerializer.Deserialize<string>(await Lease(late).View.CoreWebView2.ExecuteScriptAsync("document.readyState")) == "complete") break;
+                await Task.Delay(100);
+            }
+            await Task.Delay(1500);
+            Step("…and it is STILL protected after the load completes", Has(late, ProtectionFlags.DirtyForm), late.Protection.ToString());
+
             // silent video
             var vid = await Open("/vid");
             await Lease(vid).View.CoreWebView2.ExecuteScriptAsync("window.startVideo()");
@@ -107,7 +124,34 @@ public sealed partial class MainWindow
             Step("…and the scheduler is refused", !vidSleep.Allowed, vidSleep.Reason);
             await k.ActivateAsync(vid.Id);
             await Lease(vid).View.CoreWebView2.ExecuteScriptAsync("window.stopVideo()");
+            // buffering: the engine reports "not enough data" while playing; that is not a pause
+            await Lease(vid).View.CoreWebView2.ExecuteScriptAsync("window.startVideo(); Object.defineProperty(document.getElementById('v'), 'readyState', { get: () => 2 });");
+            await Task.Delay(10000);   // more than two polling periods
+            Step("a playing video that is buffering stays protected", Has(vid, ProtectionFlags.VideoPlaying), vid.Protection.ToString());
+            await Lease(vid).View.CoreWebView2.ExecuteScriptAsync("window.stopVideo()");
             Step("…and it is released when the video is paused", await Until(() => !Has(vid, ProtectionFlags.VideoPlaying), 12000), vid.Protection.ToString());
+
+            // stopped agents, in both grantable containers: retired, profile deleted, nothing selectable, the person undisturbed
+            var ephemeralRoot = Path.Combine(DataDir, "profiles", "ephemeral");
+            int Dirs() => Directory.Exists(ephemeralRoot) ? Directory.GetDirectories(ephemeralRoot).Length : 0;
+            foreach (var container in new[] { IdentityContainer.Disposable, IdentityContainer.Private })
+            {
+                await k.ActivateAsync(parked.Id);
+                var baseline = Dirs();
+                var ceiling = new JevBrowse.AgentGateway.AgentCeiling { Limits = new JevBrowse.AgentGateway.AgentManifest { Agent = "ceiling", AllowDomains = ["127.0.0.1"], Actions = [AgentAction.Navigate, AgentAction.Read], SessionMinutes = 10, MaxLivePages = 2, Container = container } };
+                _agentHost = new JevBrowse.AgentGateway.LocalAgentHost(_agents!, ceiling);
+                var (session, _) = await _agentHost.GrantAsync(new JevBrowse.AgentGateway.AgentManifest { Agent = "retire-check", AllowDomains = ["127.0.0.1"], Actions = [AgentAction.Navigate, AgentAction.Read], SessionMinutes = 10, MaxLivePages = 2, Container = container });
+                var nav = await _agents!.ExecuteAsync(session, new JevBrowse.AgentGateway.AgentRequest(AgentAction.Navigate, U("/idle")), default);
+                var agentTab = k.Tabs.FirstOrDefault(t => session.Pages.Contains(t.Id));
+                var wsContainer = k.Workspaces.FirstOrDefault(w => w.Id == session.WorkspaceId)?.Container;
+                Step($"[{container}] the agent worked in a workspace of that container", nav.Ok && agentTab is not null && wsContainer == container && Dirs() == baseline + 1, $"{nav.Message}; container={wsContainer}; profiles {baseline}->{Dirs()}");
+                await _agentHost.StopAsync(session);
+                var retired = await Until(() => _agentCleanupDone.Contains(session.Id), 20000);
+                Step($"[{container}] a stopped agent is retired and its profile deleted", retired && k.Workspaces.All(w => w.Id != session.WorkspaceId) && k.Tabs.All(t => t.Id != agentTab!.Id) && Dirs() == baseline, $"done={retired}; profiles={Dirs()} (baseline {baseline})");
+                var threw = false; try { await k.ActivateAsync(agentTab!.Id); } catch (Exception) { threw = true; }
+                Step($"[{container}] its page cannot be selected again (fails cleanly)", threw && k.Active?.Id == parked.Id, $"threw={threw}");
+                _agentHost.Dispose(); _agentHost = null;
+            }
         }
         catch (Exception ex) { Step("no exception", false, ex.ToString()); }
         finally { try { listener.Stop(); listener.Close(); } catch (Exception) { } }

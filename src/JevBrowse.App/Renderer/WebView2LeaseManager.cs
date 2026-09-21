@@ -283,7 +283,8 @@ public sealed class WebView2Lease : IRendererLease
           // reasonable size, and either live or longer than two minutes.
           const videoPlaying = () => {
             for (const v of document.querySelectorAll('video')) {
-              if (v.paused || v.ended || v.readyState < 3) continue;
+              // Buffering (readyState below 3) is a pause the person did not ask for: only an explicit pause or the end releases the tab.
+              if (v.paused || v.ended) continue;
               if (v.offsetWidth < 320 || v.offsetHeight < 180 || v.getClientRects().length === 0) continue;
               if (!(v.duration === Infinity || Number.isNaN(v.duration) || v.duration > 120)) continue;
               return true;
@@ -291,8 +292,13 @@ public sealed class WebView2Lease : IRendererLease
             return false;
           };
           const syncVideo = () => { const on = videoPlaying(); if (on !== videoOn) { videoOn = on; send(); } };
-          for (const ev of ['play', 'playing', 'pause', 'ended', 'emptied', 'loadeddata']) document.addEventListener(ev, syncVideo, true);
-          setInterval(() => { if (videoOn || document.querySelector('video')) syncVideo(); }, 4000);
+          // No timer on pages without video: it starts when a video first plays and stops once nothing qualifying is playing.
+          let videoTimer = null;
+          const onVideoEvent = () => {
+            syncVideo();
+            if (videoOn && !videoTimer) videoTimer = setInterval(() => { syncVideo(); if (!videoOn) { clearInterval(videoTimer); videoTimer = null; } }, 4000);
+          };
+          for (const ev of ['play', 'playing', 'pause', 'ended', 'emptied', 'loadeddata', 'waiting']) document.addEventListener(ev, onVideoEvent, true);
           const md = navigator.mediaDevices;
           if (md) {
             // Clones have independent lifetimes: a page may clone a track, stop the original and keep using the
@@ -377,7 +383,9 @@ public sealed class WebView2Lease : IRendererLease
             lease.BumpDocument();
             if (!e.IsRedirected) lease.ResetSignals();
         };
-        core.NavigationCompleted += (_, _) => { lease.ClearDetected(ProtectionFlags.DirtyForm); lease.Loaded?.Invoke(); };
+        // Typed input is unfinished work until its DOCUMENT is replaced (ContentLoading, below), NOT until it finishes loading: a person can type into a slow page
+        // while it is still loading, and completion must not forget that.
+        core.NavigationCompleted += (_, _) => { lease.Loaded?.Invoke(); };
         // The engine's default for a new-window request is to open an UNMANAGED window that skips renderer admission, Shield and the permission adapter.
         // It is never allowed to: the request is always handled here, and the app decides whether it becomes a managed tab or is refused.
         core.NewWindowRequested += (_, e) =>
@@ -473,7 +481,7 @@ public sealed class WebView2Lease : IRendererLease
         lease._detach.Add(() => { try { core.FrameCreated -= OnFrameCreated; } catch (Exception) { } });
 
         // Confirmed replacement of the top-level document, on the same commit-not-intent basis.
-        void OnContentLoading(CoreWebView2 _, CoreWebView2ContentLoadingEventArgs __) => lease.DropTopLevelMedia();
+        void OnContentLoading(CoreWebView2 _, CoreWebView2ContentLoadingEventArgs __) { lease.DropTopLevelMedia(); lease.ClearDetected(ProtectionFlags.DirtyForm); }   // the document was replaced: its typing went with it
         core.ContentLoading += OnContentLoading;
         lease._detach.Add(() => { try { core.ContentLoading -= OnContentLoading; } catch (Exception) { } });
 

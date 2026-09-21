@@ -97,9 +97,11 @@ public sealed partial class MainWindow
             show.Click += async (_, _) =>
             {
                 if (session0?.Current is not { } page || _kernel is null) return;
+                if (session0.Closed || session0.CleanedUp) { StatusText.Text = "That agent has stopped; its page is gone."; ClosePanel(restoreFocus: false); return; }
                 ClosePanel(restoreFocus: false);
                 if (_kernel.Tabs.All(t => t.Id != page)) return;
-                await _kernel.ActivateAsync(page);
+                try { await _kernel.ActivateAsync(page); }
+                catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException) { StatusText.Text = "That agent has stopped; its page is gone."; return; }
                 RebuildWorkspaces();
                 StatusText.Text = $"showing the page {session0.Manifest.Agent} is on; it keeps working in its own workspace";
             };

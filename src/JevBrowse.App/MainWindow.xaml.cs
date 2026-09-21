@@ -143,23 +143,38 @@ public sealed partial class MainWindow : Window
     private int _restoreEpoch;
     private bool _shutdownInProgress;
     private volatile bool _ready;
-    private readonly HashSet<string> _agentProfilesEnded = [];
+    private readonly HashSet<string> _agentCleanupDone = [];
+    private int _agentCleanupRunning;
 
     /// <summary>
-    /// A finished agent session (stopped, expired, or refused) has nothing left to do, so its throwaway profile (cookies, storage of the pages it visited) is
-    /// deleted as soon as its engine processes are gone, not left until the next start.
+    /// A finished agent session (stopped, expired, or refused) has nothing left to do. Its pages and workspace are RETIRED (they cannot be selected again: their
+    /// identity has ended), then its throwaway profile is deleted once its engine processes are gone. The container is the workspace's real one (an agent may have
+    /// been given a Private workspace, not only a Disposable one). A session counts as finished only when the profile was actually deleted; otherwise it stays eligible
+    /// and is retried on the next tick (and swept at the next start as the backstop).
     /// </summary>
     private async Task EndFinishedAgentProfilesAsync()
     {
+        if (Interlocked.Exchange(ref _agentCleanupRunning, 1) == 1) return;
         try
         {
-            foreach (var s in (_agentHost?.Sessions ?? []).Where(x => x.CleanedUp).ToList())
+            foreach (var s in (_agentHost?.Sessions ?? []).Where(x => x.CleanedUp && !_agentCleanupDone.Contains(x.Id)).ToList())
             {
-                if (!_agentProfilesEnded.Add(s.Id)) continue;
-                await _leases!.EndEphemeralSessionAsync(IdentityContainer.Disposable, s.WorkspaceId);   // whatever cannot be deleted yet is swept at the next start
+                try
+                {
+                    var container = _kernel!.Workspaces.FirstOrDefault(w => w.Id == s.WorkspaceId)?.Container ?? s.Manifest.Container;
+                    if (!container.IsEphemeral()) continue;   // never touch a persistent identity
+                    var back = _kernel.ActiveWorkspace != s.WorkspaceId ? _kernel.ActiveWorkspace : ContextId.Default;
+                    if (_kernel.Workspaces.Any(w => w.Id == s.WorkspaceId)) await _kernel.EndPrivateSessionAsync(s.WorkspaceId, back);   // retire tabs and workspace
+                    _permissions?.EndSession(container, s.WorkspaceId);
+                    var result = await _leases!.EndEphemeralSessionAsync(container, s.WorkspaceId);
+                    if (result.RenderersClosed && result.ProfileDataDeleted) _agentCleanupDone.Add(s.Id);
+                }
+                catch (Exception) { /* not finished: stays eligible for the next attempt */ }
             }
+            RebuildWorkspaces();
         }
         catch (Exception) { /* best effort: the start-up sweep is the backstop */ }
+        finally { Volatile.Write(ref _agentCleanupRunning, 0); }
     }
     private string? _startupNotice;   // something the person should know about how this start went (for example a damaged database that was set aside)
 
@@ -2844,6 +2859,7 @@ public sealed partial class MainWindow : Window
 
     private async Task SchedulerTickAsync()
     {
+        _ = EndFinishedAgentProfilesAsync();   // retries any agent profile that could not be deleted yet
         if (_kernel is null || _leases is null) return;
         try
         {
@@ -2942,7 +2958,13 @@ public sealed partial class MainWindow : Window
     private async void OnTabSelected(object s, SelectionChangedEventArgs e)
     {
         if (_syncingSelection || TabList.SelectedItem is not TabItem item || _kernel is null) return;
-        await _kernel.ActivateAsync(item.Id);
+        try { await _kernel.ActivateAsync(item.Id); }
+        catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException)
+        {
+            // A page whose session has ended cannot be shown again (its identity is gone). Say so instead of failing.
+            StatusText.Text = "That page belonged to a session that has ended.";
+            RebuildList();
+        }
     }
 
     private async void OnNewTab(object s, RoutedEventArgs e)
