@@ -4,12 +4,12 @@ Checked by searching the source, not from memory. "Not implemented" means no cod
 
 | Item | State | Notes |
 |---|---|---|
-| Preserve Back/Forward history when a tab sleeps and wakes | **Done in alpha.5** | Saved with the tab; Back and Forward walk it by replacing the page (no engine API can recreate entries). `--history-check`, 13 steps. Not kept: per-entry scroll and form state |
+| Preserve Back/Forward history when a tab sleeps and wakes | **Done as address-based replay (alpha.6)** | Saved with the tab; Back and Forward walk it by replacing the page (no engine API can recreate entries). `--history-check`, 13 steps. Not full session history: POST state, form state and per-entry scroll are not restored. A history containing any Sensitive address is kept in memory only |
 | Protect unfinished work during automatic sleep | **Done in alpha.3** | Gaps found and fixed: password-only typing, typing inside an iframe, upload in flight, long silent video. Already covered: typing, downloads, sound, camera, microphone, screen share, calls. `--protection-check` |
 | Download manager (progress, cancel/retry, Show in folder) | Not implemented | Only "a download is running" protection and the Private-session prompt exist |
 | Bookmarks (import/export) | Not implemented | |
 | Browsing-history screen | Not implemented | Browser Memory (searchable saved pages) and Time Travel (workspace contexts) are different things |
-| Rename/delete ordinary workspaces | **Done in alpha.5** | Workspaces panel: Rename… and Delete… (Default and temporary sessions excluded), with a confirmation that states what is and is not deleted |
+| Rename/delete ordinary workspaces | **Done (alpha.6)** | Deletion is terminal (Time Travel records removed; stale restore refused). Workspaces panel: Rename… and Delete… (Default and temporary sessions excluded), with a confirmation that states what is and is not deleted |
 | Open links from other applications, default-browser registration | Not implemented | No URL-scheme registration or single-instance hand-off |
 | Preferences: search engine, remembered memory mode, persistent per-site zoom | Not implemented | Search is fixed to DuckDuckGo (`AddressInput.SearchUrl`); no zoom code |
 | Full-screen video | Not implemented; unverified | No full-screen handling exists. Behaviour with the engine defaults is untested |

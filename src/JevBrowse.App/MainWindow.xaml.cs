@@ -690,8 +690,12 @@ public sealed partial class MainWindow : Window
             IsPrimaryButtonEnabled = timeline.Count > 0,
         };
         if (await dlg.ShowSerializedAsync() != ContentDialogResult.Primary || list.SelectedIndex < 0) return;
-        var n = await _kernel.RestoreContextAsync(timeline[list.SelectedIndex]);
-        StatusText.Text = $"context restored: {n} tabs recreated (virtual), only the active one loaded";
+        try
+        {
+            var n = await _kernel.RestoreContextAsync(timeline[list.SelectedIndex]);
+            StatusText.Text = $"context restored: {n} tabs recreated (virtual), only the active one loaded";
+        }
+        catch (InvalidOperationException ex) { StatusText.Text = ex.Message; }
     }
 
     private int _ticksSinceCheckpoint;

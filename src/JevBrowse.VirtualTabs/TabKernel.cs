@@ -139,8 +139,9 @@ public sealed class TabKernel
         // A checkpoint that survives (scroll position only) must not keep pointing at a preview that was just deleted.
         else if (_checkpoints.Get(t.Id) is { } kept)
         {
-            // The visited addresses in a saved history are more revealing than a scroll position: a Sensitive or Secret page keeps none on disk.
-            var dropHistory = kept.History is not null && ClassOf(t) >= DataClass.Sensitive;
+            // The visited addresses in a saved history are more revealing than a scroll position: if the tab or ANY page in the history is Sensitive or Secret (as classified
+            // now, so a decision tightened after the visit counts), none of it stays on disk.
+            var dropHistory = kept.History is not null && !HistoryMayBePersisted(t, kept.History);
             var dropThumb = !thumbs && kept.ThumbnailPath is not null;
             if (dropHistory || dropThumb) _checkpoints.Upsert(kept with { ThumbnailPath = dropThumb ? null : kept.ThumbnailPath, History = dropHistory ? null : kept.History });
         }
@@ -156,6 +157,19 @@ public sealed class TabKernel
     {
         foreach (var t in _tabs.ToList()) EnforcePolicy(t);
         Changed?.Invoke(new("signals", Active?.Id ?? default, "policy-reapplied"));
+    }
+
+    /// <summary>
+    /// A Back/Forward history may be written to disk only if the tab's current class allows it AND no entry in it is a Sensitive or Secret address. The class of the page the tab
+    /// happens to be on says nothing about the pages it visited earlier: a bank page followed by an ordinary one must not leave the bank address in the database. Anything
+    /// mixed or Sensitive stays in memory (still useful while the app runs).
+    /// </summary>
+    private bool HistoryMayBePersisted(VirtualTab tab, NavHistory history)
+    {
+        if (ClassOf(tab) >= DataClass.Sensitive) return false;
+        foreach (var e in history.Entries)
+            if (!Uri.TryCreate(e.Url, UriKind.Absolute, out var u) || _classifier.Classify(u, IdentityContainer.Personal, PageSignals.None) >= DataClass.Sensitive) return false;
+        return true;
     }
 
     private void Hide(VirtualTab t)
@@ -228,6 +242,7 @@ public sealed class TabKernel
             if (failures.Count > 0) throw new AggregateException("Some tabs could not be closed. Try deleting the workspace again.", failures);
             _workspaceList.Remove(ws);
             _workspaces?.Delete(id);
+            _workspaces?.DeleteCheckpointsFor(id);   // its Time Travel records go with it: deletion is terminal
             Changed?.Invoke(new("workspace-deleted", default, ws.Name));
         }, ct);
 
@@ -307,7 +322,7 @@ public sealed class TabKernel
         return cp;
     }
 
-    public IReadOnlyList<ContextCheckpoint> Timeline() => _workspaces?.ListCheckpoints() ?? [];
+    public IReadOnlyList<ContextCheckpoint> Timeline() => (_workspaces?.ListCheckpoints() ?? []).Where(c => _workspaceList.Any(w => w.Id == c.WorkspaceId)).ToList();
 
     /// <summary>
     /// Restore a context lazily: tabs that still exist are left alone, missing ones are recreated VIRTUAL, and only
@@ -317,6 +332,8 @@ public sealed class TabKernel
         SerializedAsync(async () =>
         {
             if (_endedPrivateSessions.Contains(cp.WorkspaceId)) throw new InvalidOperationException("This private session has ended.");
+            // A workspace that no longer exists is not brought back: recreating it would lose its identity (a Work workspace would return as Personal, with other cookies).
+            if (_workspaceList.All(w => w.Id != cp.WorkspaceId)) throw new InvalidOperationException("That workspace was deleted and cannot be restored.");
             int recreated = 0;
             foreach (var e in cp.Resources)
             {
@@ -325,12 +342,6 @@ public sealed class TabKernel
                 _tabs.Add(t);
                 _repo.Upsert(t, _tabs.Count - 1);
                 recreated++;
-            }
-            if (_workspaceList.All(w => w.Id != cp.WorkspaceId))
-            {
-                var w = new Workspace(cp.WorkspaceId, cp.WorkspaceName) { CreatedAt = _clock() };
-                _workspaceList.Add(w);
-                _workspaces?.Upsert(w);
             }
             Changed?.Invoke(new("context-restored", default, $"{recreated} recreated"));
             await SwitchWorkspaceCoreAsync(cp.WorkspaceId, ct);
@@ -609,7 +620,7 @@ public sealed class TabKernel
         var cp = r.Checkpoint!;
         if (!May(tab, DataOperation.PersistCheckpoint).Allowed) { DeleteThumb(cp.ThumbnailPath); return r with { Checkpoint = null, Detail = "policy: nothing about this page is persisted" }; }
         if (cp.ThumbnailPath is not null && !May(tab, DataOperation.PersistThumbnail).Allowed) { DeleteThumb(cp.ThumbnailPath); cp = cp with { ThumbnailPath = null }; }
-        if (r.History is not null && ClassOf(tab) < DataClass.Sensitive) cp = cp with { History = r.History };   // on disk only for classes that may keep visited addresses
+        if (r.History is not null && HistoryMayBePersisted(tab, r.History)) cp = cp with { History = r.History };   // on disk only if EVERY entry may be kept
         return r with { Checkpoint = cp };
     }
 

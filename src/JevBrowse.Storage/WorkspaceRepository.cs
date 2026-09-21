@@ -50,6 +50,15 @@ public sealed class WorkspaceRepository
         cmd.ExecuteNonQuery();
     }
 
+    /// <summary>Removes every Time Travel record of one workspace (used when the workspace is deleted).</summary>
+    public int DeleteCheckpointsFor(ContextId workspace)
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "DELETE FROM context_checkpoints WHERE workspace_id=$w";
+        cmd.Parameters.AddWithValue("$w", workspace.ToString());
+        return cmd.ExecuteNonQuery();
+    }
+
     // ---- Time Travel ----
 
     private sealed record EntryDto(string Id, string Url, string Title, bool Live);
