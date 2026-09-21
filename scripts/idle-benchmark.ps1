@@ -201,7 +201,10 @@ function Measure-Run([string]$scenario, [int]$runNumber) {
         $counterJob = Start-Job -ArgumentList $counterSets, $gpuAvailable -ScriptBlock {
             param($k, $gpuOn)
             $paths = @('\Processor(_Total)\% Processor Time'); if ($gpuOn) { $paths = @('\GPU Engine(*)\Utilization Percentage') + $paths }
-            Get-Counter $paths -SampleInterval 2 -MaxSamples $k -ErrorAction SilentlyContinue
+            # Job output is serialised, which flattens counter objects to strings, so hand back plain records.
+            Get-Counter $paths -SampleInterval 2 -MaxSamples $k -ErrorAction SilentlyContinue | ForEach-Object {
+                , @($_.CounterSamples | ForEach-Object { [pscustomobject]@{ path = $_.Path; instance = $_.InstanceName; value = [double]$_.CookedValue } })
+            }
         }
         $sw = [Diagnostics.Stopwatch]::StartNew(); $lastT = 0.0
         for ($i = 0; $i -lt $n; $i++) {
@@ -236,13 +239,14 @@ function Measure-Run([string]$scenario, [int]$runNumber) {
         if ($counterJob) {
             $sets = @(Receive-Job $counterJob -Wait -AutoRemoveJob -ErrorAction SilentlyContinue)
             foreach ($set in $sets) {
-                $gs = 0.0; $gw = 0.0; $sysNow = $null
-                foreach ($cs in $set.CounterSamples) {
-                    if ($cs.Path -match 'processor\(_total\)') { $sysNow = $cs.CookedValue }
-                    elseif ($cs.InstanceName -match '^pid_(\d+)_') { $p2 = [int]$Matches[1]; if ($seenPids.ContainsKey($p2)) { if ($seenPids[$p2].group -eq 'shell') { $gs += $cs.CookedValue } elseif ($seenPids[$p2].group -eq 'webview') { $gw += $cs.CookedValue } } }
+                $gs = 0.0; $gw = 0.0; $sysNow = $null; $gpuRows = 0
+                foreach ($cs in @($set)) {
+                    if ($cs.path -match 'processor\(_total\)') { $sysNow = $cs.value }
+                    elseif ($cs.instance -match '^pid_(\d+)_') { $gpuRows++; $p2 = [int]$Matches[1]; if ($seenPids.ContainsKey($p2)) { if ($seenPids[$p2].group -eq 'shell') { $gs += $cs.value } elseif ($seenPids[$p2].group -eq 'webview') { $gw += $cs.value } } }
                 }
                 if ($null -ne $sysNow) { $sys.Add($sysNow) }
-                if ($gpuAvailable) { $gpuSamples.Add([pscustomobject]@{ shellGpuPercent = [math]::Round($gs, 3); webviewGpuPercent = [math]::Round($gw, 3) }) }
+                # No GPU rows at all means the counter gave nothing this time: that is "unavailable", never "zero".
+                if ($gpuAvailable -and $gpuRows -gt 0) { $gpuSamples.Add([pscustomobject]@{ shellGpuPercent = [math]::Round($gs, 3); webviewGpuPercent = [math]::Round($gw, 3) }) }
             }
         }
         $run.gpuSamples = $gpuSamples.ToArray()

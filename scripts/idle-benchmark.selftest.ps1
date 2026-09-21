@@ -36,7 +36,8 @@ foreach ($case in @(
     @('sampling that overran', @{ elapsedSeconds = 95 }),
     @('a process tree still settling', @{ processesAppearedWhileSampling = 6 }),
     @('per-sample CPU disagreeing with first-to-last', @{ crossCheck = [pscustomobject]@{ perSampleSeconds = 0.2; firstToLastSeconds = 3.0 } }),
-    @('a busy machine', @{ systemCpuPercentMean = 92 })
+    @('a busy machine', @{ systemCpuPercentMean = 92 }),
+    @('machine load that could not be read', @{ systemCpuPercentMean = $null })
 )) { Check "$($case[0]) is inconclusive" (@(Test-RunValidity (New-Run $case[1]) $plan).Count -gt 0) }
 
 # --- totals keep the shell and the WebView2 processes apart, and GPU unavailable is null not zero
@@ -59,6 +60,8 @@ $same = Get-ScenarioSummary (Make-Runs @(1.5, 1.38, 1.44, 1.41, 1.36) @('valid',
 $noisy = Get-ScenarioSummary (Make-Runs @(1.2, 2.6, 1.9, 3.1, 1.4) @('valid', 'valid', 'valid', 'valid', 'valid')) $plan
 $few = Get-ScenarioSummary (Make-Runs @(7.0, 7.1) @('valid', 'valid')) $plan
 Check 'the known regression is detected against the fixed build' ((Compare-Scenario $regressed $baseline).verdict -eq 'regression')
+$regNoisy = Get-ScenarioSummary (Make-Runs @(5.9, 8.7, 6.5, 7.4, 7.1) @('valid', 'valid', 'valid', 'valid', 'valid')) $plan   # the real regression's spread
+Check 'a noisy regressed build cannot hide behind its own noise' ((Compare-Scenario $regNoisy $baseline).verdict -eq 'regression')
 Check 'the same build is not flagged' ((Compare-Scenario $same $baseline).verdict -eq 'no regression detected')
 Check 'a small shift inside normal variation is not flagged' ((Compare-Scenario $noisy $baseline).verdict -ne 'regression')
 Check 'two runs are not enough to decide' ((Compare-Scenario $few $baseline).verdict -eq 'inconclusive')

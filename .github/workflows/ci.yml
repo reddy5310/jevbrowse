@@ -27,6 +27,10 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      - name: Idle-benchmark rules (self-test, made-up numbers)
+        shell: powershell
+        run: ./scripts/idle-benchmark.selftest.ps1
+
       - name: Restore
         run: dotnet restore
 
@@ -72,3 +76,29 @@ jobs:
         with:
           name: benchmarks
           path: out/data/benchmarks/*.json
+
+  # Idle CPU (docs/performance/IDLE_CPU.md). REPORT ONLY: it never fails the build and never blocks a merge. A hosted runner has no
+  # real desktop guarantees and a different machine every time, so a run may come back INCONCLUSIVE, which is the correct answer, not an error.
+  # Regression enforcement needs a stable dedicated runner and a threshold chosen from that runner's own run-to-run variation.
+  idle-cpu:
+    runs-on: windows-latest
+    needs: test
+    if: github.event_name == 'push'
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Publish self-contained shell
+        run: dotnet publish src/JevBrowse.App -c Release -r win-x64 -p:Platform=x64 -p:WindowsAppSDKSelfContained=true -p:SelfContained=true -o out/app --nologo
+      - name: Measure idle CPU (report only)
+        shell: powershell
+        continue-on-error: true
+        run: ./scripts/idle-benchmark.ps1 -Scenarios "static,panel-open,panel-closed,agent-idle,busy-control" -Runs 3 -WarmupSeconds 20 -SampleSeconds 40 -ExePath "$env:GITHUB_WORKSPACE/out/app/JevBrowse.App.exe" -Root "$env:RUNNER_TEMP/idle" -Label ci -ReportOnly
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: idle-cpu
+          path: ${{ runner.temp }}/idle/**
+          if-no-files-found: warn

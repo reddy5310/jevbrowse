@@ -1,0 +1,126 @@
+start 2026-09-21T15:29:02.7618647+05:30
+[static] run 1 of 5 ...
+    valid: shell CPU 0.959%  webview CPU 0.65%  | GPU shell 0.005%  webview 0%  
+[static] run 2 of 5 ...
+    valid: shell CPU 1.096%  webview CPU 1.02%  | GPU shell 0.014%  webview 0%  
+[static] run 3 of 5 ...
+    valid: shell CPU 1.107%  webview CPU 1.15%  | GPU shell 0.005%  webview 0%  
+[static] run 4 of 5 ...
+    valid: shell CPU 1.073%  webview CPU 1.046%  | GPU shell 0.005%  webview 0%  
+[static] run 5 of 5 ...
+    valid: shell CPU 1.152%  webview CPU 0.938%  | GPU shell 0.006%  webview 0%  
+[busy-control] run 1 of 5 ...
+    valid: shell CPU 0.991%  webview CPU 36.366%  | GPU shell 0.002%  webview 5.156%  
+[busy-control] run 2 of 5 ...
+    valid: shell CPU 0.962%  webview CPU 35.646%  | GPU shell 0.002%  webview 5.195%  
+[busy-control] run 3 of 5 ...
+    valid: shell CPU 1.068%  webview CPU 38.838%  | GPU shell 0.003%  webview 5.189%  
+[busy-control] run 4 of 5 ...
+    valid: shell CPU 1.016%  webview CPU 34.66%  | GPU shell 0.002%  webview 5.19%  
+[busy-control] run 5 of 5 ...
+    valid: shell CPU 1.043%  webview CPU 37.425%  | GPU shell 0.004%  webview 5.18%  
+# Idle cost: fixed2A
+
+Verdict: **all runs valid**. Microsoft Windows 11 Pro 10.0.26200, AMD Ryzen 7 6800H with Radeon Graphics, 16 logical cores; GPU counters available. Build: debug, commit d8f9664ff962b25998c8952e46fdb1f0ab982e48, 4 uncommitted files.
+
+Plan: 5 runs per scenario, warm-up 30 s, sampling 60 s every 2 s. CPU = percent of ONE core, medians over valid runs (min to max in brackets). GPU = summed engine utilisation, reported separately.
+
+| Scenario | valid / attempted | Shell CPU % | WebView2 CPU % | Shell GPU % | WebView2 GPU % |
+|---|---|---|---|---|---|
+| static | 5 / 5 | 1.096 (0.959 to 1.152) | 1.02 (0.65 to 1.15) | 0.005 (0.005 to 0.014) | 0 (0 to 0) |
+| busy-control | 5 / 5 | 1.016 (0.962 to 1.068) | 36.366 (34.66 to 38.838) | 0.002 (0.002 to 0.004) | 5.189 (5.156 to 5.195) |
+
+Positive control: DETECTED (busy page total CPU median 37.357 vs static 2.117)
+
+_GPU is reported separately from CPU on purpose. Low CPU does not mean no GPU activity, and neither means zero idle cost: memory, wake-ups and battery are separate costs this does not measure._
+Raw results and environment: D:\Browser\_ui-check\idle-benchmark\fixed2A-20260921-152903-6fa5b4
+[static] run 1 of 3 ...
+    valid: shell CPU 0.989%  webview CPU 1.174%  | GPU shell 0.005%  webview 0%  
+[static] run 2 of 3 ...
+    valid: shell CPU 1.126%  webview CPU 0.939%  | GPU shell 0.005%  webview 0%  
+[static] run 3 of 3 ...
+    valid: shell CPU 1.158%  webview CPU 0.862%  | GPU shell 0.005%  webview 0%  
+[panel-open] run 1 of 3 ...
+    valid: shell CPU 1.156%  webview CPU 0.962%  | GPU shell 0.002%  webview 0%  
+[panel-open] run 2 of 3 ...
+    valid: shell CPU 1.078%  webview CPU 0.987%  | GPU shell 0.005%  webview 0%  
+[panel-open] run 3 of 3 ...
+    valid: shell CPU 1.099%  webview CPU 1.253%  | GPU shell 0.005%  webview 0%  
+[panel-closed] run 1 of 3 ...
+    valid: shell CPU 1.07%  webview CPU 0.986%  | GPU shell 0.011%  webview 0%  
+[panel-closed] run 2 of 3 ...
+    valid: shell CPU 1.017%  webview CPU 1.018%  | GPU shell 0.007%  webview 0%  
+[panel-closed] run 3 of 3 ...
+    valid: shell CPU 0.995%  webview CPU 1.094%  | GPU shell 0.01%  webview 0%  
+[agent-idle] run 1 of 3 ...
+    valid: shell CPU 1.976%  webview CPU 2.371%  | GPU shell 0.009%  webview 0%  
+[agent-idle] run 2 of 3 ...
+    valid: shell CPU 1.849%  webview CPU 2.552%  | GPU shell 0.008%  webview 0%  
+[agent-idle] run 3 of 3 ...
+    valid: shell CPU 1.813%  webview CPU 2.6%  | GPU shell 0.01%  webview 0%  
+# Idle cost: fixed2B
+
+Verdict: **all runs valid**. Microsoft Windows 11 Pro 10.0.26200, AMD Ryzen 7 6800H with Radeon Graphics, 16 logical cores; GPU counters available. Build: debug, commit d8f9664ff962b25998c8952e46fdb1f0ab982e48, 4 uncommitted files.
+
+Plan: 3 runs per scenario, warm-up 30 s, sampling 60 s every 2 s. CPU = percent of ONE core, medians over valid runs (min to max in brackets). GPU = summed engine utilisation, reported separately.
+
+| Scenario | valid / attempted | Shell CPU % | WebView2 CPU % | Shell GPU % | WebView2 GPU % |
+|---|---|---|---|---|---|
+| static | 3 / 3 | 1.126 (0.989 to 1.158) | 0.939 (0.862 to 1.174) | 0.005 (0.005 to 0.005) | 0 (0 to 0) |
+| panel-open | 3 / 3 | 1.099 (1.078 to 1.156) | 0.987 (0.962 to 1.253) | 0.005 (0.002 to 0.005) | 0 (0 to 0) |
+| panel-closed | 3 / 3 | 1.017 (0.995 to 1.07) | 1.018 (0.986 to 1.094) | 0.01 (0.007 to 0.011) | 0 (0 to 0) |
+| agent-idle | 3 / 3 | 1.849 (1.813 to 1.976) | 2.552 (2.371 to 2.6) | 0.009 (0.008 to 0.01) | 0 (0 to 0) |
+
+_GPU is reported separately from CPU on purpose. Low CPU does not mean no GPU activity, and neither means zero idle cost: memory, wake-ups and battery are separate costs this does not measure._
+Raw results and environment: D:\Browser\_ui-check\idle-benchmark\fixed2B-20260921-154618-02e684
+[static] run 1 of 5 ...
+    valid: shell CPU 7.111%  webview CPU 1.352%  | GPU shell 0.002%  webview 0%  
+[static] run 2 of 5 ...
+    valid: shell CPU 6.308%  webview CPU 1.302%  | GPU shell 0.006%  webview 0%  
+[static] run 3 of 5 ...
+    valid: shell CPU 8.706%  webview CPU 0.945%  | GPU shell 0.005%  webview 0%  
+[static] run 4 of 5 ...
+    valid: shell CPU 5.913%  webview CPU 1.358%  | GPU shell 0.005%  webview 0%  
+[static] run 5 of 5 ...
+    valid: shell CPU 7.953%  webview CPU 0.936%  | GPU shell 0.005%  webview 0%  
+# Idle cost: regress2A
+
+Verdict: **all runs valid**. Microsoft Windows 11 Pro 10.0.26200, AMD Ryzen 7 6800H with Radeon Graphics, 16 logical cores; GPU counters available. Build: debug, commit d8f9664ff962b25998c8952e46fdb1f0ab982e48, 4 uncommitted files.
+
+Plan: 5 runs per scenario, warm-up 30 s, sampling 60 s every 2 s. CPU = percent of ONE core, medians over valid runs (min to max in brackets). GPU = summed engine utilisation, reported separately.
+
+| Scenario | valid / attempted | Shell CPU % | WebView2 CPU % | Shell GPU % | WebView2 GPU % |
+|---|---|---|---|---|---|
+| static | 5 / 5 | 7.111 (5.913 to 8.706) | 1.302 (0.936 to 1.358) | 0.005 (0.002 to 0.006) | 0 (0 to 0) |
+
+Comparison with the baseline result set (shell CPU):
+- **static**: no regression detected. median difference 6.02 points against a threshold of 8.38 (larger of 1 and 3 x the widest run-to-run spread)
+
+_GPU is reported separately from CPU on purpose. Low CPU does not mean no GPU activity, and neither means zero idle cost: memory, wake-ups and battery are separate costs this does not measure._
+Raw results and environment: D:\Browser\_ui-check\idle-benchmark\regress2A-20260921-160658-e538ae
+[panel-open] run 1 of 3 ...
+    valid: shell CPU 8.354%  webview CPU 0.934%  | GPU shell 0.008%  webview 0%  
+[panel-open] run 2 of 3 ...
+    valid: shell CPU 10.246%  webview CPU 1.12%  | GPU shell 0.005%  webview 0%  
+[panel-open] run 3 of 3 ...
+    valid: shell CPU 7.817%  webview CPU 0.835%  | GPU shell 0.005%  webview 0%  
+[panel-closed] run 1 of 3 ...
+    valid: shell CPU 9.988%  webview CPU 1.515%  | GPU shell 0.007%  webview 0%  
+[panel-closed] run 2 of 3 ...
+    valid: shell CPU 8.281%  webview CPU 1.325%  | GPU shell 0.011%  webview 0%  
+[panel-closed] run 3 of 3 ...
+    valid: shell CPU 10.254%  webview CPU 0.833%  | GPU shell 0.009%  webview 0%  
+# Idle cost: regress2B
+
+Verdict: **all runs valid**. Microsoft Windows 11 Pro 10.0.26200, AMD Ryzen 7 6800H with Radeon Graphics, 16 logical cores; GPU counters available. Build: debug, commit d8f9664ff962b25998c8952e46fdb1f0ab982e48, 4 uncommitted files.
+
+Plan: 3 runs per scenario, warm-up 30 s, sampling 60 s every 2 s. CPU = percent of ONE core, medians over valid runs (min to max in brackets). GPU = summed engine utilisation, reported separately.
+
+| Scenario | valid / attempted | Shell CPU % | WebView2 CPU % | Shell GPU % | WebView2 GPU % |
+|---|---|---|---|---|---|
+| panel-open | 3 / 3 | 8.354 (7.817 to 10.246) | 0.934 (0.835 to 1.12) | 0.005 (0.005 to 0.008) | 0 (0 to 0) |
+| panel-closed | 3 / 3 | 9.988 (8.281 to 10.254) | 1.325 (0.833 to 1.515) | 0.009 (0.007 to 0.011) | 0 (0 to 0) |
+
+_GPU is reported separately from CPU on purpose. Low CPU does not mean no GPU activity, and neither means zero idle cost: memory, wake-ups and battery are separate costs this does not measure._
+Raw results and environment: D:\Browser\_ui-check\idle-benchmark\regress2B-20260921-161532-67a941
+done 2026-09-21T16:25:52.1231125+05:30

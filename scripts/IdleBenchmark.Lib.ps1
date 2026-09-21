@@ -37,6 +37,7 @@ function Test-RunValidity($run, $plan) {
     if ($null -ne $cc -and [math]::Abs($cc.perSampleSeconds - $cc.firstToLastSeconds) -gt [math]::Max(0.25, 0.25 * $cc.firstToLastSeconds)) {
         $problems.Add("per-sample CPU ($([math]::Round($cc.perSampleSeconds, 2)) s) disagrees with first-to-last CPU ($([math]::Round($cc.firstToLastSeconds, 2)) s)")
     }
+    if ($null -eq $run.systemCpuPercentMean) { $problems.Add('whole-machine CPU could not be read, so a busy machine cannot be ruled out') }
     if ($null -ne $run.systemCpuPercentMean -and $run.systemCpuPercentMean -gt 80) { $problems.Add("the whole machine was busy ($([math]::Round($run.systemCpuPercentMean))% CPU), so the reading says little about the app") }
     return @($problems.ToArray())
 }
@@ -71,7 +72,7 @@ function Get-ScenarioSummary($runs, $plan) {
 }
 
 # Compare a candidate scenario with a baseline scenario on the SHELL's CPU (the part this project's own code controls). Refuses to decide without
-# enough valid runs on both sides. The threshold is the larger of a fixed floor and a multiple of the observed run-to-run spread, so it is derived
+# enough valid runs on both sides. The threshold is the larger of a fixed floor and a multiple of the BASELINE's observed run-to-run spread, so it is derived
 # from measured variation, not chosen by feel; it is only enforced when the caller says so.
 function Compare-Scenario($candidate, $baseline, [double]$MinPoints = 1.0, [double]$SpreadFactor = 3.0, [int]$MinRuns = 3) {
     if ($null -eq $candidate -or $null -eq $baseline) { return [ordered]@{ verdict = 'inconclusive'; reason = 'a result set is missing' } }
@@ -80,12 +81,14 @@ function Compare-Scenario($candidate, $baseline, [double]$MinPoints = 1.0, [doub
         return [ordered]@{ verdict = 'inconclusive'; reason = "needs at least $MinRuns valid runs on both sides (candidate $($c.n), baseline $($b.n))" }
     }
     $delta = $c.median - $b.median
-    $threshold = [math]::Max($MinPoints, $SpreadFactor * [math]::Max($b.spread, $c.spread))
+    # Normal variation is what the KNOWN-GOOD build does from run to run. The candidate's own spread must not raise the bar: a regressed build that is
+    # also noisy would then hide itself (found the hard way: 5.9 to 8.7% against a 1.1% baseline was first called 'no regression').
+    $threshold = [math]::Max($MinPoints, $SpreadFactor * $b.spread)
     $separated = $c.min -gt $b.max            # every candidate run is above every baseline run: not noise
     [ordered]@{
         verdict = if ($delta -gt $threshold -and $separated) { 'regression' } elseif ($delta -gt $threshold) { 'suspect' } else { 'no regression detected' }
         candidateMedianShellCpu = $c.median; baselineMedianShellCpu = $b.median; deltaPoints = [math]::Round($delta, 3)
         thresholdPoints = [math]::Round($threshold, 3); runsSeparated = $separated
-        reason = "median difference $([math]::Round($delta, 2)) points against a threshold of $([math]::Round($threshold, 2)) (larger of $MinPoints and $SpreadFactor x the widest run-to-run spread)"
+        reason = "median difference $([math]::Round($delta, 2)) points against a threshold of $([math]::Round($threshold, 2)) (larger of $MinPoints and $SpreadFactor x the baseline's own run-to-run spread of $($b.spread))"
     }
 }

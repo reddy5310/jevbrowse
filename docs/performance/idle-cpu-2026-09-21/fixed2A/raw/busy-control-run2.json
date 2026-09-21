@@ -1,0 +1,1632 @@
+﻿{
+    "scenario":  "busy-control",
+    "run":  2,
+    "startedAtUtc":  "2026-09-21T10:09:21.3954259Z",
+    "appExitedEarly":  false,
+    "windowFound":  true,
+    "windowMinimized":  false,
+    "windowInForeground":  false,
+    "readErrors":  0,
+    "scenarioState":  "ok",
+    "scenarioDetail":  "",
+    "pageMismatch":  null,
+    "processesAppearedWhileSampling":  0,
+    "samples":  [
+                    {
+                        "t":  2.26,
+                        "dt":  2.26,
+                        "shellCpuPercent":  0,
+                        "webviewCpuPercent":  59.533,
+                        "totalCpuPercent":  59.533,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.6719
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0.6719
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  4.24,
+                        "dt":  1.98,
+                        "shellCpuPercent":  0,
+                        "webviewCpuPercent":  55.101,
+                        "totalCpuPercent":  55.101,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.5781
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0.5156
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  6.27,
+                        "dt":  2.03,
+                        "shellCpuPercent":  0,
+                        "webviewCpuPercent":  55.54,
+                        "totalCpuPercent":  55.54,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.625
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0.5
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  8.25,
+                        "dt":  1.98,
+                        "shellCpuPercent":  3.95,
+                        "webviewCpuPercent":  52.138,
+                        "totalCpuPercent":  56.088,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.5625
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0.4688
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0.0781
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  10.26,
+                        "dt":  2.02,
+                        "shellCpuPercent":  0,
+                        "webviewCpuPercent":  59.679,
+                        "totalCpuPercent":  59.679,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.6562
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0.5312
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0.0156
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  12.25,
+                        "dt":  1.99,
+                        "shellCpuPercent":  0,
+                        "webviewCpuPercent":  66.901,
+                        "totalCpuPercent":  66.901,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.6562
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0.6719
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  14.25,
+                        "dt":  2,
+                        "shellCpuPercent":  0,
+                        "webviewCpuPercent":  63.252,
+                        "totalCpuPercent":  63.252,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.625
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0.6406
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  16.27,
+                        "dt":  2.02,
+                        "shellCpuPercent":  0,
+                        "webviewCpuPercent":  71.243,
+                        "totalCpuPercent":  71.243,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.7656
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0.6719
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  18.26,
+                        "dt":  1.99,
+                        "shellCpuPercent":  6.269,
+                        "webviewCpuPercent":  69.741,
+                        "totalCpuPercent":  76.009,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.625
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0.0312
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0.6719
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0.125
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0.0625
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  20.25,
+                        "dt":  1.99,
+                        "shellCpuPercent":  0,
+                        "webviewCpuPercent":  81.78,
+                        "totalCpuPercent":  81.78,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.7031
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0.0781
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0.7344
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0.1094
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  22.24,
+                        "dt":  1.99,
+                        "shellCpuPercent":  0,
+                        "webviewCpuPercent":  77.738,
+                        "totalCpuPercent":  77.738,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.5938
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0.0156
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0.75
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0.0156
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0.1719
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  24.26,
+                        "dt":  2.02,
+                        "shellCpuPercent":  0,
+                        "webviewCpuPercent":  56.468,
+                        "totalCpuPercent":  56.468,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.4375
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0.7031
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  26.25,
+                        "dt":  1.99,
+                        "shellCpuPercent":  0,
+                        "webviewCpuPercent":  51.053,
+                        "totalCpuPercent":  51.053,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.4375
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0.5781
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  28.25,
+                        "dt":  2,
+                        "shellCpuPercent":  4.681,
+                        "webviewCpuPercent":  40.565,
+                        "totalCpuPercent":  45.246,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.3281
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0.4844
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0.0938
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  30.25,
+                        "dt":  2,
+                        "shellCpuPercent":  0,
+                        "webviewCpuPercent":  35.893,
+                        "totalCpuPercent":  35.893,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.3281
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0.3906
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  32.24,
+                        "dt":  1.99,
+                        "shellCpuPercent":  0,
+                        "webviewCpuPercent":  32.224,
+                        "totalCpuPercent":  32.224,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.3438
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0.2969
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  34.24,
+                        "dt":  2,
+                        "shellCpuPercent":  0,
+                        "webviewCpuPercent":  18.784,
+                        "totalCpuPercent":  18.784,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.1406
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0.2344
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  36.25,
+                        "dt":  2.01,
+                        "shellCpuPercent":  0,
+                        "webviewCpuPercent":  14.755,
+                        "totalCpuPercent":  14.755,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.1562
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0.1406
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  38.25,
+                        "dt":  2,
+                        "shellCpuPercent":  4.686,
+                        "webviewCpuPercent":  9.372,
+                        "totalCpuPercent":  14.057,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.0781
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0.1094
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0.0938
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  40.25,
+                        "dt":  2,
+                        "shellCpuPercent":  0,
+                        "webviewCpuPercent":  20.294,
+                        "totalCpuPercent":  20.294,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.1875
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0.2031
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0.0156
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  42.26,
+                        "dt":  2.01,
+                        "shellCpuPercent":  0,
+                        "webviewCpuPercent":  13.183,
+                        "totalCpuPercent":  13.183,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.125
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0.1406
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  44.23,
+                        "dt":  1.97,
+                        "shellCpuPercent":  0,
+                        "webviewCpuPercent":  11.903,
+                        "totalCpuPercent":  11.903,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.1406
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0.0938
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  46.24,
+                        "dt":  2,
+                        "shellCpuPercent":  0,
+                        "webviewCpuPercent":  3.903,
+                        "totalCpuPercent":  3.903,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.0625
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0.0156
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  48.26,
+                        "dt":  2.03,
+                        "shellCpuPercent":  4.623,
+                        "webviewCpuPercent":  8.475,
+                        "totalCpuPercent":  13.098,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.1094
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0.0625
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0.0938
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  50.23,
+                        "dt":  1.97,
+                        "shellCpuPercent":  0,
+                        "webviewCpuPercent":  7.144,
+                        "totalCpuPercent":  7.144,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.0938
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0.0469
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  52.24,
+                        "dt":  2.01,
+                        "shellCpuPercent":  0,
+                        "webviewCpuPercent":  3.884,
+                        "totalCpuPercent":  3.884,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.0781
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  54.25,
+                        "dt":  2.01,
+                        "shellCpuPercent":  0,
+                        "webviewCpuPercent":  3.889,
+                        "totalCpuPercent":  3.889,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.0781
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  56.24,
+                        "dt":  1.99,
+                        "shellCpuPercent":  0,
+                        "webviewCpuPercent":  4.712,
+                        "totalCpuPercent":  4.712,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.0938
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  58.25,
+                        "dt":  2.01,
+                        "shellCpuPercent":  4.663,
+                        "webviewCpuPercent":  9.326,
+                        "totalCpuPercent":  13.989,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.1875
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0.0938
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0
+                                           }
+                                       ]
+                    },
+                    {
+                        "t":  60.26,
+                        "dt":  2.01,
+                        "shellCpuPercent":  0,
+                        "webviewCpuPercent":  10.9,
+                        "totalCpuPercent":  10.9,
+                        "processes":  7,
+                        "perProcess":  [
+                                           {
+                                               "pid":  37436,
+                                               "group":  "webview",
+                                               "type":  "renderer",
+                                               "cpuSeconds":  0.1719
+                                           },
+                                           {
+                                               "pid":  42596,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  48536,
+                                               "group":  "webview",
+                                               "type":  "gpu-process",
+                                               "cpuSeconds":  0.0469
+                                           },
+                                           {
+                                               "pid":  45684,
+                                               "group":  "webview",
+                                               "type":  "utility",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  52244,
+                                               "group":  "shell",
+                                               "type":  "app",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  38796,
+                                               "group":  "webview",
+                                               "type":  "crashpad-handler",
+                                               "cpuSeconds":  0
+                                           },
+                                           {
+                                               "pid":  22152,
+                                               "group":  "webview",
+                                               "type":  "browser",
+                                               "cpuSeconds":  0
+                                           }
+                                       ]
+                    }
+                ],
+    "elapsedSeconds":  60.33,
+    "crossCheck":  {
+                       "perSampleSeconds":  22.109,
+                       "firstToLastSeconds":  22.109
+                   },
+    "systemCpuPercentMean":  11.87,
+    "scenarioStateReported":  null,
+    "addressBar":  "data:text/html,\u003c!doctype html\u003e\u003chtml\u003e\u003chead\u003e\u003cmeta charset%3Dutf-8\u003e\u003ctitle\u003ebusy control\u003c%2Ftitle\u003e\u003cstyle\u003e%40keyframes spin{to{transform%3Arotate(360deg)}}%23a{width%3A80px%3Bheight%3A80px%3Bbackground%3A%2...",
+    "gpuSamples":  [
+                       {
+                           "shellGpuPercent":  0,
+                           "webviewGpuPercent":  5.195
+                       },
+                       {
+                           "shellGpuPercent":  0.009,
+                           "webviewGpuPercent":  5.197
+                       },
+                       {
+                           "shellGpuPercent":  0,
+                           "webviewGpuPercent":  5.164
+                       },
+                       {
+                           "shellGpuPercent":  0,
+                           "webviewGpuPercent":  5.191
+                       },
+                       {
+                           "shellGpuPercent":  0,
+                           "webviewGpuPercent":  5.138
+                       },
+                       {
+                           "shellGpuPercent":  0,
+                           "webviewGpuPercent":  5.21
+                       },
+                       {
+                           "shellGpuPercent":  0.011,
+                           "webviewGpuPercent":  5.251
+                       },
+                       {
+                           "shellGpuPercent":  0,
+                           "webviewGpuPercent":  5.211
+                       }
+                   ],
+    "processesAtEnd":  7,
+    "verdict":  "valid",
+    "problems":  [
+
+                 ],
+    "totals":  {
+                   "shellCpuMean":  0.962,
+                   "shellCpuPeak":  6.269,
+                   "webviewCpuMean":  35.646,
+                   "webviewCpuPeak":  81.78,
+                   "totalCpuMean":  36.608,
+                   "shellGpuMean":  0.002,
+                   "webviewGpuMean":  5.195
+               }
+}

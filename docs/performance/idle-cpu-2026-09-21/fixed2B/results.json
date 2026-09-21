@@ -1,0 +1,500 @@
+﻿{
+    "label":  "fixed2B",
+    "verdict":  "all runs valid",
+    "plan":  {
+                 "Scenarios":  [
+                                   "static",
+                                   "panel-open",
+                                   "panel-closed",
+                                   "agent-idle"
+                               ],
+                 "Runs":  3,
+                 "WarmupSeconds":  30,
+                 "SampleSeconds":  60,
+                 "IntervalSeconds":  2
+             },
+    "environment":  {
+                        "capturedAtUtc":  "2026-09-21T10:16:20.1749597Z",
+                        "machineIdHash":  "9b5ec72e",
+                        "os":  "Microsoft Windows 11 Pro 10.0.26200",
+                        "cpuModel":  "AMD Ryzen 7 6800H with Radeon Graphics",
+                        "logicalCores":  16,
+                        "ramGB":  23.2,
+                        "gpus":  [
+                                     {
+                                         "name":  "AMD Radeon(TM) Graphics",
+                                         "driver":  "31.0.12024.2005"
+                                     },
+                                     {
+                                         "name":  "NVIDIA GeForce RTX 3050 Ti Laptop GPU",
+                                         "driver":  "32.0.15.8157"
+                                     }
+                                 ],
+                        "powerPlan":  "Performance",
+                        "dotnet":  ".NET Framework 4.8.9345.0",
+                        "powershell":  "5.1.26100.9444",
+                        "webView2Runtime":  "153.0.4234.48",
+                        "interactiveSession":  true,
+                        "ci":  {
+                                   "githubActions":  false,
+                                   "runnerOs":  null,
+                                   "runnerEnvironment":  null
+                               },
+                        "build":  {
+                                      "exe":  "D:\\Browser\\jevbrowse\\artifacts\\bin\\JevBrowse.App\\debug_win-x64\\JevBrowse.App.exe",
+                                      "configuration":  "debug",
+                                      "exeModifiedUtc":  "2026-09-21T08:44:42.8009968Z",
+                                      "exeBytes":  162816,
+                                      "gitCommit":  "d8f9664ff962b25998c8952e46fdb1f0ab982e48",
+                                      "uncommittedFiles":  4
+                                  },
+                        "topProcessesByMemoryAtStart":  [
+                                                            "Memory Compression",
+                                                            "explorer",
+                                                            "chrome",
+                                                            "claude",
+                                                            "chrome",
+                                                            "Code"
+                                                        ],
+                        "uptimeHours":  107.8,
+                        "gpuCounters":  "available",
+                        "note":  "GPU is reported separately from CPU on purpose. Low CPU does not mean no GPU activity, and neither means zero idle cost: memory, wake-ups and battery are separate costs this does not measure."
+                    },
+    "positiveControl":  null,
+    "scenarios":  {
+                      "static":  {
+                                     "summary":  {
+                                                     "runsAttempted":  3,
+                                                     "runsValid":  3,
+                                                     "runsInconclusive":  0,
+                                                     "inconclusiveReasons":  [
+
+                                                                             ],
+                                                     "shellCpuMean":  {
+                                                                          "n":  3,
+                                                                          "min":  0.989,
+                                                                          "median":  1.126,
+                                                                          "max":  1.158,
+                                                                          "mean":  1.091,
+                                                                          "stdev":  0.09,
+                                                                          "spread":  0.169
+                                                                      },
+                                                     "webviewCpuMean":  {
+                                                                            "n":  3,
+                                                                            "min":  0.862,
+                                                                            "median":  0.939,
+                                                                            "max":  1.174,
+                                                                            "mean":  0.992,
+                                                                            "stdev":  0.163,
+                                                                            "spread":  0.312
+                                                                        },
+                                                     "totalCpuMean":  {
+                                                                          "n":  3,
+                                                                          "min":  2.02,
+                                                                          "median":  2.065,
+                                                                          "max":  2.163,
+                                                                          "mean":  2.083,
+                                                                          "stdev":  0.073,
+                                                                          "spread":  0.143
+                                                                      },
+                                                     "shellGpuMean":  {
+                                                                          "n":  3,
+                                                                          "min":  0.005,
+                                                                          "median":  0.005,
+                                                                          "max":  0.005,
+                                                                          "mean":  0.005,
+                                                                          "stdev":  0,
+                                                                          "spread":  0
+                                                                      },
+                                                     "webviewGpuMean":  {
+                                                                            "n":  3,
+                                                                            "min":  0,
+                                                                            "median":  0,
+                                                                            "max":  0,
+                                                                            "mean":  0,
+                                                                            "stdev":  0,
+                                                                            "spread":  0
+                                                                        }
+                                                 },
+                                     "runs":  [
+                                                  {
+                                                      "run":  1,
+                                                      "verdict":  "valid",
+                                                      "problems":  [
+
+                                                                   ],
+                                                      "totals":  {
+                                                                     "shellCpuMean":  0.989,
+                                                                     "shellCpuPeak":  6.334,
+                                                                     "webviewCpuMean":  1.174,
+                                                                     "webviewCpuPeak":  15.684,
+                                                                     "totalCpuMean":  2.163,
+                                                                     "shellGpuMean":  0.005,
+                                                                     "webviewGpuMean":  0
+                                                                 },
+                                                      "windowInForeground":  false
+                                                  },
+                                                  {
+                                                      "run":  2,
+                                                      "verdict":  "valid",
+                                                      "problems":  [
+
+                                                                   ],
+                                                      "totals":  {
+                                                                     "shellCpuMean":  1.126,
+                                                                     "shellCpuPeak":  5.541,
+                                                                     "webviewCpuMean":  0.939,
+                                                                     "webviewCpuPeak":  14.047,
+                                                                     "totalCpuMean":  2.065,
+                                                                     "shellGpuMean":  0.005,
+                                                                     "webviewGpuMean":  0
+                                                                 },
+                                                      "windowInForeground":  false
+                                                  },
+                                                  {
+                                                      "run":  3,
+                                                      "verdict":  "valid",
+                                                      "problems":  [
+
+                                                                   ],
+                                                      "totals":  {
+                                                                     "shellCpuMean":  1.158,
+                                                                     "shellCpuPeak":  7.219,
+                                                                     "webviewCpuMean":  0.862,
+                                                                     "webviewCpuPeak":  8.554,
+                                                                     "totalCpuMean":  2.02,
+                                                                     "shellGpuMean":  0.005,
+                                                                     "webviewGpuMean":  0
+                                                                 },
+                                                      "windowInForeground":  false
+                                                  }
+                                              ]
+                                 },
+                      "panel-open":  {
+                                         "summary":  {
+                                                         "runsAttempted":  3,
+                                                         "runsValid":  3,
+                                                         "runsInconclusive":  0,
+                                                         "inconclusiveReasons":  [
+
+                                                                                 ],
+                                                         "shellCpuMean":  {
+                                                                              "n":  3,
+                                                                              "min":  1.078,
+                                                                              "median":  1.099,
+                                                                              "max":  1.156,
+                                                                              "mean":  1.111,
+                                                                              "stdev":  0.04,
+                                                                              "spread":  0.078
+                                                                          },
+                                                         "webviewCpuMean":  {
+                                                                                "n":  3,
+                                                                                "min":  0.962,
+                                                                                "median":  0.987,
+                                                                                "max":  1.253,
+                                                                                "mean":  1.067,
+                                                                                "stdev":  0.161,
+                                                                                "spread":  0.291
+                                                                            },
+                                                         "totalCpuMean":  {
+                                                                              "n":  3,
+                                                                              "min":  2.065,
+                                                                              "median":  2.119,
+                                                                              "max":  2.352,
+                                                                              "mean":  2.179,
+                                                                              "stdev":  0.153,
+                                                                              "spread":  0.287
+                                                                          },
+                                                         "shellGpuMean":  {
+                                                                              "n":  3,
+                                                                              "min":  0.002,
+                                                                              "median":  0.005,
+                                                                              "max":  0.005,
+                                                                              "mean":  0.004,
+                                                                              "stdev":  0.002,
+                                                                              "spread":  0.003
+                                                                          },
+                                                         "webviewGpuMean":  {
+                                                                                "n":  3,
+                                                                                "min":  0,
+                                                                                "median":  0,
+                                                                                "max":  0,
+                                                                                "mean":  0,
+                                                                                "stdev":  0,
+                                                                                "spread":  0
+                                                                            }
+                                                     },
+                                         "runs":  [
+                                                      {
+                                                          "run":  1,
+                                                          "verdict":  "valid",
+                                                          "problems":  [
+
+                                                                       ],
+                                                          "totals":  {
+                                                                         "shellCpuMean":  1.156,
+                                                                         "shellCpuPeak":  5.498,
+                                                                         "webviewCpuMean":  0.962,
+                                                                         "webviewCpuPeak":  8.558,
+                                                                         "totalCpuMean":  2.119,
+                                                                         "shellGpuMean":  0.002,
+                                                                         "webviewGpuMean":  0
+                                                                     },
+                                                          "windowInForeground":  false
+                                                      },
+                                                      {
+                                                          "run":  2,
+                                                          "verdict":  "valid",
+                                                          "problems":  [
+
+                                                                       ],
+                                                          "totals":  {
+                                                                         "shellCpuMean":  1.078,
+                                                                         "shellCpuPeak":  5.495,
+                                                                         "webviewCpuMean":  0.987,
+                                                                         "webviewCpuPeak":  15.511,
+                                                                         "totalCpuMean":  2.065,
+                                                                         "shellGpuMean":  0.005,
+                                                                         "webviewGpuMean":  0
+                                                                     },
+                                                          "windowInForeground":  false
+                                                      },
+                                                      {
+                                                          "run":  3,
+                                                          "verdict":  "valid",
+                                                          "problems":  [
+
+                                                                       ],
+                                                          "totals":  {
+                                                                         "shellCpuMean":  1.099,
+                                                                         "shellCpuPeak":  6.223,
+                                                                         "webviewCpuMean":  1.253,
+                                                                         "webviewCpuPeak":  14.954,
+                                                                         "totalCpuMean":  2.352,
+                                                                         "shellGpuMean":  0.005,
+                                                                         "webviewGpuMean":  0
+                                                                     },
+                                                          "windowInForeground":  false
+                                                      }
+                                                  ]
+                                     },
+                      "panel-closed":  {
+                                           "summary":  {
+                                                           "runsAttempted":  3,
+                                                           "runsValid":  3,
+                                                           "runsInconclusive":  0,
+                                                           "inconclusiveReasons":  [
+
+                                                                                   ],
+                                                           "shellCpuMean":  {
+                                                                                "n":  3,
+                                                                                "min":  0.995,
+                                                                                "median":  1.017,
+                                                                                "max":  1.07,
+                                                                                "mean":  1.027,
+                                                                                "stdev":  0.039,
+                                                                                "spread":  0.075
+                                                                            },
+                                                           "webviewCpuMean":  {
+                                                                                  "n":  3,
+                                                                                  "min":  0.986,
+                                                                                  "median":  1.018,
+                                                                                  "max":  1.094,
+                                                                                  "mean":  1.033,
+                                                                                  "stdev":  0.055,
+                                                                                  "spread":  0.108
+                                                                              },
+                                                           "totalCpuMean":  {
+                                                                                "n":  3,
+                                                                                "min":  2.035,
+                                                                                "median":  2.056,
+                                                                                "max":  2.088,
+                                                                                "mean":  2.06,
+                                                                                "stdev":  0.027,
+                                                                                "spread":  0.053
+                                                                            },
+                                                           "shellGpuMean":  {
+                                                                                "n":  3,
+                                                                                "min":  0.007,
+                                                                                "median":  0.01,
+                                                                                "max":  0.011,
+                                                                                "mean":  0.009,
+                                                                                "stdev":  0.002,
+                                                                                "spread":  0.004
+                                                                            },
+                                                           "webviewGpuMean":  {
+                                                                                  "n":  3,
+                                                                                  "min":  0,
+                                                                                  "median":  0,
+                                                                                  "max":  0,
+                                                                                  "mean":  0,
+                                                                                  "stdev":  0,
+                                                                                  "spread":  0
+                                                                              }
+                                                       },
+                                           "runs":  [
+                                                        {
+                                                            "run":  1,
+                                                            "verdict":  "valid",
+                                                            "problems":  [
+
+                                                                         ],
+                                                            "totals":  {
+                                                                           "shellCpuMean":  1.07,
+                                                                           "shellCpuPeak":  6.301,
+                                                                           "webviewCpuMean":  0.986,
+                                                                           "webviewCpuPeak":  14.685,
+                                                                           "totalCpuMean":  2.056,
+                                                                           "shellGpuMean":  0.011,
+                                                                           "webviewGpuMean":  0
+                                                                       },
+                                                            "windowInForeground":  false
+                                                        },
+                                                        {
+                                                            "run":  2,
+                                                            "verdict":  "valid",
+                                                            "problems":  [
+
+                                                                         ],
+                                                            "totals":  {
+                                                                           "shellCpuMean":  1.017,
+                                                                           "shellCpuPeak":  7.063,
+                                                                           "webviewCpuMean":  1.018,
+                                                                           "webviewCpuPeak":  10.987,
+                                                                           "totalCpuMean":  2.035,
+                                                                           "shellGpuMean":  0.007,
+                                                                           "webviewGpuMean":  0
+                                                                       },
+                                                            "windowInForeground":  false
+                                                        },
+                                                        {
+                                                            "run":  3,
+                                                            "verdict":  "valid",
+                                                            "problems":  [
+
+                                                                         ],
+                                                            "totals":  {
+                                                                           "shellCpuMean":  0.995,
+                                                                           "shellCpuPeak":  6.309,
+                                                                           "webviewCpuMean":  1.094,
+                                                                           "webviewCpuPeak":  21.025,
+                                                                           "totalCpuMean":  2.088,
+                                                                           "shellGpuMean":  0.01,
+                                                                           "webviewGpuMean":  0
+                                                                       },
+                                                            "windowInForeground":  false
+                                                        }
+                                                    ]
+                                       },
+                      "agent-idle":  {
+                                         "summary":  {
+                                                         "runsAttempted":  3,
+                                                         "runsValid":  3,
+                                                         "runsInconclusive":  0,
+                                                         "inconclusiveReasons":  [
+
+                                                                                 ],
+                                                         "shellCpuMean":  {
+                                                                              "n":  3,
+                                                                              "min":  1.813,
+                                                                              "median":  1.849,
+                                                                              "max":  1.976,
+                                                                              "mean":  1.879,
+                                                                              "stdev":  0.086,
+                                                                              "spread":  0.163
+                                                                          },
+                                                         "webviewCpuMean":  {
+                                                                                "n":  3,
+                                                                                "min":  2.371,
+                                                                                "median":  2.552,
+                                                                                "max":  2.6,
+                                                                                "mean":  2.508,
+                                                                                "stdev":  0.121,
+                                                                                "spread":  0.229
+                                                                            },
+                                                         "totalCpuMean":  {
+                                                                              "n":  3,
+                                                                              "min":  4.347,
+                                                                              "median":  4.401,
+                                                                              "max":  4.413,
+                                                                              "mean":  4.387,
+                                                                              "stdev":  0.035,
+                                                                              "spread":  0.066
+                                                                          },
+                                                         "shellGpuMean":  {
+                                                                              "n":  3,
+                                                                              "min":  0.008,
+                                                                              "median":  0.009,
+                                                                              "max":  0.01,
+                                                                              "mean":  0.009,
+                                                                              "stdev":  0.001,
+                                                                              "spread":  0.002
+                                                                          },
+                                                         "webviewGpuMean":  {
+                                                                                "n":  3,
+                                                                                "min":  0,
+                                                                                "median":  0,
+                                                                                "max":  0,
+                                                                                "mean":  0,
+                                                                                "stdev":  0,
+                                                                                "spread":  0
+                                                                            }
+                                                     },
+                                         "runs":  [
+                                                      {
+                                                          "run":  1,
+                                                          "verdict":  "valid",
+                                                          "problems":  [
+
+                                                                       ],
+                                                          "totals":  {
+                                                                         "shellCpuMean":  1.976,
+                                                                         "shellCpuPeak":  10.869,
+                                                                         "webviewCpuMean":  2.371,
+                                                                         "webviewCpuPeak":  13.975,
+                                                                         "totalCpuMean":  4.347,
+                                                                         "shellGpuMean":  0.009,
+                                                                         "webviewGpuMean":  0
+                                                                     },
+                                                          "windowInForeground":  false
+                                                      },
+                                                      {
+                                                          "run":  2,
+                                                          "verdict":  "valid",
+                                                          "problems":  [
+
+                                                                       ],
+                                                          "totals":  {
+                                                                         "shellCpuMean":  1.849,
+                                                                         "shellCpuPeak":  8.655,
+                                                                         "webviewCpuMean":  2.552,
+                                                                         "webviewCpuPeak":  20.346,
+                                                                         "totalCpuMean":  4.401,
+                                                                         "shellGpuMean":  0.008,
+                                                                         "webviewGpuMean":  0
+                                                                     },
+                                                          "windowInForeground":  false
+                                                      },
+                                                      {
+                                                          "run":  3,
+                                                          "verdict":  "valid",
+                                                          "problems":  [
+
+                                                                       ],
+                                                          "totals":  {
+                                                                         "shellCpuMean":  1.813,
+                                                                         "shellCpuPeak":  10.117,
+                                                                         "webviewCpuMean":  2.6,
+                                                                         "webviewCpuPeak":  21.768,
+                                                                         "totalCpuMean":  4.413,
+                                                                         "shellGpuMean":  0.01,
+                                                                         "webviewGpuMean":  0
+                                                                     },
+                                                          "windowInForeground":  false
+                                                      }
+                                                  ]
+                                     }
+                  },
+    "comparison":  null,
+    "note":  "GPU is reported separately from CPU on purpose. Low CPU does not mean no GPU activity, and neither means zero idle cost: memory, wake-ups and battery are separate costs this does not measure."
+}
