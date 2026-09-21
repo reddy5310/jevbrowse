@@ -233,6 +233,7 @@ public sealed partial class MainWindow : Window
         _db = BrowserDb.OpenOrRecover(Path.Combine(DataDir, "db", "browser.db"), out var damagedDbMovedTo);
         if (damagedDbMovedTo is not null) _startupNotice = $"Your saved tab list could not be read, so a fresh one was started. The damaged file was kept, not deleted: {damagedDbMovedTo}";
         _siteSettings = new SiteSettingsRepository(_db);
+        _bookmarks = new BookmarkRepository(_db);
 
         // Shield: compile whatever lists are on disk before the first renderer exists; fetch lists if there are none.
         _filters = new FilterListStore(Path.Combine(DataDir, "filters"));
@@ -3102,7 +3103,7 @@ public sealed partial class MainWindow : Window
                 return;
             }
             if (e.Key != VirtualKey.Enter) return;
-            var r = AddressInput.Resolve(AddressBox.Text);
+            var r = AddressInput.Resolve(AddressBox.Text, SearchEngines.Find(UiPrefs.Load(DataDir).SearchEngine));
             if (r.Kind == AddressKind.Invalid) { if (!string.IsNullOrEmpty(r.Message)) StatusText.Text = r.Message; return; }
             var url = r.Url!;
             _addressEditing = false;

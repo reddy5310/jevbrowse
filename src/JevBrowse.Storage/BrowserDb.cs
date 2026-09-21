@@ -9,7 +9,7 @@ namespace JevBrowse.Storage;
 /// </summary>
 public sealed class BrowserDb : IDisposable
 {
-    public const int LatestVersion = 11;
+    public const int LatestVersion = 12;
 
     private static readonly (int Version, string Sql)[] Steps =
     [
@@ -145,6 +145,16 @@ public sealed class BrowserDb : IDisposable
         // Back/Forward history saved with a sleeping tab's checkpoint (a JSON list of entries and the current index). NULL = none was kept.
         (11, """
             ALTER TABLE checkpoints ADD COLUMN history_json TEXT;
+            """),
+        // Bookmarks the person saved or imported. Deliberately independent of workspaces and containers: a bookmark is a saved address, not browsing history.
+        (12, """
+            CREATE TABLE bookmarks (
+                url TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                folder TEXT NOT NULL DEFAULT '',
+                added_at INTEGER NOT NULL
+            );
+            CREATE INDEX bookmarks_added ON bookmarks(added_at DESC);
             """),
     ];
 

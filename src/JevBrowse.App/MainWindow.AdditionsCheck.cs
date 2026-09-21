@@ -164,6 +164,23 @@ public sealed partial class MainWindow
             var gotToken = JsonSerializer.Deserialize<bool>(await loginLease.View.CoreWebView2.ExecuteScriptAsync("window.gotToken"));
             Step("RECORDED: a popup sign-in opens as a managed tab", idpTab is not null, idpTitle);
             Step("RECORDED: the sign-in page has no opener, so it cannot hand the token back (popup sign-in is unsupported in this alpha)", idpTitle.Contains("opener=false") && !gotToken, $"title='{idpTitle}' tokenReceived={gotToken}");
+
+            // ---------------- 5. bookmarks: saved from an ordinary tab, refused from a Private one, and the chosen search engine is used
+            await k.SwitchWorkspaceAsync(priv.Id); await k.ActivateAsync(pt.Id);
+            var refused = !TryBookmarkActive(out _, out var refusal);
+            Step("a Private session cannot add a bookmark (it promises to leave nothing)", refused && refusal.Contains("Private"), refusal);
+            await k.SwitchWorkspaceAsync(ContextId.Default); await k.ActivateAsync(personalTab.Id);
+            var okBm = TryBookmarkActive(out var bm, out var why);
+            Step("an ordinary tab can be bookmarked", okBm && bm is not null && bm.Url == personalTab.Url.AbsoluteUri, why);
+            if (okBm) { BookmarkCurrentPage(); }
+            Step("the bookmark is saved", okBm && _bookmarks!.Contains(bm!.Url));
+            BookmarkCurrentPage();
+            Step("bookmarking the same page again removes it", !_bookmarks!.Contains(bm!.Url));
+            var prefsBefore = UiPrefs.Load(DataDir);
+            UiPrefs.Load(DataDir).WithSearchEngine("bing").Save(DataDir);
+            var searchUrl = AddressInput.Resolve("jev test", SearchEngines.Find(UiPrefs.Load(DataDir).SearchEngine)).Url!.Host;
+            prefsBefore.Save(DataDir);
+            Step("the chosen search engine is what the address bar searches with", searchUrl == "www.bing.com", searchUrl);
         }
         catch (Exception ex) { Step("no exception", false, ex.ToString()); }
         finally { try { idp.Stop(); app.Stop(); } catch (Exception) { } DownloadAnswerForCheck = null; }

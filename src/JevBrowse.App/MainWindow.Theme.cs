@@ -153,5 +153,6 @@ public sealed partial class MainWindow
 internal static class UiPrefsExtensions
 {
     public static UiPrefs With(this UiPrefs p, ThemePreference theme) => p with { Theme = theme };
+    public static UiPrefs WithSearchEngine(this UiPrefs p, string id) => p with { SearchEngine = id };
     public static UiPrefs With(this UiPrefs p, bool sidebarCollapsed) => p with { SidebarCollapsed = sidebarCollapsed };
 }

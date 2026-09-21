@@ -14,7 +14,7 @@ public static class AddressInput
 {
     public const string SearchUrl = "https://duckduckgo.com/?q=";
 
-    public static AddressResult Resolve(string? text)
+    public static AddressResult Resolve(string? text, SearchEngine? engine = null)
     {
         var t = (text ?? "").Trim();
         if (t.Length == 0) return new(AddressKind.Invalid, null, "");
@@ -39,6 +39,6 @@ public static class AddressInput
                     return new(AddressKind.Navigate, u);
             }
         }
-        return new(AddressKind.Search, new Uri(SearchUrl + Uri.EscapeDataString(t)));
+        return new(AddressKind.Search, (engine ?? SearchEngines.DuckDuckGo).For(t));
     }
 }
