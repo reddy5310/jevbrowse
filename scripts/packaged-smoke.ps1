@@ -45,7 +45,7 @@ if (-not (Test-Path $exe)) { exit 2 }
 $build = if (Test-Path "$app\BUILD.json") { Get-Content "$app\BUILD.json" -Raw | ConvertFrom-Json } else { $null }
 Check 'BUILD.json records the commit and version' ($null -ne $build -and $build.commit -match '^[0-9a-f]{40}$') "$($build.version) $($build.commit)"
 $unsafe = @(Get-ChildItem $app -Recurse -File | Where-Object { $_.Name -match '\.(pdb)$|^\.env$|appsettings\.Development' })
-Check 'no development leftovers (.env, dev settings) in the package' ($unsafe.Count -eq 0) (($unsafe | Select-Object -First 3 | ForEach-Object Name) -join ', ')
+Check 'no development leftovers (.env, dev settings, debug symbols) in the package' ($unsafe.Count -eq 0) (($unsafe | Select-Object -First 3 | ForEach-Object Name) -join ', ')
 
 # ---- launching, the way a person does
 $data = Join-Path $run 'userdata'
@@ -67,8 +67,18 @@ function Names($w) { try { @($w.FindAll([System.Windows.Automation.TreeScope]::D
 function Tree([int]$root) { $all = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId); $ids = New-Object System.Collections.Generic.List[int]; $q = New-Object System.Collections.Generic.Queue[int]; $q.Enqueue($root); while ($q.Count) { $x = $q.Dequeue(); foreach ($c in ($all | Where-Object { $_.ParentProcessId -eq $x })) { $ids.Add([int]$c.ProcessId); $q.Enqueue([int]$c.ProcessId) } }; $ids }
 function Close-App($p, $tips = $false) {
     $tree = @(Tree $p.Id)
-    # Dismiss the first-run tips the way a person would (Escape), then close the window.
-    if ($tips) { try { $sh = New-Object -ComObject WScript.Shell; $null = $sh.AppActivate($p.Id); Start-Sleep -Milliseconds 300; 1..5 | ForEach-Object { $sh.SendKeys('{ESC}'); Start-Sleep -Milliseconds 300 } } catch { } }
+    # Go through the first-run tips the way a person does: press "Next" until there are no more (the app remembers first-run only after the last one).
+    if ($tips) {
+        $AE = [System.Windows.Automation.AutomationElement]
+        for ($i = 0; $i -lt 8; $i++) {
+            try {
+                $w = $AE::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition($AE::ProcessIdProperty, $p.Id)))
+                $b = $w.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition((New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, 'Next')), (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)))))
+                if ($b) { $b.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke(); Start-Sleep -Milliseconds 1200 } else { break }
+            } catch { break }
+        }
+        Start-Sleep 1
+    }
     $null = $p.CloseMainWindow()
     $ok = $p.WaitForExit(40000)
     if (-not $ok) { Stop-Process -Id $p.Id -Force }

@@ -16,6 +16,13 @@ try {
   dotnet publish src/JevBrowse.App -c Release -r win-x64 -p:Platform=x64 -p:SelfContained=true -p:WindowsAppSDKSelfContained=true -p:PublishReadyToRun=false -o $app --nologo
   if ($LASTEXITCODE -ne 0) { throw "publish failed" }
 
+  # Debug symbols are useful for reading a crash but carry the build machine's source paths: keep them next to the release, not inside it.
+  $sym = Join-Path $out "JevBrowse-$Version-win-x64-symbols"
+  New-Item -ItemType Directory -Force $sym | Out-Null
+  Get-ChildItem $app -Recurse -Filter *.pdb | ForEach-Object { Move-Item $_.FullName (Join-Path $sym $_.Name) -Force }
+  Compress-Archive -Path "$sym\*" -DestinationPath "$sym.zip" -CompressionLevel Optimal
+  Remove-Item $sym -Recurse -Force
+
   Copy-Item README.md, CONTRIBUTING.md, SECURITY.md, GOVERNANCE.md -Destination $app
   if (Test-Path LICENSE) { Copy-Item LICENSE $app }
   @{ version = $Version; commit = (git rev-parse HEAD); builtAt = (Get-Date).ToString('o'); dotnet = (dotnet --version) } | ConvertTo-Json | Set-Content (Join-Path $app 'BUILD.json') -Encoding utf8
