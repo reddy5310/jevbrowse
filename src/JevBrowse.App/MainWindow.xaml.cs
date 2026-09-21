@@ -270,6 +270,8 @@ public sealed partial class MainWindow : Window
         _leases.LocalPage = u => u.Scheme == "jev" && u.Host == "welcome" ? WelcomePage.Html(_providers.Any(p => p.IsConfigured), _jev?.IsConfigured == true) : null;
 
         var uiDialog = args.FirstOrDefault(a => a.StartsWith("--ui-dialog=", StringComparison.Ordinal)) is { } ud0 ? ud0["--ui-dialog=".Length..] : null;
+        if (args.FirstOrDefault(a => a.StartsWith("--idle-scenario=", StringComparison.Ordinal)) is { } idleScenario)
+            _ = RunIdleScenarioAsync(idleScenario["--idle-scenario=".Length..]);   // read from outside by scripts/idle-benchmark.ps1
         if (args.FirstOrDefault(a => a.StartsWith("--agent-hidden-load=", StringComparison.Ordinal)) is { } hiddenLoad)
             _ = RunAgentHiddenLoadAsync(hiddenLoad["--agent-hidden-load=".Length..]);   // measured from outside by scripts/idle-cost.ps1 -AgentLoad
         if (args.Contains("--ui-shot") || uiDialog is not null)
@@ -1796,6 +1798,39 @@ public sealed partial class MainWindow : Window
         var progressVisible = RestoreProgress.Visibility == Visibility.Visible;
         var result = new { restoringIdEmpty = noRestore, restorePanel = RestorePanel.Visibility.ToString(), restoreProgressVisible = progressVisible, pass = !(noRestore && progressVisible) };
         await File.WriteAllTextAsync(Path.Combine(dir, "idle-invariants.json"), JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    /// <summary>
+    /// Puts the normal window into one known state and leaves it alone, so its idle cost can be measured from outside: "static" (nothing
+    /// open), "panel-open" (the Receipt panel showing) or "panel-closed" (the panel opened and then closed, which must leave nothing behind).
+    /// Then writes down what the window REALLY is, so the measurement can be refused if the state is not the one asked for.
+    /// </summary>
+    private async Task RunIdleScenarioAsync(string scenario)
+    {
+        try
+        {
+            await Task.Delay(8000);
+            if (scenario == "panel-open") OnReceipt(this, new RoutedEventArgs());
+            else if (scenario == "panel-closed") { OnReceipt(this, new RoutedEventArgs()); await Task.Delay(1500); ClosePanel(restoreFocus: false); }
+            await Task.Delay(1500);
+            var dir = Path.Combine(DataDir, "benchmarks"); Directory.CreateDirectory(dir);
+            var state = new
+            {
+                scenario,
+                panelOpen = PanelOpen,
+                panelId = _panelId,
+                activeUrl = _kernel?.Active?.Url.ToString(),
+                tabs = _kernel?.Tabs.Count ?? 0,
+                restoreInFlight = _restoringId is not null,
+                // Diagnostic only. It is the cause of the idle-CPU regression this harness was built to catch, but the harness must find that
+                // by MEASURING CPU, not by reading this.
+                restoreProgressVisible = RestoreProgress.Visibility == Visibility.Visible,
+                agentSessionsRunning = (_agentHost?.Sessions ?? []).Count(x => !x.Closed && !x.CleanedUp),
+                readyAtUtc = DateTimeOffset.UtcNow.ToString("o"),
+            };
+            await File.WriteAllTextAsync(Path.Combine(dir, "idle-scenario-state.json"), JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch (Exception ex) { try { await File.WriteAllTextAsync(Path.Combine(DataDir, "benchmarks", "idle-scenario-error.txt"), ex.ToString()); } catch (Exception) { } }
     }
 
     /// <summary>
