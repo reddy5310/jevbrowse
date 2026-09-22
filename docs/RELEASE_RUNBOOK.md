@@ -1,8 +1,9 @@
 # Release runbook
 
-How a JevBrowse alpha gets built, tested and — only with explicit approval — published. Written after GitHub Actions was blocked mid-alpha.7 by the
-repository owner's account billing (a spending limit / failed payment, not a JevBrowse problem), so the runbook treats **local verification as the
-primary evidence** and CI as a second, independent check that is used when it is available and clearly labelled when it is not.
+How a JevBrowse alpha gets built, tested and — only with explicit approval — published. **Verification is local, by owner decision (2026-09-22), not a
+temporary fallback while GitHub Actions billing is sorted out.** GitHub is used for source storage and, eventually, the public download; it is not used
+to run tests. The workflow files stay in `.github/workflows/`, disabled (not deleted), for a future decision to turn them back on; nothing in this
+runbook depends on them, and no step here waits on a CI run or checks its status.
 
 ## Distribution decision (owner, 2026-09-22)
 
@@ -13,8 +14,8 @@ the owner explicitly chose to wait rather than publish now and catch up on them 
 ## Roles
 
 - **Claude** builds, tests locally, writes the evidence, and prepares (but never runs unattended) the publish step.
-- **The repository owner** decides when to spend GitHub Actions minutes, approves publishing a specific tested hash, and is the only one who can do
-  anything that changes this machine's Windows settings, default browser, or the real GitHub billing/Actions configuration.
+- **The repository owner** approves publishing a specific tested hash, decides the repository's visibility, and is the only one who can do anything
+  that changes this machine's Windows settings, default browser, or the real GitHub account configuration.
 - **A designated tester** (the owner or someone the owner asks) runs the [clean-Windows checklist](CLEAN_WINDOWS_CHECKLIST.md) on a machine Claude does
   not have access to. Claude cannot do this step itself: `Get-VM` is denied on the build machine (no Hyper-V rights) and Windows Sandbox is not installed;
   neither was enabled, per standing instruction not to change Windows features without asking.
@@ -61,18 +62,11 @@ the owner explicitly chose to wait rather than publish now and catch up on them 
    a fix broke the very thing it was meant to protect and was caught by re-running the same checks — that is a normal part of an honest record, not
    something to omit.
 
-6. **CI, when it is available.** Push the commits (source, docs, the release record — never `artifacts/`, a data folder, browser profiles or anything
-   from `D:\Dashboard\backend\.env`). A push to `main` triggers `.github/workflows/ci.yml`'s blocking `test` job (invariant gates, unit tests, a Release
-   build) and its report-only jobs (`perf`, `idle-cpu`, `recovery-app`). Check the run:
-   ```powershell
-   & D:\Tools\gh\bin\gh.exe run list -L 3 --json status,conclusion,workflowName,headSha
-   ```
-   - **If it is billing-blocked** (the annotation reads "recent account payments have failed or your spending limit needs to be increased"), that is the
-     owner's account to fix, in GitHub's own Settings → Billing and licensing. Claude does not attempt to change billing, and does not silently mark work
-     as CI-verified when it was not; **label it "locally verified; CI not run"** and keep going on local evidence per steps 1-5.
-   - **If it is green**, record the run id and headline result (test count, pass/fail) alongside the local numbers in the release record. CI is a
-     second, independently-hosted confirmation that a clean checkout builds and every unit test passes; it does not run the packaged smoke, the
-     interaction pass, or the clean-Windows checklist (those need a real desktop and, for the last one, a machine this account does not control).
+6. **Push source, docs and the release record.** Never `artifacts/` (the built ZIPs, symbols, SBOM), a data folder, browser profiles, or anything from
+   `D:\Dashboard\backend\.env`. GitHub Actions workflows are disabled (`gh workflow list --all` shows `disabled_manually`; the files stay in
+   `.github/workflows/` for a future decision to re-enable them) and are not triggered by this push; no run is expected and none is waited for. Every
+   release record is labelled **"locally verified; CI not run"** — not as a placeholder for CI catching up later, but as the actual, permanent
+   verification level this project's evidence is held to, by owner decision.
 
 7. **Clean-Windows acceptance — the actual gate for handing the ZIP to anyone else.** The designated tester runs
    [CLEAN_WINDOWS_CHECKLIST.md](CLEAN_WINDOWS_CHECKLIST.md) (21 rows, about 20-30 minutes) on **the exact ZIP from step 2**, on a machine with no
@@ -109,9 +103,10 @@ Source code, docs, scripts, tests, and the `docs/releases/*.md` + `*.json` recor
 SBOM — those are evidence kept alongside the record's hash, reproducible from the source commit, and are large), browser data folders, the machine's
 `D:\Dashboard\backend\.env` or any key from it, or Windows Credential Manager tokens. `.gitignore` already excludes `artifacts/`; keep it that way.
 
-## What "CI as the release gate" does and does not mean
+## Why CI does not substitute for steps 7 and 8, even if re-enabled later
 
-Using GitHub Actions again does not change steps 7 and 8: no CI job can click through the new panels on a fresh Windows account, and no CI job is an
-independent security reviewer. CI's job in this runbook is exactly two things: confirm a clean checkout builds and every unit test passes on a machine
-other than this one, and (report-only) publish performance numbers. Treat "CI is green" and "the clean-Windows checklist passed" as two different,
-both-required facts, never one standing in for the other.
+Stated here so a future decision to turn the workflows back on does not quietly relax either gate: no CI job can click through the new panels on a
+fresh Windows account, and no CI job is an independent security reviewer. What CI was ever going to add is exactly two things: confirm a clean checkout
+builds and every unit test passes on a machine other than this one, and (report-only) publish performance numbers. Neither is "the clean-Windows
+checklist passed" or "someone else reviewed the security fix." Local verification, as this runbook practices it, already covers the first two through
+`dotnet test` and `scripts\release.ps1`'s own test run; the workflows were never going to substitute for a real second machine or a real second reviewer.
