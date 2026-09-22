@@ -127,9 +127,6 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
             lease.DownloadPathOverride = DownloadPathOverride;
             lease.ZoomRequested = (dir, reset) => OnZoomKey?.Invoke(id, dir, reset);
             lease.ChordRequested = chord => OnChord?.Invoke(id, chord);
-            // A fresh, unguessable token for THIS renderer: only the host-authored script this lease registers ever carries it. Regenerated whenever the
-            // renderer is (re)created (a tab waking from sleep gets a new one), so nothing about it is ever reused across renderers.
-            lease.ChordToken = Guid.NewGuid().ToString("N");
             lease.OwnerContainer = container; lease.OwnerWorkspace = isolationKey;   // fixed now: the page may be gone by the time a download ends
             lease.DownloadFinished = (name, path, source, ok, agent) => OnDownloadFinished?.Invoke(id, name, path, source, ok, agent, lease.OwnerContainer, lease.OwnerWorkspace);
             // Before anything else reacts: an environment whose browser process died cannot create new controls, so forget it NOW (the environment's own
@@ -424,6 +421,10 @@ public sealed class WebView2Lease : IRendererLease
     public static async Task<WebView2Lease> CreateAsync(ResourceId id, WebView2 view, string thumbnailDir)
     {
         var lease = new WebView2Lease(id, view, thumbnailDir);
+        // Set here, before AddScriptToExecuteOnDocumentCreatedAsync below bakes this exact value into the page's own copy (PageScript's {{TOKEN}}): setting it
+        // any later (as AcquireAsync used to, after this method returned) left the script holding an empty token forever, so every shortcut and zoom
+        // message from the page was silently rejected, not just a forged one.
+        lease.ChordToken = Guid.NewGuid().ToString("N");
         var core = view.CoreWebView2;
         core.SourceChanged += (_, _) => { lease.BumpDocument(); lease.RaiseNavigation(); };
         core.ContentLoading += (_, _) => lease.BumpDocument();   // a commit, including a reload of the same address
