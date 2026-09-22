@@ -1,6 +1,6 @@
 # Release checklist
 
-One list, one status per line, each pointing at its evidence. Updated 2026-09-21. **Nothing here is release-validated**: no build has been signed or tested on
+One list, one status per line, each pointing at its evidence. Updated 2026-09-22 (alpha.7 candidate). **Nothing here is release-validated**: no build has been signed or tested on
 a second machine. Statuses: **Done** (evidence exists and its limits are named), **Partial**, **Open**, **Blocked** (needs something only the owner can do),
 **Later** (deliberately out of the alpha). The evidence matrix ([EVIDENCE_MATRIX.md](EVIDENCE_MATRIX.md)) has the strength of each piece of evidence.
 
@@ -38,13 +38,16 @@ See [FIRST_RELEASE_PLAN.md](FIRST_RELEASE_PLAN.md) for the ten review findings (
 
 | Item | Status | Evidence / what is missing |
 |---|---|---|
-| Review findings 1-10 | Done | Each has a regression that fails without its fix; 6 also on the real app |
-| Freeze a commit, CI green | Open (do last) | |
-| Release ZIP + checksum + SBOM | Ready to run | `scripts/release.ps1`; smoke: `scripts/packaged-smoke.ps1` |
-| Packaged smoke on the extracted ZIP | Open (run at the freeze) | |
-| Clean Windows account / VM run, offline, missing runtime | **Blocked** | Needs you or a VM |
-| Downloads/uploads, real sign-in persistence | Open (clean-Windows checklist rows 3, 5, 6) | Private-session downloads now ask first |
-| Release notes: commit, checksum, prerequisites, data location, backup, limitations | Open (template in the plan) | |
+| Review findings 1-10 (original alpha review) | Done | Each has a regression that fails without its fix; 6 also on the real app |
+| Bookmarks, search engine, history, downloads, zoom, shortcuts, default-browser registration | Done | See EVIDENCE_MATRIX; local interaction pass 21/0/4 on the final ZIP (below) |
+| Shortcut/zoom page-message security fix (per-renderer token) | Done, **pending independent security review** | `WebView2LeaseManager` (`ChordToken`/`StripChord`); interaction pass row 24 (negative check: a page/frame cannot forge a message). Requested review not yet performed by anyone outside this repository |
+| Release ZIP + checksum + SBOM | Done | `scripts/release.ps1`; latest: see `docs/releases/0.1.0-alpha.7.md` |
+| Packaged smoke on the extracted ZIP | Done | 20/20, `docs/releases/0.1.0-alpha.7-packaged-smoke.json` |
+| Local interaction pass (this machine, not clean-Windows evidence) | Done | 21 PASS / 0 FAIL / 4 NOT TESTED, `docs/releases/0.1.0-alpha.7-interaction-pass.json`; see `docs/RELEASE_RUNBOOK.md` for what it is and is not |
+| Clean Windows account / VM run (checklist, 21 rows incl. default-browser handoff) | **Blocked** | No Hyper-V/Sandbox access on the build machine (`Get-VM` denied, no admin rights); needs a designated tester with their own machine, `docs/CLEAN_WINDOWS_CHECKLIST.md` |
+| CI (GitHub Actions) | Was blocked on account billing; re-check before relying on it | See `docs/RELEASE_RUNBOOK.md` |
+| Release notes: commit, checksum, prerequisites, data location, backup, limitations | Done | `docs/releases/0.1.0-alpha.7.md` |
+| Explicit approval to publish, tied to a specific tested hash | **Open — the owner's decision** | Nothing has been published; see `docs/RELEASE_RUNBOOK.md` |
 
 ## 3. Everyday browsing
 
@@ -90,7 +93,7 @@ See [FIRST_RELEASE_PLAN.md](FIRST_RELEASE_PLAN.md) for the ten review findings (
 
 ## Not gating the alpha (Later)
 
-Extensions, sync, a built-in password manager, local AI, bookmark import/export.
+Extensions, sync, a built-in password manager, local AI, bookmark export, a bookmarks bar, download progress/cancel/retry, full-screen video, a managed sign-in popup that preserves `window.opener`.
 
 ## Standing rules
 

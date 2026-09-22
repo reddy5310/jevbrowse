@@ -4,7 +4,7 @@
 
 A Windows browser that keeps hundreds of tabs open without hundreds of pages running, keeps each part of your life in its own workspace, and can tell you *why* it did anything. Open source (MPL-2.0), built on WebView2 (the same engine as Edge), no account, no telemetry.
 
-> **Status: private alpha.** It works and is heavily tested, but it is unsigned, has not been through a wide compatibility sweep, and has had no independent security audit. Read [what is and is not proven](docs/EVIDENCE_MATRIX.md) before trusting it with anything important.
+> **Status: private alpha, candidate 0.1.0-alpha.7, not yet published.** It works and is heavily tested (unit suite + real-engine checks + a local interaction pass on the exact release ZIP), but it is unsigned, has had no compatibility sweep beyond one development machine, and two things stand between this candidate and the first testers: a clean-Windows acceptance pass on a machine that has never run JevBrowse or a dev tool, and an independent review of the security fix that stops a web page from forging a browser shortcut or a zoom change (added this candidate; see [the release record](docs/releases/0.1.0-alpha.7.md)). Read [what is and is not proven](docs/EVIDENCE_MATRIX.md) and [the release runbook](docs/RELEASE_RUNBOOK.md) before trusting it with anything important.
 
 ## What is different
 
@@ -60,7 +60,7 @@ Good first contributions are labelled `good first issue`; [CONTRIBUTING.md](CONT
 Optional AI: set `OPENROUTER_API_KEY` (and `OPENROUTER_MODEL`) or `JEV_API_KEY` in your environment, then turn AI on in the Brain panel. **Ask** and **Explain error** send only when you click, after showing what will be sent and what was redacted. Pages that are private, secret or sensitive are never sent. Every first-party network call is listed in [`docs/privacy/NETWORK_CALLS.md`](docs/privacy/NETWORK_CALLS.md).
 
 ## Documents
-[Product constitution](docs/PRODUCT_CONSTITUTION.md) · [Evidence matrix](docs/EVIDENCE_MATRIX.md) · [Roadmap](docs/ROADMAP.md) · [Backlog](docs/BACKLOG.md) · [Release checklist](docs/RELEASE_CHECKLIST.md) · [Clean-Windows checklist](docs/CLEAN_WINDOWS_CHECKLIST.md) · [Governance](GOVERNANCE.md) · [Security](SECURITY.md)
+[Product constitution](docs/PRODUCT_CONSTITUTION.md) · [Evidence matrix](docs/EVIDENCE_MATRIX.md) · [Roadmap](docs/ROADMAP.md) · [Backlog](docs/BACKLOG.md) · [Release checklist](docs/RELEASE_CHECKLIST.md) · [Release runbook](docs/RELEASE_RUNBOOK.md) · [Clean-Windows checklist](docs/CLEAN_WINDOWS_CHECKLIST.md) · [Governance](GOVERNANCE.md) · [Security](SECURITY.md)
 
 ## License
 Code: [Mozilla Public License 2.0](LICENSE). Modify and redistribute freely; changes to MPL-covered files must be published under the same license; embedding in larger works, including proprietary ones, is permitted. Name and logo: [TRADEMARK.md](TRADEMARK.md); modified builds must be renamed.
