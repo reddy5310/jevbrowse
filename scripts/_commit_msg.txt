@@ -1,0 +1,13 @@
+Correct the Private-zoom checklist test: within-session reload keeping the zoom is expected, not a leak
+
+The previous row 18 wording treated "zoom survives a reload" as a failure signal for a Private tab, but the code deliberately keeps zoom in a per-tab
+in-memory dictionary for the life of that one tab (MainWindow.Library.cs: _tabZoom), regardless of container -- only the DISK write (_siteZoom) is
+skipped for Private. Reloading the same Private tab was never going to show a difference.
+
+Corrected sequence: note the ordinary-session zoom, choose a different zoom in a Private tab and reload it (staying is fine and expected), end that
+session, start a NEW Private session and revisit the site (must be back at 100%, not the old Private zoom), confirm the ordinary site's own zoom is
+unchanged, and repeat once after restarting the browser. This checks the user-visible behavior; it does not by itself prove nothing was written to disk.
+
+Tester handoff item 4 updated to match. No source changes, no rebuild -- the candidate ZIP (d6a791fe...) stays frozen.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
