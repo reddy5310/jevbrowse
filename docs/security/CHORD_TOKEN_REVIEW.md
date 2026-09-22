@@ -1,7 +1,9 @@
 # Security review request: the per-renderer shortcut/zoom token
 
-**Status: awaiting independent review. Not yet audited by anyone other than its author.** Do not read this document, or its passing local checks, as
-verification. It exists to make the mechanism easy for someone else to read and try to break.
+**Status: awaiting independent review. Not yet audited by anyone other than its author.** One gap this document originally flagged as untried — path #3,
+a page intercepting `chrome.webview.postMessage` to steal a token off a genuine key press — was found to be real and has been fixed; see path #3 below.
+Do not read that, or this document's other passing local checks, as verification of the mechanism as a whole. It exists to make the mechanism easy for
+someone else to read and try to break.
 
 ## What it protects, and why it exists
 
@@ -60,14 +62,18 @@ Relevant lines: `src/JevBrowse.App/Renderer/WebView2LeaseManager.cs` — `PageSc
 2. **Replay within the same renderer's lifetime.** The token does not change per-message, so any script that legitimately observes a valid
    `<code>|<token>` string once (for example, by intercepting the outgoing `postMessage` call itself — see #3) could resend it later, including a
    different `<code>` than was originally sent, for as long as that renderer lives. Not tried, and no defence beyond the renderer's own lifetime exists.
-3. **Intercepting `chrome.webview.postMessage` itself.** A page script that runs *after* `PageScript`'s closures are established (i.e., any ordinary
-   page script, which is exactly the threat model) can still monkey-patch the global `chrome.webview.postMessage` function before `PageScript`'s own
-   calls to it execute, if timing allows — `PageScript` calls the ORIGINAL `chrome.webview.postMessage` reference captured in its own closure
-   (`const post = m => { try { chrome.webview.postMessage(m); } ... }` reads the CURRENT global property value at call time, not a captured reference at
-   registration time), so a later monkey-patch on `window.chrome.webview.postMessage` **would** intercept `PageScript`'s own calls, including genuine,
-   real-key-press-triggered ones, and could read the token off of them. **This was not tried and is the most likely real gap**: the negative check in
-   the interaction pass (row 24) tests a page calling `postMessage` directly with no token, not a page that captures a real forwarded message to learn
-   the token. A reviewer should try this specifically.
+3. **Intercepting `chrome.webview.postMessage` itself — CONFIRMED REAL, NOW FIXED.** A page script that runs *after* `PageScript`'s closures were
+   established could monkey-patch the global `chrome.webview.postMessage` before `PageScript`'s own calls to it, because `post`/`postChord` used to look
+   up `chrome.webview.postMessage` fresh on every call rather than holding a captured reference. Confirmed by direct testing (not by reasoning alone):
+   with the old code, a page and a genuinely cross-origin frame (a second port) each captured the real, valid token off a real Ctrl+ zoom press —
+   `jev:zoom-in|<32-hex-chars>` — reproducibly, in both the top document and the frame. **Fix:** `PageScript` now captures
+   `chrome.webview.postMessage.bind(chrome.webview)` into `const nativePostMessage` as the very first statement in its IIFE, before anything else runs in
+   that document (this ordering is exactly what `AddScriptToExecuteOnDocumentCreatedAsync` guarantees), and `post`/`postChord` call that captured
+   reference exclusively from then on. A later monkey-patch on the global no longer has any effect on this app's own outgoing calls. Re-tested with the
+   fix applied: the same real Ctrl+ press, captured by the same interceptor, in the same cross-origin frame, yields nothing — only the interceptor's own
+   blind, invalid-token replay guesses appear in its log. See `scripts/interaction-pass.ps1` row 25 and `docs/releases/0.1.0-alpha.7.md`.
+   **This one path is no longer open, but it was real, and a reviewer should not take that on trust — re-derive it from the code at the line ranges
+   above, not from this paragraph.**
 4. **The `AddScriptToExecuteOnDocumentCreatedAsync` ordering guarantee under a race.** Whether a sufficiently early inline `<script>` in the page's own
    HTML — before its `<head>`, or via some document-write trick — could execute before, or interleaved with, the injected script in a way that lets it
    patch `chrome.webview.postMessage` before `PageScript` reads it. Not tried.
@@ -81,16 +87,18 @@ Relevant lines: `src/JevBrowse.App/Renderer/WebView2LeaseManager.cs` — `PageSc
   frame's own `<script>` each call `chrome.webview.postMessage` directly — `'jev:key:closetab'`, `'jev:zoom-in'`, `'jev:key:bookmark'`, `'jev:key:addr'`
   — with **no token appended at all**. None of it closed the tab, changed a bookmark, changed zoom, or moved keyboard focus; a genuine Ctrl+W
   immediately afterward still closed the tab normally.
-- **Not tested: the cross-origin case.** The interaction pass runs one local HTTP server, so its "embedded frame" is same-origin with the top page. A
-  genuinely cross-origin hostile frame (the realistic case — an ad network, a widget from a different domain) was not exercised. The token mechanism as
-  designed does not distinguish by origin — every frame gets the same per-renderer token via the same script-injection path, and the check is purely
-  "did the message carry the right token," not "did it come from the top-level origin" — so there is no reason to expect a different *result*, but this
-  has not been verified and should be, especially alongside path #3 above (a cross-origin frame monkey-patching a shared global is a more realistic
-  attack shape than a same-origin one).
-- **Not tested: paths #1, #2, #3, #4, #5 above.** None of them were attempted. #3 in particular should be tried before this boundary is called sound.
+- **Tested (real WebView2, row 25): path #3, INCLUDING the cross-origin case.** A page and a genuinely cross-origin embedded frame (a different port —
+  a different origin under Chromium's same-origin policy, not the same local server as row 24's) each install a `chrome.webview.postMessage` interceptor
+  before a real Ctrl+ zoom press occurs in that document, then replay whatever they captured (or a blind guess, if nothing was captured) after a delay.
+  Mutation-checked in both directions: the old code leaks a real, valid token from both the top document and the cross-origin frame; the fixed code leaks
+  nothing from either, and the replay attempts (with no valid token) have no effect. This also answers the cross-origin question this section used to
+  leave open for path #3: the mechanism's origin-independence holds in practice here, not just by design.
+- **Still not tested: paths #1, #2, #4, #5 above**, and the cross-origin case specifically for row 24's *direct, untokened* message (row 24 itself remains
+  same-origin; only the interception case in row 25 was extended to a real cross-origin frame). None of #1/#2/#4/#5 were attempted.
 
 ## What would make this "independently reviewed"
 
-Someone other than the author of this fix reading `WebView2LeaseManager.cs` at the line ranges above, and at minimum attempting path #3 (capture a
-genuine forwarded message via a monkey-patched `chrome.webview.postMessage`, then replay its token with a different, more damaging code) against a real
+Path #3 no longer needs independent confirmation of the *vulnerability* — it was reproduced directly, not just reasoned about — but the *fix* still does:
+someone other than its author reading `WebView2LeaseManager.cs` at the line ranges above and confirming the capture genuinely happens first, in every
+code path that creates a renderer, not only the one this pass happened to exercise. Beyond that, at minimum attempting paths #1, #2, #4 and #5 against a real
 build. A clean pass on that attempt, plus a look at #1, #2, #4 and #5, is what this document is asking for — not a re-read of this write-up alone.

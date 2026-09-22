@@ -1,16 +1,16 @@
 ﻿{
-    "verdict":  "PASS",
+    "verdict":  "FAIL",
     "zip":  "D:\\Browser\\jevbrowse\\artifacts\\release\\0.1.0-alpha.7\\JevBrowse-0.1.0-alpha.7-win-x64.zip",
-    "sha256":  "f46bd00ba5af341c3748120a611becb8743ab38965f9323dfabc581169b0b60a",
-    "commit":  "069cd8475e6c937daa75c0c76a572ac098bba11a",
+    "sha256":  "d6a791fe7a898f1afe91b3cb175693a47986296bc235796548f930031989e65f",
+    "commit":  "4520ec2a74a9b74d481fb34cbdd4fe9edb3a006c",
     "version":  "0.1.0-alpha.7",
     "defaultDataLocation":  false,
-    "at":  "2026-09-22T05:34:07.0017345Z",
+    "at":  "2026-09-22T13:21:03.9824290Z",
     "machine":  "Microsoft Windows NT 10.0.26200.0, 16 logical cores",
     "results":  {
                     "zip matches its published SHA-256":  {
                                                               "pass":  true,
-                                                              "detail":  "f46bd00ba5af341c3748120a611becb8743ab38965f9323dfabc581169b0b60a"
+                                                              "detail":  "d6a791fe7a898f1afe91b3cb175693a47986296bc235796548f930031989e65f"
                                                           },
                     "the zip contains the app":  {
                                                      "pass":  true,
@@ -18,7 +18,7 @@
                                                  },
                     "BUILD.json records the commit and version":  {
                                                                       "pass":  true,
-                                                                      "detail":  "0.1.0-alpha.7 069cd8475e6c937daa75c0c76a572ac098bba11a"
+                                                                      "detail":  "0.1.0-alpha.7 4520ec2a74a9b74d481fb34cbdd4fe9edb3a006c"
                                                                   },
                     "no development leftovers (.env, dev settings, debug symbols) in the package":  {
                                                                                                         "pass":  true,
@@ -73,8 +73,8 @@
                                                                                                    "detail":  "exit 0"
                                                                                                },
                     "permission reset, per-profile data clearing, Private-download prompt and the recorded popup-login behaviour (engine checks)":  {
-                                                                                                                                                        "pass":  true,
-                                                                                                                                                        "detail":  "31 steps; failed: "
+                                                                                                                                                        "pass":  false,
+                                                                                                                                                        "detail":  "9 steps; failed: no exception"
                                                                                                                                                     },
                     "unfinished work keeps a tab awake (password-only typing, iframe typing, upload, silent video)":  {
                                                                                                                           "pass":  true,
