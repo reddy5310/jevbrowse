@@ -127,6 +127,9 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
             lease.DownloadPathOverride = DownloadPathOverride;
             lease.ZoomRequested = (dir, reset) => OnZoomKey?.Invoke(id, dir, reset);
             lease.ChordRequested = chord => OnChord?.Invoke(id, chord);
+            // A fresh, unguessable token for THIS renderer: only the host-authored script this lease registers ever carries it. Regenerated whenever the
+            // renderer is (re)created (a tab waking from sleep gets a new one), so nothing about it is ever reused across renderers.
+            lease.ChordToken = Guid.NewGuid().ToString("N");
             lease.OwnerContainer = container; lease.OwnerWorkspace = isolationKey;   // fixed now: the page may be gone by the time a download ends
             lease.DownloadFinished = (name, path, source, ok, agent) => OnDownloadFinished?.Invoke(id, name, path, source, ok, agent, lease.OwnerContainer, lease.OwnerWorkspace);
             // Before anything else reacts: an environment whose browser process died cannot create new controls, so forget it NOW (the environment's own
@@ -217,10 +220,19 @@ public sealed class WebView2Lease : IRendererLease
 {
     // Narrow, origin-agnostic bridge (Table A.11): the page can only tell us fixed strings. No host objects exposed.
     // Password/payment detection never reads values; it only reports that such an input exists.
+    /// <summary>
+    /// <c>{{TOKEN}}</c> is replaced, per lease, with a random value the host alone chooses (see <see cref="AcquireAsync"/>) before this script is registered. It
+    /// lives only in this closure, never on <c>window</c> or anywhere a page script could read it, so a page (or a frame on the page) cannot forge a shortcut or
+    /// a zoom message by calling <c>chrome.webview.postMessage</c> itself: it does not know the token, and a message without the right one is dropped on the
+    /// host side (see OnCoreMessage/OnFrameMessage). Everything else this script reports (typing happened, a password field exists, media state) stays
+    /// unprivileged: it only ever narrows what the browser already does (keeps a tab awake), never acts on the person's behalf.
+    /// </summary>
     private const string PageScript = """
         (() => {
           if (window.__jevHooked) return; window.__jevHooked = true;
+          const CHORD_TOKEN = "{{TOKEN}}";
           const post = m => { try { chrome.webview.postMessage(m); } catch {} };
+          const postChord = m => { try { chrome.webview.postMessage(m + '|' + CHORD_TOKEN); } catch {} };
           let dirty = false;
           const mark = e => {
             // Typing anywhere counts, a password field included: the flag says THAT something was typed, never what. (It used to skip password fields,
@@ -234,14 +246,14 @@ public sealed class WebView2Lease : IRendererLease
             document.addEventListener('keydown', e => {
               if (!e.ctrlKey || e.altKey || e.metaKey) return;
               const m = (e.key === '+' || e.key === '=' || e.code === 'NumpadAdd') ? 'jev:zoom-in' : (e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract') ? 'jev:zoom-out' : (e.key === '0' || e.code === 'Numpad0') ? 'jev:zoom-reset' : null;
-              if (m) { e.preventDefault(); e.stopPropagation(); post(m); }
+              if (m) { e.preventDefault(); e.stopPropagation(); postChord(m); }
             }, true);
             let wheelAt = 0;
             window.addEventListener('wheel', e => {
               if (!e.ctrlKey) return;
               e.preventDefault();
               const now = Date.now(); if (now - wheelAt < 120) return; wheelAt = now;
-              post(e.deltaY < 0 ? 'jev:zoom-in' : 'jev:zoom-out');
+              postChord(e.deltaY < 0 ? 'jev:zoom-in' : 'jev:zoom-out');
             }, { capture: true, passive: false });
           }
           // Browser shortcuts pressed while the PAGE has keyboard focus never reach the app's own accelerators (the web view keeps them), so Ctrl+L, Ctrl+T and the
@@ -249,14 +261,14 @@ public sealed class WebView2Lease : IRendererLease
           // (calls preventDefault) keeps it.
           window.addEventListener('keydown', e => {
             if (e.defaultPrevented || !e.isTrusted || e.altKey || e.metaKey) return;
-            if (e.key === 'F1') { e.preventDefault(); post('jev:key:help'); return; }
+            if (e.key === 'F1') { e.preventDefault(); postChord('jev:key:help'); return; }
             if (!e.ctrlKey) return;
             const k = (e.key || '').toLowerCase(), t = e.target;
             const editable = !!t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
             let c = null;
             if (e.shiftKey) { c = k === 't' ? 'reopen' : k === 'o' ? 'bookmarks' : k === 'tab' ? 'prev' : null; }
             else { c = k === 'tab' ? 'next' : k === 'b' ? (editable ? null : 'sidebar') : ({ l: 'addr', t: 'newtab', w: 'closetab', k: 'palette', d: 'bookmark', h: 'history', j: 'downloads' })[k] || null; }
-            if (c) { e.preventDefault(); post('jev:key:' + c); }
+            if (c) { e.preventDefault(); postChord('jev:key:' + c); }
           }, false);
           document.addEventListener('input', mark, true);
           document.addEventListener('change', mark, true);
@@ -481,12 +493,20 @@ public sealed class WebView2Lease : IRendererLease
         {
             string? msg = null;
             try { msg = e.TryGetWebMessageAsString(); } catch (Exception) { }
+            // Shortcuts and zoom act on the person's behalf (closing a tab can lose unfinished work; a bookmark or the address bar changes; zoom is written to
+            // disk), so they are accepted only carrying THIS lease's token, which a page or frame script cannot read (see PageScript). Everything else here is
+            // informational (the tab keeps itself awake, or not) and safe to take from content as reported.
+            if (lease.StripChord(msg) is { } chord)
+            {
+                if (chord.StartsWith("jev:key:", StringComparison.Ordinal)) lease.ChordRequested?.Invoke(chord["jev:key:".Length..]);
+                else if (chord == "jev:zoom-in") lease.ZoomRequested?.Invoke(1, false);
+                else if (chord == "jev:zoom-out") lease.ZoomRequested?.Invoke(-1, false);
+                else if (chord == "jev:zoom-reset") lease.ZoomRequested?.Invoke(0, true);
+                return;
+            }
+            if (msg is not null && (msg.StartsWith("jev:key:", StringComparison.Ordinal) || msg is "jev:zoom-in" or "jev:zoom-out" or "jev:zoom-reset")) return;   // no valid token: not this lease's own script
             switch (msg)
             {
-                case string k when k.StartsWith("jev:key:", StringComparison.Ordinal): lease.ChordRequested?.Invoke(k["jev:key:".Length..]); break;
-                case "jev:zoom-in": lease.ZoomRequested?.Invoke(1, false); break;
-                case "jev:zoom-out": lease.ZoomRequested?.Invoke(-1, false); break;
-                case "jev:zoom-reset": lease.ZoomRequested?.Invoke(0, true); break;
                 case "jev:dirty-form": lease.SetDetected(ProtectionFlags.DirtyForm, true); break;
                 case "jev:secret-field": lease.SetSignals(lease._signals | PageSignals.PasswordField); break;
                 case "jev:payment-field": lease.SetSignals(lease._signals | PageSignals.PaymentField); break;
@@ -518,10 +538,14 @@ public sealed class WebView2Lease : IRendererLease
                     if (msg == "jev:secret-field") lease.AddFrameSignal(frame, PageSignals.PasswordField);
                     else if (msg == "jev:payment-field") lease.AddFrameSignal(frame, PageSignals.PaymentField);
                     else if (msg == "jev:dirty-form") lease.SetDetected(ProtectionFlags.DirtyForm, true);   // typing inside an iframe (a payment or comment widget)
-                    else if (msg is not null && msg.StartsWith("jev:key:", StringComparison.Ordinal)) lease.ChordRequested?.Invoke(msg["jev:key:".Length..]);   // shortcuts pressed while focus is inside an iframe
-                    else if (msg == "jev:zoom-in") lease.ZoomRequested?.Invoke(1, false);   // zoom keys pressed while focus is inside an iframe
-                    else if (msg == "jev:zoom-out") lease.ZoomRequested?.Invoke(-1, false);
-                    else if (msg == "jev:zoom-reset") lease.ZoomRequested?.Invoke(0, true);
+                    else if (lease.StripChord(msg) is { } chord)   // shortcuts and zoom keys with focus inside an iframe: same token check as the top document
+                    {
+                        if (chord.StartsWith("jev:key:", StringComparison.Ordinal)) lease.ChordRequested?.Invoke(chord["jev:key:".Length..]);
+                        else if (chord == "jev:zoom-in") lease.ZoomRequested?.Invoke(1, false);
+                        else if (chord == "jev:zoom-out") lease.ZoomRequested?.Invoke(-1, false);
+                        else if (chord == "jev:zoom-reset") lease.ZoomRequested?.Invoke(0, true);
+                    }
+                    else if (msg is not null && (msg.StartsWith("jev:key:", StringComparison.Ordinal) || msg is "jev:zoom-in" or "jev:zoom-out" or "jev:zoom-reset")) { }   // no valid token: ignored
                     else lease.OnMediaMessage(msg, frame);
                 }
                 catch (Exception) { }
@@ -560,7 +584,7 @@ public sealed class WebView2Lease : IRendererLease
                 lease.EngineFailed?.Invoke(new EngineFailure(e.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited, e.ProcessFailedKind.ToString()));
             }
         };
-        await core.AddScriptToExecuteOnDocumentCreatedAsync(PageScript);
+        await core.AddScriptToExecuteOnDocumentCreatedAsync(PageScript.Replace("{{TOKEN}}", lease.ChordToken, StringComparison.Ordinal));
         return lease;
     }
 
@@ -945,6 +969,15 @@ public sealed class WebView2Lease : IRendererLease
     public event Action? Loaded;
     /// <summary>The page asked to zoom (Ctrl with plus, minus, 0 or the wheel): (direction, reset).</summary>
     public Action<int, bool>? ZoomRequested { get; set; }
+    /// <summary>The random value ONLY this lease's registered script knows (see <see cref="PageScript"/>). A shortcut or zoom message without it is not this lease's own script and is ignored.</summary>
+    public string? ChordToken { get; set; }
+    /// <summary>Strips and checks the token a shortcut/zoom message must carry. Null (no match, no separator) means the message is not trusted.</summary>
+    public string? StripChord(string? msg)
+    {
+        if (msg is null || ChordToken is null) return null;
+        var i = msg.LastIndexOf('|');
+        return i >= 0 && msg[(i + 1)..] == ChordToken ? msg[..i] : null;
+    }
     /// <summary>The page forwarded a browser shortcut it did not use itself (for example "addr" for Ctrl+L).</summary>
     public Action<string>? ChordRequested { get; set; }
     public event Action<EngineFailure>? EngineFailed;

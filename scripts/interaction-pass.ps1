@@ -7,8 +7,8 @@
   Rows it cannot do safely here are reported NOT TESTED, never PASS. Every wait has a timeout; a timeout is FAIL.
 #>
 param(
-    [Parameter(Mandatory)][string]$AppDir,
-    [Parameter(Mandatory)][string]$ZipPath,   # the release zip AppDir was extracted from; its SHA-256 is recorded with the results
+    [Parameter(Mandatory)][string]$ZipPath,   # the release zip to test. This script extracts it itself, into a fresh folder under $Root, and runs THAT
+                                               # extraction: it never trusts a caller-supplied folder to actually be the zip's contents.
     [string]$Root = 'D:\Browser\_ui-check\interaction'
 )
 $ErrorActionPreference = 'Stop'
@@ -16,26 +16,21 @@ Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.For
 Add-Type -Namespace W -Name U -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr h); [DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow(); [DllImport("user32.dll")] public static extern System.IntPtr GetWindow(System.IntPtr h, uint cmd); [DllImport("user32.dll")] public static extern void mouse_event(int f, int x, int y, int d, int e); [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, int flags, int extra);'
 $AE = [System.Windows.Automation.AutomationElement]; $TS = [System.Windows.Automation.TreeScope]
 $run = Join-Path ([IO.Path]::GetFullPath($Root)) ("{0}" -f (Get-Date -Format 'yyyyMMdd-HHmmss')); New-Item -ItemType Directory -Path $run -Force | Out-Null
-$exe = Join-Path (Resolve-Path $AppDir).Path 'JevBrowse.App.exe'
 $zipHash = (Get-FileHash (Resolve-Path $ZipPath).Path -Algorithm SHA256).Hash.ToLower()
-$buildJson = Join-Path (Resolve-Path $AppDir).Path 'BUILD.json'
-if (-not (Test-Path $buildJson)) { throw 'AppDir has no BUILD.json: it is not an extracted release' }
-$build = Get-Content $buildJson -Raw | ConvertFrom-Json
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-$zf = [IO.Compression.ZipFile]::OpenRead((Resolve-Path $ZipPath).Path)
-try { $zipBuild = (New-Object IO.StreamReader(($zf.Entries | Where-Object { $_.FullName -eq 'BUILD.json' }).Open())).ReadToEnd() | ConvertFrom-Json } finally { $zf.Dispose() }
-if ($zipBuild.commit -ne $build.commit -or $zipBuild.builtAt -ne $build.builtAt) { throw 'AppDir was not extracted from this zip (BUILD.json differs)' }
 $runId = [guid]::NewGuid().ToString('N').Substring(0, 8)
+$AppDir = Join-Path $Root "extract-$runId"                       # fresh, uniquely named, never reused
+Expand-Archive -LiteralPath (Resolve-Path $ZipPath).Path -DestinationPath $AppDir -Force
+$exe = Join-Path $AppDir 'JevBrowse.App.exe'
+if (-not (Test-Path $exe)) { throw "the zip's extraction has no JevBrowse.App.exe at its root" }
+$build = Get-Content (Join-Path $AppDir 'BUILD.json') -Raw | ConvertFrom-Json
 $dlName = "jev-pass-$runId.bin"
 $downloadsDir = (New-Object -ComObject Shell.Application).NameSpace('shell:Downloads').Self.Path
 $dlFile = Join-Path $downloadsDir $dlName
 $data = Join-Path $run 'data'; New-Item -ItemType Directory -Path $data -Force | Out-Null
 '{"firstRunDone":true}' | Set-Content "$data\settings.json" -Encoding ascii   # the first-run tips are covered by the packaged smoke
 $results = [ordered]@{}
-# Caps Lock changes what SendKeys types (a run on a machine with it on typed upper-case addresses). Turn it off for the run and put it back exactly as found.
-$capsWasOn = [System.Windows.Forms.Control]::IsKeyLocked('CapsLock')
 function Toggle-Caps { [W.U]::keybd_event(0x14, 0x3A, 0, 0); [W.U]::keybd_event(0x14, 0x3A, 2, 0); Start-Sleep -Milliseconds 400 }   # SendKeys' {CAPSLOCK} does not toggle it
-if ($capsWasOn) { Toggle-Caps; if ([System.Windows.Forms.Control]::IsKeyLocked('CapsLock')) { throw 'Caps Lock is on and could not be turned off; typed addresses would be upper-case' } }
+$capsWasOn = $false   # set for real, and toggled, only inside the try block below, so a failure there still reaches the finally that restores it
 function Row($name, $status, $detail = '') { $results[$name] = [ordered]@{ status = $status; detail = $detail }; Write-Host ("  {0,-10} {1} {2}" -f $status, $name, $detail) }
 function Try-Row($name, [scriptblock]$body) { try { $r = & $body; if ($r -is [string]) { Row $name 'FAIL' $r } else { Row $name 'PASS' } } catch { Row $name 'FAIL' $_.Exception.Message } }
 
@@ -50,7 +45,7 @@ while (`$l.IsListening) {
   if (`$p -eq '/dl') { `$b = [Text.Encoding]::UTF8.GetBytes('hello download'); `$c.Response.ContentType = 'application/octet-stream'; `$c.Response.AddHeader('Content-Disposition','attachment; filename=$dlName'); `$c.Response.OutputStream.Write(`$b,0,`$b.Length); `$c.Response.Close(); continue }
   `$t = 'Page ' + `$p.Trim('/').ToUpper()
   if (`$p -eq '/slow') { Start-Sleep -Seconds 4 }
-  `$extra = if (`$p -eq '/f') { '<iframe id="f" src="/a" width="220" height="90"></iframe>' } else { '' }
+  `$extra = if (`$p -eq '/f') { '<iframe id="f" src="/a" width="220" height="90"></iframe>' } elseif (`$p -eq '/attack') { '<iframe src="/attack-frame" width="10" height="10"></iframe><script>setTimeout(function(){try{chrome.webview.postMessage("jev:key:closetab")}catch(e){};try{chrome.webview.postMessage("jev:zoom-in")}catch(e){};try{chrome.webview.postMessage("jev:key:bookmark")}catch(e){};try{chrome.webview.postMessage("jev:key:addr")}catch(e){};fetch("/report?p=/attack&fired=1")},1200)</script>' } elseif (`$p -eq '/attack-frame') { '<script>setTimeout(function(){try{chrome.webview.postMessage("jev:key:closetab")}catch(e){};try{chrome.webview.postMessage("jev:zoom-in")}catch(e){};fetch("/report?p=/attack-frame&fired=1")},1200)</script>' } else { '' }
   `$html = '<!doctype html><title>' + `$t + '</title><body><h1>' + `$t + '</h1>' + `$extra + '<script>document.addEventListener("click",function(){var f=document.getElementById("f");if(f)f.contentWindow.focus()});setInterval(function(){fetch("/report?p=' + `$p + '&z="+encodeURIComponent(document.documentElement.style.zoom||"1")+"&dpr="+window.devicePixelRatio+"&top="+(window===window.top?1:0)+"&ae="+(document.activeElement?document.activeElement.tagName:""))},700)</script></body>'
   `$b = [Text.Encoding]::UTF8.GetBytes(`$html); `$c.Response.ContentType = 'text/html'; `$c.Response.OutputStream.Write(`$b,0,`$b.Length); `$c.Response.Close()
 }
@@ -84,11 +79,12 @@ function Ctrl-Wheel([int]$notches) {
     $r = $script:win.Current.BoundingRectangle
     [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2))
     Start-Sleep -Milliseconds 300
+    Require-Foreground $script:app.MainWindowHandle 'JevBrowse'
     [W.U]::keybd_event(0x11, 0, 0, 0); Start-Sleep -Milliseconds 100
     [W.U]::mouse_event(0x800, 0, 0, 120 * $notches, 0); Start-Sleep -Milliseconds 300
     [W.U]::keybd_event(0x11, 0, 2, 0); Start-Sleep -Milliseconds 500
 }
-function Click-Page { Focus-Jev; $r = $script:win.Current.BoundingRectangle; [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]($r.X + $r.Width * 0.6), [int]($r.Y + $r.Height * 0.6)); Start-Sleep -Milliseconds 200; [W.U]::mouse_event(2, 0, 0, 0, 0); [W.U]::mouse_event(4, 0, 0, 0, 0); Start-Sleep -Milliseconds 600 }
+function Click-Page { Focus-Jev; $r = $script:win.Current.BoundingRectangle; [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]($r.X + $r.Width * 0.6), [int]($r.Y + $r.Height * 0.6)); Start-Sleep -Milliseconds 200; Require-Foreground $script:app.MainWindowHandle 'JevBrowse'; [W.U]::mouse_event(2, 0, 0, 0, 0); [W.U]::mouse_event(4, 0, 0, 0, 0); Start-Sleep -Milliseconds 600 }
 function Last-Report { if (Test-Path $reportLog) { @(Get-Content $reportLog -Tail 12 | Where-Object { $_ -match 'top=1' } | Select-Object -Last 1)[0] } else { '' } }   # the top document's report, not an iframe's
 function Names { @($script:win.FindAll($TS::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name }) }
 function ById($id) { $script:win.FindFirst($TS::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::AutomationIdProperty, $id))) }
@@ -96,7 +92,17 @@ function ByName($name, $root = $null) { if (-not $root) { $root = $script:win };
 function Status { try { (ById 'StatusText').Current.Name } catch { '' } }
 function Address { try { (ById 'AddressBox').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value } catch { '' } }
 function Wait-For([scriptblock]$cond, $sec = 12) { for ($i = 0; $i -lt $sec * 4; $i++) { if (& $cond) { return $true }; Start-Sleep -Milliseconds 250 }; $false }
-function Click($el) { try { $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch { $r = $el.Current.BoundingRectangle; [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2)); Add-Type -Namespace M -Name C -MemberDefinition '[DllImport("user32.dll")] public static extern void mouse_event(int f,int x,int y,int d,int e);' -ErrorAction SilentlyContinue; [M.C]::mouse_event(2,0,0,0,0); [M.C]::mouse_event(4,0,0,0,0) }; Start-Sleep -Milliseconds 700 }
+function Click($el) {
+    try { $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }
+    catch {
+        $r = $el.Current.BoundingRectangle
+        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2))
+        Start-Sleep -Milliseconds 200
+        Require-Foreground $script:app.MainWindowHandle 'JevBrowse'   # re-checked right here: focus or window placement may have changed since Focus-Jev last ran
+        [W.U]::mouse_event(2, 0, 0, 0, 0); [W.U]::mouse_event(4, 0, 0, 0, 0)
+    }
+    Start-Sleep -Milliseconds 700
+}
 function Go($url) { Keys '^l'; Keys '^a'; Send-Text ($url.Replace('+', '{+}').Replace('^', '{^}').Replace('%', '{%}').Replace('~', '{~}').Replace('(', '{(}').Replace(')', '{)}')); Send-Text '{ENTER}'; Start-Sleep -Seconds 3 }
 function Close-Panel { Keys '{ESC}'; Start-Sleep -Milliseconds 400 }
 function Close-Jev { $null = $script:app.CloseMainWindow(); if (-not $script:app.WaitForExit(40000)) { Stop-Mine $script:app $script:appStamp } }
@@ -123,6 +129,10 @@ function Pick-File($path) {
 $ell = [char]0x2026
 
 try {
+    # Caps Lock changes what SendKeys types (a run on a machine with it on typed upper-case addresses). Turned off for the run and put back exactly as
+    # found -- inside this try, so the finally below restores it even if something right after this fails.
+    $capsWasOn = [System.Windows.Forms.Control]::IsKeyLocked('CapsLock')
+    if ($capsWasOn) { Toggle-Caps; if ([System.Windows.Forms.Control]::IsKeyLocked('CapsLock')) { throw 'Caps Lock is on and could not be turned off; typed addresses would be upper-case' } }
     Start-Jev
     Write-Host "app: $exe`ndata: $data`nserver: $port"
     Row '1 launch (unpackaged, own data folder; first-run tips skipped)' 'PASS' 'window and welcome/start page shown'
@@ -289,6 +299,31 @@ try {
         Click-Page; Keys '^w'; Start-Sleep -Seconds 2
         $tabs2 = ((Names) | Where-Object { $_ -match '^(\d+) tabs? open' } | ForEach-Object { [int]$Matches[1] } | Select-Object -First 1)
         if ($tabs2 -ne $tabs0) { return "Ctrl+W with the page focused did not close it ('$tabs0' -> '$tabs2')" }
+    }
+
+    Try-Row '24 A page (or an embedded frame) that calls chrome.webview.postMessage DIRECTLY, without a key press, has NO authority: no tab closes, no bookmark changes, no zoom is saved, focus is not stolen -- while a REAL key press still works' {
+        Go (U '127.0.0.1' '/a'); Start-Sleep -Seconds 2
+        $before = ((Names) | Where-Object { $_ -match '^(\d+) tabs? open' } | ForEach-Object { [int]($_ -replace '^(\d+).*', '$1') } | Select-Object -First 1)
+        Keys '^+o'; $null = Wait-For { Has-Name '^Search your bookmarks' } 6
+        $bmBefore = @(Names | Where-Object { $_ -match '^Bookmark: ' }).Count
+        Close-Panel
+        Go (U '127.0.0.1' '/attack')
+        $addrEl = ById 'AddressBox'
+        Remove-Item $reportLog -ErrorAction SilentlyContinue
+        if (-not (Wait-For { (Test-Path $reportLog) -and (Get-Content $reportLog -Raw) -match 'p=/attack&fired=1' -and (Get-Content $reportLog -Raw) -match 'p=/attack-frame&fired=1' } 8)) { return 'the attack page (or its frame) never ran, so nothing was exercised' }
+        Start-Sleep -Seconds 1
+        $afterTabs = ((Names) | Where-Object { $_ -match '^(\d+) tabs? open' } | ForEach-Object { [int]($_ -replace '^(\d+).*', '$1') } | Select-Object -First 1)
+        if ($afterTabs -ne $before) { return "a direct message closed the tab: tabs $before -> $afterTabs" }
+        try { if ($addrEl.Current.HasKeyboardFocus) { return 'a direct message moved keyboard focus into the address bar' } } catch { }
+        $siteZoomAfter = $null
+        Keys '^+o'; $null = Wait-For { Has-Name '^Search your bookmarks' } 6
+        $bmAfter = @(Names | Where-Object { $_ -match '^Bookmark: ' }).Count
+        Close-Panel
+        if ($bmAfter -ne $bmBefore) { return "a direct message changed the bookmark list: $bmBefore -> $bmAfter" }
+        # A real key press must still work: with the page genuinely focused, Ctrl+W closes the tab as usual.
+        Click-Page; Keys '^w'; Start-Sleep -Seconds 2
+        $realTabs = ((Names) | Where-Object { $_ -match '^(\d+) tabs? open' } | ForEach-Object { [int]($_ -replace '^(\d+).*', '$1') } | Select-Object -First 1)
+        if ($realTabs -ne $before - 1) { return "a genuine Ctrl+W did not close the attack tab (tabs now $realTabs, expected $($before - 1)) -- the fix may have broken real shortcuts, not just fake ones" }
     }
 
     # ---------------- 19/20 default browser and second copy
