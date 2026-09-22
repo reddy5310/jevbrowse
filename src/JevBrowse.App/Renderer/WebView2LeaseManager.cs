@@ -227,9 +227,16 @@ public sealed class WebView2Lease : IRendererLease
     private const string PageScript = """
         (() => {
           if (window.__jevHooked) return; window.__jevHooked = true;
+          // Captured as the FIRST thing this script does, before anything else runs in this document (no page script has had a chance to execute yet:
+          // that is what AddScriptToExecuteOnDocumentCreatedAsync guarantees). This is a reference to the real, native function, bound to its real
+          // receiver, not a lookup of "whatever chrome.webview.postMessage currently is". A page script that runs after this one and reassigns
+          // chrome.webview.postMessage to a function of its own (to watch what gets sent, hoping to read a token off a genuine forwarded message) never
+          // sees OUR calls: we never read that property again after this line. It can still intercept messages a page's OWN code sends through the
+          // (now-patched) global, which is exactly as much access it always had.
+          const nativePostMessage = chrome.webview.postMessage.bind(chrome.webview);
           const CHORD_TOKEN = "{{TOKEN}}";
-          const post = m => { try { chrome.webview.postMessage(m); } catch {} };
-          const postChord = m => { try { chrome.webview.postMessage(m + '|' + CHORD_TOKEN); } catch {} };
+          const post = m => { try { nativePostMessage(m); } catch {} };
+          const postChord = m => { try { nativePostMessage(m + '|' + CHORD_TOKEN); } catch {} };
           let dirty = false;
           const mark = e => {
             // Typing anywhere counts, a password field included: the flag says THAT something was typed, never what. (It used to skip password fields,

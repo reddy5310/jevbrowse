@@ -36,16 +36,19 @@ function Try-Row($name, [scriptblock]$body) { try { $r = & $body; if ($r -is [st
 
 # ---- local web server (its own process, so nothing here can hang the driver)
 $port = 47100 + (Get-Random -Maximum 300)
+$port2 = $port + 1000   # a second, genuinely different origin (different port), for the cross-origin capture regression
 $reportLog = Join-Path $run 'report.log'
+$capturedLog = Join-Path $run 'captured.log'
 $serverScript = @"
-`$l = New-Object System.Net.HttpListener; `$l.Prefixes.Add('http://127.0.0.1:$port/'); `$l.Prefixes.Add('http://localhost:$port/'); `$l.Start()
+`$l = New-Object System.Net.HttpListener; `$l.Prefixes.Add('http://127.0.0.1:$port/'); `$l.Prefixes.Add('http://localhost:$port/'); `$l.Prefixes.Add('http://127.0.0.1:$port2/'); `$l.Start()
 while (`$l.IsListening) {
   `$c = `$l.GetContext(); `$p = `$c.Request.Url.AbsolutePath
   if (`$p -eq '/report') { Add-Content '$reportLog' (`$c.Request.Url.Query); `$c.Response.StatusCode = 204; `$c.Response.Close(); continue }
+  if (`$p -eq '/captured') { Add-Content '$capturedLog' (`$c.Request.Url.Query); `$c.Response.Headers.Add('Access-Control-Allow-Origin','*'); `$c.Response.StatusCode = 204; `$c.Response.Close(); continue }
   if (`$p -eq '/dl') { `$b = [Text.Encoding]::UTF8.GetBytes('hello download'); `$c.Response.ContentType = 'application/octet-stream'; `$c.Response.AddHeader('Content-Disposition','attachment; filename=$dlName'); `$c.Response.OutputStream.Write(`$b,0,`$b.Length); `$c.Response.Close(); continue }
   `$t = 'Page ' + `$p.Trim('/').ToUpper()
   if (`$p -eq '/slow') { Start-Sleep -Seconds 4 }
-  `$extra = if (`$p -eq '/f') { '<iframe id="f" src="/a" width="220" height="90"></iframe>' } elseif (`$p -eq '/attack') { '<iframe src="/attack-frame" width="10" height="10"></iframe><script>setTimeout(function(){try{chrome.webview.postMessage("jev:key:closetab")}catch(e){};try{chrome.webview.postMessage("jev:zoom-in")}catch(e){};try{chrome.webview.postMessage("jev:key:bookmark")}catch(e){};try{chrome.webview.postMessage("jev:key:addr")}catch(e){};fetch("/report?p=/attack&fired=1")},3000)</script>' } elseif (`$p -eq '/attack-frame') { '<script>setTimeout(function(){try{chrome.webview.postMessage("jev:key:closetab")}catch(e){};try{chrome.webview.postMessage("jev:zoom-in")}catch(e){};fetch("/report?p=/attack-frame&fired=1")},3000)</script>' } else { '' }
+  `$extra = if (`$p -eq '/capture') { '<div id="ff" style="position:fixed;right:0;bottom:0;width:45%;height:45%" onclick="document.getElementById(''cf'').contentWindow.focus()"></div><iframe id="cf" src="http://127.0.0.1:$port2/capture-frame" width="10" height="10"></iframe><script>(function(){var last=null;var real=chrome.webview.postMessage;chrome.webview.postMessage=function(m){last=m;fetch("/captured?src=top&m="+encodeURIComponent(m));return real.call(chrome.webview,m)};fetch("/report?p=/capture&patched=1");setTimeout(function(){var r=last||"jev:key:closetab|";try{chrome.webview.postMessage(r)}catch(e){}try{chrome.webview.postMessage("jev:key:closetab|00000000000000000000000000000000")}catch(e){}try{chrome.webview.postMessage("jev:key:closetab")}catch(e){}fetch("/report?p=/capture&replayed=1&had="+(last?1:0))},12000)})()</script>' } elseif (`$p -eq '/capture-frame') { '<script>(function(){var last=null;var real=chrome.webview.postMessage;chrome.webview.postMessage=function(m){last=m;fetch("http://127.0.0.1:$port/captured?src=frame&m="+encodeURIComponent(m));return real.call(chrome.webview,m)};fetch("http://127.0.0.1:$port/report?p=/capture-frame&patched=1");setTimeout(function(){var r=last||"jev:key:closetab|";try{chrome.webview.postMessage(r)}catch(e){}try{chrome.webview.postMessage("jev:key:closetab|00000000000000000000000000000000")}catch(e){}fetch("http://127.0.0.1:$port/report?p=/capture-frame&replayed=1&had="+(last?1:0))},12000)})()</script>' } elseif (`$p -eq '/f') { '<iframe id="f" src="/a" width="220" height="90"></iframe>' } elseif (`$p -eq '/attack') { '<iframe src="/attack-frame" width="10" height="10"></iframe><script>setTimeout(function(){try{chrome.webview.postMessage("jev:key:closetab")}catch(e){};try{chrome.webview.postMessage("jev:zoom-in")}catch(e){};try{chrome.webview.postMessage("jev:key:bookmark")}catch(e){};try{chrome.webview.postMessage("jev:key:addr")}catch(e){};fetch("/report?p=/attack&fired=1")},3000)</script>' } elseif (`$p -eq '/attack-frame') { '<script>setTimeout(function(){try{chrome.webview.postMessage("jev:key:closetab")}catch(e){};try{chrome.webview.postMessage("jev:zoom-in")}catch(e){};fetch("/report?p=/attack-frame&fired=1")},3000)</script>' } else { '' }
   `$html = '<!doctype html><title>' + `$t + '</title><body><h1>' + `$t + '</h1>' + `$extra + '<script>document.addEventListener("click",function(){var f=document.getElementById("f");if(f)f.contentWindow.focus()});setInterval(function(){fetch("/report?p=' + `$p + '&z="+encodeURIComponent(document.documentElement.style.zoom||"1")+"&dpr="+window.devicePixelRatio+"&top="+(window===window.top?1:0)+"&ae="+(document.activeElement?document.activeElement.tagName:""))},700)</script></body>'
   `$b = [Text.Encoding]::UTF8.GetBytes(`$html); `$c.Response.ContentType = 'text/html'; `$c.Response.OutputStream.Write(`$b,0,`$b.Length); `$c.Response.Close()
 }
@@ -84,6 +87,7 @@ function Ctrl-Wheel([int]$notches) {
     [W.U]::mouse_event(0x800, 0, 0, 120 * $notches, 0); Start-Sleep -Milliseconds 300
     [W.U]::keybd_event(0x11, 0, 2, 0); Start-Sleep -Milliseconds 500
 }
+function Click-At($xFrac, $yFrac) { Focus-Jev; $r = $script:win.Current.BoundingRectangle; [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]($r.X + $r.Width * $xFrac), [int]($r.Y + $r.Height * $yFrac)); Start-Sleep -Milliseconds 200; Require-Foreground $script:app.MainWindowHandle 'JevBrowse'; [W.U]::mouse_event(2, 0, 0, 0, 0); [W.U]::mouse_event(4, 0, 0, 0, 0); Start-Sleep -Milliseconds 600 }
 function Click-Page { Focus-Jev; $r = $script:win.Current.BoundingRectangle; [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]($r.X + $r.Width * 0.6), [int]($r.Y + $r.Height * 0.6)); Start-Sleep -Milliseconds 200; Require-Foreground $script:app.MainWindowHandle 'JevBrowse'; [W.U]::mouse_event(2, 0, 0, 0, 0); [W.U]::mouse_event(4, 0, 0, 0, 0); Start-Sleep -Milliseconds 600 }
 function Last-Report { if (Test-Path $reportLog) { @(Get-Content $reportLog -Tail 12 | Where-Object { $_ -match 'top=1' } | Select-Object -Last 1)[0] } else { '' } }   # the top document's report, not an iframe's
 function Names { @($script:win.FindAll($TS::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name }) }
@@ -327,6 +331,42 @@ try {
         Click-Page; Keys '^w'; Start-Sleep -Seconds 2
         $realTabs = ((Names) | Where-Object { $_ -match '^(\d+) tabs? open' } | ForEach-Object { [int]$Matches[1] } | Select-Object -First 1)
         if ($realTabs -ne $before - 1) { return "a genuine Ctrl+W did not close the attack tab (tabs now $realTabs, expected $($before - 1)) -- the fix may have broken real shortcuts, not just fake ones" }
+    }
+
+    Try-Row '25 A page-installed postMessage interceptor -- in the top document AND in a genuinely cross-origin frame (a different port, so a different origin) -- captures NOTHING from a REAL key press, and whatever it replays afterward (including any address-bar focus attempt) has no authority' {
+        Remove-Item $reportLog, $capturedLog -ErrorAction SilentlyContinue
+        Go (U '127.0.0.1' '/capture')
+        if (-not (Wait-For { (Test-Path $reportLog) -and (Get-Content $reportLog -Raw) -match 'p=/capture&patched=1' -and (Get-Content $reportLog -Raw) -match 'p=/capture-frame&patched=1' } 8)) { return 'the capture pages never installed their interceptor, so nothing was exercised' }
+        $before = ((Names) | Where-Object { $_ -match '^(\d+) tabs? open' } | ForEach-Object { [int]$Matches[1] } | Select-Object -First 1)
+
+        # A genuine zoom on the TOP document (real key press, page focused): must actually zoom, or the rest of this row proves nothing.
+        Click-Page
+        Keys '^{ADD}'; Start-Sleep -Seconds 2
+        if ((Last-Report) -notmatch 'z=1\.1&') { return "a genuine Ctrl+ on the top document did not zoom it (report: '$(Last-Report)') -- the interceptor cannot be judged without a real chord firing" }
+
+        # A genuine zoom on the IFRAME (a DIFFERENT ORIGIN -- 127.0.0.1:$port2 versus 127.0.0.1:$port). Focus moves there via an explicit, visible button
+        # (its own onclick calls contentWindow.focus()) rather than a coordinate click or a document-wide "any click focuses the frame" listener, which
+        # would also hijack the TOP-document click above -- exactly the kind of test-harness bug that must not be mistaken for the product being secure.
+        Click-At 0.9 0.9   # the div near the bottom-right corner of the page (see /capture's markup), away from Click-Page's own 60%/60% point
+        Keys '^{ADD}'; Start-Sleep -Seconds 2
+        if ((Last-Report) -notmatch 'ae=IFRAME') { return "the button did not move focus into the frame (report: '$(Last-Report)') -- the frame case was not exercised" }
+
+        $captured = if (Test-Path $capturedLog) { Get-Content $capturedLog -Raw } else { '' }
+        if ($captured -match 'jev:(key|zoom)') { return "a page interceptor captured a real chord message: $captured" }
+
+        # Both interceptors now replay whatever they captured (nothing useful) plus blind guesses, 12s after their own page loaded -- comfortably after
+        # both real presses above. Give them their full delay, then judge.
+        $addrEl = ById 'AddressBox'
+        if (-not (Wait-For { (Test-Path $reportLog) -and (Get-Content $reportLog -Raw) -match 'p=/capture&replayed=1' -and (Get-Content $reportLog -Raw) -match 'p=/capture-frame&replayed=1' } 14)) { return 'the replay attempt never ran, so nothing was exercised' }
+        Start-Sleep -Seconds 1
+        $afterTabs = ((Names) | Where-Object { $_ -match '^(\d+) tabs? open' } | ForEach-Object { [int]$Matches[1] } | Select-Object -First 1)
+        if ($afterTabs -ne $before) { return "the replay closed the tab: tabs $before -> $afterTabs" }
+        try { if ($addrEl.Current.HasKeyboardFocus) { return 'the replay moved keyboard focus into the address bar' } } catch { }
+
+        # A real key press must still work after all of this.
+        Click-Page; Keys '^w'; Start-Sleep -Seconds 2
+        $realTabs = ((Names) | Where-Object { $_ -match '^(\d+) tabs? open' } | ForEach-Object { [int]$Matches[1] } | Select-Object -First 1)
+        if ($realTabs -ne $before - 1) { return "a genuine Ctrl+W did not close the tab afterward (tabs now $realTabs, expected $($before - 1))" }
     }
 
     # ---------------- 19/20 default browser and second copy

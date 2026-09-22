@@ -15,3 +15,4 @@ data/
 
 # Databases written by real historic builds, used by the upgrade tests.
 !tests/Fixtures/db/*.db
+Browser_ui-check*/
