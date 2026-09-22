@@ -2,7 +2,9 @@
 
 **Status: awaiting independent review. Not yet audited by anyone other than its author.** One gap this document originally flagged as untried — path #3,
 a page intercepting `chrome.webview.postMessage` to steal a token off a genuine key press — was found to be real and has been fixed; see path #3 below.
-Do not read that, or this document's other passing local checks, as verification of the mechanism as a whole. It exists to make the mechanism easy for
+**Passing that regression establishes that ONE specific attack (path #3) is blocked. It does not establish that the token boundary as a whole is secure.**
+Paths #1, #2, #4 and #5 remain untried, and a fix this document's own author wrote and verified is exactly the kind of thing that needs a second reader
+before anyone relies on it. Do not read a passing local check as verification of the mechanism as a whole. It exists to make the mechanism easy for
 someone else to read and try to break.
 
 ## What it protects, and why it exists

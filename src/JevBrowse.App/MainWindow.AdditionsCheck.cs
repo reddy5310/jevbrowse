@@ -19,6 +19,16 @@ public sealed partial class MainWindow
         var k = _kernel!;
         var steps = new List<object>(); var pass = true;
         void Step(string name, bool ok, string detail = "") { steps.Add(new { name, ok, detail }); if (!ok) pass = false; }
+        // Targeted diagnostic for the reproducible ClickDownload failure (see docs/releases/0.1.0-alpha.7.md): if the Private tab's renderer failed and
+        // was replaced underneath the bench mid-check, this is where that would show up. Left in place (harmless, append-only) so the next reproduction
+        // carries its own evidence instead of needing to be caught live again.
+        try
+        {
+            var diagLog = Path.Combine(DataDir, "benchmarks", "additions-check-diagnostic.log");
+            Directory.CreateDirectory(Path.GetDirectoryName(diagLog)!);
+            k.Changed += e => { if (e.Kind is "engine-failed" or "restoring" or "restored" or "virtualized") try { File.AppendAllText(diagLog, $"{DateTime.Now:O} {e.Kind} {e.Id} {e.Reason}\n"); } catch (Exception) { } };
+        }
+        catch (Exception) { }
         async Task<bool> Until(Func<bool> cond, int ms = 10000) { var sw = System.Diagnostics.Stopwatch.StartNew(); while (sw.ElapsedMilliseconds < ms) { if (cond()) return true; await Task.Delay(50); } return cond(); }
         WebView2Lease? LeaseOf(ResourceId id) => _leases!.TryGet(id, out var l) ? (WebView2Lease)l : null;
 
