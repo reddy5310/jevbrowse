@@ -1,0 +1,11 @@
+$l = New-Object System.Net.HttpListener; $l.Prefixes.Add('http://127.0.0.1:47351/'); $l.Prefixes.Add('http://localhost:47351/'); $l.Start()
+while ($l.IsListening) {
+  $c = $l.GetContext(); $p = $c.Request.Url.AbsolutePath
+  if ($p -eq '/report') { Add-Content 'D:\Browser\jevbrowse\Browser_ui-checkinteraction2\20260922-103701\report.log' ($c.Request.Url.Query); $c.Response.StatusCode = 204; $c.Response.Close(); continue }
+  if ($p -eq '/dl') { $b = [Text.Encoding]::UTF8.GetBytes('hello download'); $c.Response.ContentType = 'application/octet-stream'; $c.Response.AddHeader('Content-Disposition','attachment; filename=jev-pass-77f36cbb.bin'); $c.Response.OutputStream.Write($b,0,$b.Length); $c.Response.Close(); continue }
+  $t = 'Page ' + $p.Trim('/').ToUpper()
+  if ($p -eq '/slow') { Start-Sleep -Seconds 4 }
+  $extra = if ($p -eq '/f') { '<iframe id="f" src="/a" width="220" height="90"></iframe>' } elseif ($p -eq '/attack') { '<iframe src="/attack-frame" width="10" height="10"></iframe><script>setTimeout(function(){try{chrome.webview.postMessage("jev:key:closetab")}catch(e){};try{chrome.webview.postMessage("jev:zoom-in")}catch(e){};try{chrome.webview.postMessage("jev:key:bookmark")}catch(e){};try{chrome.webview.postMessage("jev:key:addr")}catch(e){};fetch("/report?p=/attack&fired=1")},1200)</script>' } elseif ($p -eq '/attack-frame') { '<script>setTimeout(function(){try{chrome.webview.postMessage("jev:key:closetab")}catch(e){};try{chrome.webview.postMessage("jev:zoom-in")}catch(e){};fetch("/report?p=/attack-frame&fired=1")},1200)</script>' } else { '' }
+  $html = '<!doctype html><title>' + $t + '</title><body><h1>' + $t + '</h1>' + $extra + '<script>document.addEventListener("click",function(){var f=document.getElementById("f");if(f)f.contentWindow.focus()});setInterval(function(){fetch("/report?p=' + $p + '&z="+encodeURIComponent(document.documentElement.style.zoom||"1")+"&dpr="+window.devicePixelRatio+"&top="+(window===window.top?1:0)+"&ae="+(document.activeElement?document.activeElement.tagName:""))},700)</script></body>'
+  $b = [Text.Encoding]::UTF8.GetBytes($html); $c.Response.ContentType = 'text/html'; $c.Response.OutputStream.Write($b,0,$b.Length); $c.Response.Close()
+}

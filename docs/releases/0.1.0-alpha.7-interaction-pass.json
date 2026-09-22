@@ -1,10 +1,10 @@
 ﻿{
-    "exe":  "D:\\Browser\\_ui-check\\accept\\app\\JevBrowse.App.exe",
-    "zipSha256":  "05990575e9d168f81895e947e7a6e0e0bc1f54c39bc2675a132d7e0fb90f3862",
-    "buildCommit":  "ef7f7f2bfdbe6eda109728ed2d674293be687e76",
+    "exe":  "D:\\Browser\\_ui-check\\interaction\\extract-421609e2\\JevBrowse.App.exe",
+    "zipSha256":  "f46bd00ba5af341c3748120a611becb8743ab38965f9323dfabc581169b0b60a",
+    "buildCommit":  "069cd8475e6c937daa75c0c76a572ac098bba11a",
     "buildVersion":  "0.1.0-alpha.7",
     "webView2":  "153.0.4234.48",
-    "at":  "2026-09-21T21:11:44.9684381Z",
+    "at":  "2026-09-22T05:29:27.6876655Z",
     "os":  "Microsoft Windows NT 10.0.26200.0",
     "results":  {
                     "1 launch (unpackaged, own data folder; first-run tips skipped)":  {
@@ -75,6 +75,10 @@
                                                                                                                  "status":  "PASS",
                                                                                                                  "detail":  ""
                                                                                                              },
+                    "24 A page (or an embedded frame) that calls chrome.webview.postMessage DIRECTLY, without a key press, has NO authority: no tab closes, no bookmark changes, no zoom is saved, focus is not stolen -- while a REAL key press still works":  {
+                                                                                                                                                                                                                                                                    "status":  "PASS",
+                                                                                                                                                                                                                                                                    "detail":  ""
+                                                                                                                                                                                                                                                                },
                     "19 Default browser: Make default / Settings hand-off / links from other programs":  {
                                                                                                              "status":  "NOT TESTED",
                                                                                                              "detail":  "the dialog registers JevBrowse in the current user registry before it asks; that changes the host, so it is left for the disposable guest"

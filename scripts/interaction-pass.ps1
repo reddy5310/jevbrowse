@@ -45,7 +45,7 @@ while (`$l.IsListening) {
   if (`$p -eq '/dl') { `$b = [Text.Encoding]::UTF8.GetBytes('hello download'); `$c.Response.ContentType = 'application/octet-stream'; `$c.Response.AddHeader('Content-Disposition','attachment; filename=$dlName'); `$c.Response.OutputStream.Write(`$b,0,`$b.Length); `$c.Response.Close(); continue }
   `$t = 'Page ' + `$p.Trim('/').ToUpper()
   if (`$p -eq '/slow') { Start-Sleep -Seconds 4 }
-  `$extra = if (`$p -eq '/f') { '<iframe id="f" src="/a" width="220" height="90"></iframe>' } elseif (`$p -eq '/attack') { '<iframe src="/attack-frame" width="10" height="10"></iframe><script>setTimeout(function(){try{chrome.webview.postMessage("jev:key:closetab")}catch(e){};try{chrome.webview.postMessage("jev:zoom-in")}catch(e){};try{chrome.webview.postMessage("jev:key:bookmark")}catch(e){};try{chrome.webview.postMessage("jev:key:addr")}catch(e){};fetch("/report?p=/attack&fired=1")},1200)</script>' } elseif (`$p -eq '/attack-frame') { '<script>setTimeout(function(){try{chrome.webview.postMessage("jev:key:closetab")}catch(e){};try{chrome.webview.postMessage("jev:zoom-in")}catch(e){};fetch("/report?p=/attack-frame&fired=1")},1200)</script>' } else { '' }
+  `$extra = if (`$p -eq '/f') { '<iframe id="f" src="/a" width="220" height="90"></iframe>' } elseif (`$p -eq '/attack') { '<iframe src="/attack-frame" width="10" height="10"></iframe><script>setTimeout(function(){try{chrome.webview.postMessage("jev:key:closetab")}catch(e){};try{chrome.webview.postMessage("jev:zoom-in")}catch(e){};try{chrome.webview.postMessage("jev:key:bookmark")}catch(e){};try{chrome.webview.postMessage("jev:key:addr")}catch(e){};fetch("/report?p=/attack&fired=1")},3000)</script>' } elseif (`$p -eq '/attack-frame') { '<script>setTimeout(function(){try{chrome.webview.postMessage("jev:key:closetab")}catch(e){};try{chrome.webview.postMessage("jev:zoom-in")}catch(e){};fetch("/report?p=/attack-frame&fired=1")},3000)</script>' } else { '' }
   `$html = '<!doctype html><title>' + `$t + '</title><body><h1>' + `$t + '</h1>' + `$extra + '<script>document.addEventListener("click",function(){var f=document.getElementById("f");if(f)f.contentWindow.focus()});setInterval(function(){fetch("/report?p=' + `$p + '&z="+encodeURIComponent(document.documentElement.style.zoom||"1")+"&dpr="+window.devicePixelRatio+"&top="+(window===window.top?1:0)+"&ae="+(document.activeElement?document.activeElement.tagName:""))},700)</script></body>'
   `$b = [Text.Encoding]::UTF8.GetBytes(`$html); `$c.Response.ContentType = 'text/html'; `$c.Response.OutputStream.Write(`$b,0,`$b.Length); `$c.Response.Close()
 }
@@ -303,16 +303,19 @@ try {
 
     Try-Row '24 A page (or an embedded frame) that calls chrome.webview.postMessage DIRECTLY, without a key press, has NO authority: no tab closes, no bookmark changes, no zoom is saved, focus is not stolen -- while a REAL key press still works' {
         Go (U '127.0.0.1' '/a'); Start-Sleep -Seconds 2
-        $before = ((Names) | Where-Object { $_ -match '^(\d+) tabs? open' } | ForEach-Object { [int]($_ -replace '^(\d+).*', '$1') } | Select-Object -First 1)
+        $before = ((Names) | Where-Object { $_ -match '^(\d+) tabs? open' } | ForEach-Object { [int]$Matches[1] } | Select-Object -First 1)
         Keys '^+o'; $null = Wait-For { Has-Name '^Search your bookmarks' } 6
         $bmBefore = @(Names | Where-Object { $_ -match '^Bookmark: ' }).Count
         Close-Panel
-        Go (U '127.0.0.1' '/attack')
-        $addrEl = ById 'AddressBox'
         Remove-Item $reportLog -ErrorAction SilentlyContinue
-        if (-not (Wait-For { (Test-Path $reportLog) -and (Get-Content $reportLog -Raw) -match 'p=/attack&fired=1' -and (Get-Content $reportLog -Raw) -match 'p=/attack-frame&fired=1' } 8)) { return 'the attack page (or its frame) never ran, so nothing was exercised' }
+        Go (U '127.0.0.1' '/attack')
+        Click-Page   # establishes that the PAGE, not the address bar, genuinely has keyboard focus before the attack fires (the address bar keeps focus after
+                      # Enter until something else takes it -- ordinary browser behaviour, not something the attack should be blamed for). The attack waits
+                      # 3s before it fires, comfortably after Click-Page and the report-log reset above.
+        $addrEl = ById 'AddressBox'
+        if (-not (Wait-For { (Test-Path $reportLog) -and (Get-Content $reportLog -Raw) -match 'p=/attack&fired=1' -and (Get-Content $reportLog -Raw) -match 'p=/attack-frame&fired=1' } 10)) { return 'the attack page (or its frame) never ran, so nothing was exercised' }
         Start-Sleep -Seconds 1
-        $afterTabs = ((Names) | Where-Object { $_ -match '^(\d+) tabs? open' } | ForEach-Object { [int]($_ -replace '^(\d+).*', '$1') } | Select-Object -First 1)
+        $afterTabs = ((Names) | Where-Object { $_ -match '^(\d+) tabs? open' } | ForEach-Object { [int]$Matches[1] } | Select-Object -First 1)
         if ($afterTabs -ne $before) { return "a direct message closed the tab: tabs $before -> $afterTabs" }
         try { if ($addrEl.Current.HasKeyboardFocus) { return 'a direct message moved keyboard focus into the address bar' } } catch { }
         $siteZoomAfter = $null
@@ -322,7 +325,7 @@ try {
         if ($bmAfter -ne $bmBefore) { return "a direct message changed the bookmark list: $bmBefore -> $bmAfter" }
         # A real key press must still work: with the page genuinely focused, Ctrl+W closes the tab as usual.
         Click-Page; Keys '^w'; Start-Sleep -Seconds 2
-        $realTabs = ((Names) | Where-Object { $_ -match '^(\d+) tabs? open' } | ForEach-Object { [int]($_ -replace '^(\d+).*', '$1') } | Select-Object -First 1)
+        $realTabs = ((Names) | Where-Object { $_ -match '^(\d+) tabs? open' } | ForEach-Object { [int]$Matches[1] } | Select-Object -First 1)
         if ($realTabs -ne $before - 1) { return "a genuine Ctrl+W did not close the attack tab (tabs now $realTabs, expected $($before - 1)) -- the fix may have broken real shortcuts, not just fake ones" }
     }
 
