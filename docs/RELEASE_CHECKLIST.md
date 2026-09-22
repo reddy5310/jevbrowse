@@ -47,7 +47,7 @@ See [FIRST_RELEASE_PLAN.md](FIRST_RELEASE_PLAN.md) for the ten review findings (
 | Clean Windows account / VM run (checklist, 21 rows incl. default-browser handoff) | **Blocked** | No Hyper-V/Sandbox access on the build machine (`Get-VM` denied, no admin rights); needs a designated tester with their own machine, `docs/CLEAN_WINDOWS_CHECKLIST.md` |
 | CI (GitHub Actions) | Was blocked on account billing; re-check before relying on it | See `docs/RELEASE_RUNBOOK.md` |
 | Release notes: commit, checksum, prerequisites, data location, backup, limitations | Done | `docs/releases/0.1.0-alpha.7.md` |
-| Explicit approval to publish, tied to a specific tested hash | **Open — the owner's decision** | Nothing has been published; see `docs/RELEASE_RUNBOOK.md` |
+| Explicit approval to publish, tied to a specific tested hash | **Open — the owner's decision** | Nothing has been published; the owner has decided the distribution shape (public repo + GitHub Release, once the two gates below pass) but not yet approved a hash. See `docs/RELEASE_RUNBOOK.md` |
 
 ## 3. Everyday browsing
 

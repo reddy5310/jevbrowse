@@ -4,6 +4,12 @@ How a JevBrowse alpha gets built, tested and — only with explicit approval —
 repository owner's account billing (a spending limit / failed payment, not a JevBrowse problem), so the runbook treats **local verification as the
 primary evidence** and CI as a second, independent check that is used when it is available and clearly labelled when it is not.
 
+## Distribution decision (owner, 2026-09-22)
+
+The first public release will be a **public GitHub repository with a GitHub Release** (not a private repo with the ZIP hosted elsewhere): the source and
+the ZIP both become visible together, matching the MPL-2.0 license already in the repo. This happens **only after both outstanding gates below pass**;
+the owner explicitly chose to wait rather than publish now and catch up on them afterward. Until then the repo stays private and nothing is published.
+
 ## Roles
 
 - **Claude** builds, tests locally, writes the evidence, and prepares (but never runs unattended) the publish step.
@@ -82,6 +88,10 @@ primary evidence** and CI as a second, independent check that is used when it is
    then the candidate sits in `artifacts\release\` and in the release record, unpublished.
 
 ## Publishing (only after step 9)
+
+**Repo visibility is switched by the owner, at publish time, not before.** Making `reddy5310/jevbrowse` public is a GitHub Settings action Claude does
+not take on its own initiative (Settings → General → Danger Zone → Change visibility); it happens once steps 7 and 8 have both passed and the owner gives
+the final go, at the same moment the release itself is created, so the source and the first downloadable build appear together.
 
 Two ways, both requiring the exact bytes that were tested:
 
