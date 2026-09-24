@@ -47,8 +47,38 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
     /// </summary>
     public Func<CoreWebView2, ResourceId, IdentityContainer, ContextId, Uri, Task>? OnCoreCreated { get; set; }
     public Action<ResourceId>? OnCoreDisposed { get; set; }
-    /// <summary>A page asked for a new window: (the page, where to, the person clicked or typed, it is an agent's page).</summary>
-    public Action<ResourceId, Uri?, bool, bool>? OnPopupRequested { get; set; }
+    /// <summary>
+    /// A page asked for a new window: (the page, where to, the person clicked or typed, it is an agent's page, the id already reserved for it if it is
+    /// accepted). Decide, and if accepting, register a tab for exactly that id (<see cref="JevBrowse.VirtualTabs.TabKernel.OpenIn"/>'s <c>presetId</c>) and
+    /// activate it — the id must be used exactly as given, or the renderer this manager is about to create for it will never be found. Returns whether it
+    /// was accepted; the manager creates the renderer only after hearing yes, so a refusal never creates one to immediately throw away.
+    /// </summary>
+    public Func<ResourceId, Uri?, bool, bool, ResourceId, Task<bool>>? OnPopupRequested { get; set; }
+
+    /// <summary>
+    /// Creates the popup's renderer, in the SAME identity as its opener, and hands back the raw engine object <c>NewWindowRequested</c> needs — this is
+    /// the one case where a <c>CoreWebView2</c> is created and returned directly instead of through the <see cref="IRendererLease"/> abstraction, because
+    /// the whole point (preserving <c>window.opener</c>) requires the ENGINE to be the one that accepts and navigates it; nothing here calls Navigate.
+    /// </summary>
+    private async Task<CoreWebView2?> RequestPopupAsync(ResourceId openerId, Uri? target, bool userInitiated, bool agentPage)
+    {
+        if (target is null || OnPopupRequested is null || !_live.TryGetValue(openerId, out var openerLeaseObj)) return null;
+        var opener = (WebView2Lease)openerLeaseObj;
+        var newId = ResourceId.New();
+        // The renderer is created and registered FIRST, still unnavigated, before the app is even told about it. This is the order that matters: telling
+        // the app first (as an earlier version of this did) means its own tab-activation path creates and NAVIGATES a renderer through the NORMAL flow
+        // before this method's own (skipInitialNavigate) call ever runs -- by the time e.NewWindow was assigned, the popup's document had already been
+        // replaced by that navigation, and window.opener was never preserved. Verified with a real click and a real opener/postMessage round trip: this
+        // reordering is what actually fixed it, not merely what the reasoning said should.
+        var popup = (WebView2Lease)await AcquireAsync(newId, target, RenderIntent.Foreground, opener.OwnerContainer ?? IdentityContainer.Personal, opener.OwnerWorkspace, CancellationToken.None, skipInitialNavigate: true);
+        if (!await OnPopupRequested(openerId, target, userInitiated, agentPage, newId))
+        {
+            // Refused (policy or the person). The renderer was already created to keep this method race-free; nothing was ever shown, so it is torn down.
+            try { await ReleaseAsync(newId, ReleaseDisposition.Dispose, CancellationToken.None); } catch (Exception) { }
+            return null;
+        }
+        return popup.View.CoreWebView2;
+    }
     /// <summary>A page started a download: (the page, file name, where from, it is an agent's page) → allow it? Asked before anything is saved.</summary>
     public Func<ResourceId, string, Uri?, bool, Task<bool>>? OnDownloadRequested { get; set; }
     public string? DownloadPathOverride { get; set; }
@@ -58,6 +88,9 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
     public Action<ResourceId, string>? OnChord { get; set; }
     /// <summary>A download ended: (the page, file name, saved path, where from, it finished rather than being interrupted, this is an agent's page, the identity container and workspace the page belonged to when the download STARTED; a null container means ownership is unknown).</summary>
     public Action<ResourceId, string, string, Uri?, bool, bool, IdentityContainer?, ContextId>? OnDownloadFinished { get; set; }
+    /// <summary>A download began (the gate, if any, already said yes): (the page, file name, where from, the live engine object for progress/Cancel, this
+    /// is an agent's page). Fires once per download, before <see cref="OnDownloadFinished"/>.</summary>
+    public Action<ResourceId, string, Uri?, CoreWebView2DownloadOperation, bool>? OnDownloadStarted { get; set; }
     /// <summary>Resolves jev:// URLs to locally generated HTML (welcome/help). No network involved.</summary>
     public Func<Uri, string?>? LocalPage { get; set; }
 
@@ -103,8 +136,17 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
         return ok;
     }
 
-    public async Task<IRendererLease> AcquireAsync(ResourceId id, Uri initialUrl, RenderIntent intent, IdentityContainer container, ContextId isolationKey, CancellationToken ct)
+    public Task<IRendererLease> AcquireAsync(ResourceId id, Uri initialUrl, RenderIntent intent, IdentityContainer container, ContextId isolationKey, CancellationToken ct) =>
+        AcquireAsync(id, initialUrl, intent, container, isolationKey, ct, skipInitialNavigate: false);
+
+    /// <param name="skipInitialNavigate">True for a popup being adopted with its opener relationship intact (see <see cref="RequestPopupAsync"/>): the
+    /// engine itself navigates a window it was just handed via <c>NewWindowRequested.NewWindow</c>, so this side must not also call Navigate — that would
+    /// race the engine's own navigation and, worse, replace the very document whose <c>window.opener</c> the whole point was to preserve.</param>
+    public async Task<IRendererLease> AcquireAsync(ResourceId id, Uri initialUrl, RenderIntent intent, IdentityContainer container, ContextId isolationKey, CancellationToken ct, bool skipInitialNavigate)
     {
+        // A popup adopted via RequestPopupAsync already has a live renderer registered under this id before the kernel ever calls AcquireAsync for it
+        // (activating the tab the usual way, after the fact, must find the SAME renderer, not create a second, disconnected one).
+        if (_live.TryGetValue(id, out var already)) return already;
         var key = IdentityKey(container, isolationKey);
         ThrowIfEnded(key);
         var env = await GetEnvironmentAsync(container, isolationKey);
@@ -122,20 +164,24 @@ public sealed class WebView2LeaseManager : IRendererLeaseManager
             ThrowIfEnded(key);
             // In force before the first Navigate below, so an allowed URL that redirects out of scope is stopped.
             if (_navPolicies.TryGetValue(id, out var policy)) lease.NavigationGuard = policy;
-            lease.PopupRequested = (target, userInitiated, agent) => OnPopupRequested?.Invoke(id, target, userInitiated, agent);
+            lease.PopupRequested = (target, userInitiated, agent) => RequestPopupAsync(id, target, userInitiated, agent);
             lease.DownloadGate = (name, source, agent) => OnDownloadRequested is { } ask ? ask(id, name, source, agent) : Task.FromResult(true);
             lease.DownloadPathOverride = DownloadPathOverride;
             lease.ZoomRequested = (dir, reset) => OnZoomKey?.Invoke(id, dir, reset);
             lease.ChordRequested = chord => OnChord?.Invoke(id, chord);
             lease.OwnerContainer = container; lease.OwnerWorkspace = isolationKey;   // fixed now: the page may be gone by the time a download ends
             lease.DownloadFinished = (name, path, source, ok, agent) => OnDownloadFinished?.Invoke(id, name, path, source, ok, agent, lease.OwnerContainer, lease.OwnerWorkspace);
+            lease.DownloadStarted = (name, source, op, agent) => OnDownloadStarted?.Invoke(id, name, source, op, agent);
             // Before anything else reacts: an environment whose browser process died cannot create new controls, so forget it NOW (the environment's own
             // exit event can arrive later than the failure that triggers the page's recovery).
             lease.EngineFailed += f => { if (f.WholeEngine) _envs.Remove(key); };
             _live[id] = lease;
             _identities[id] = key;
-            if (initialUrl.Scheme == "jev" && LocalPage is not null && LocalPage(initialUrl) is { } html) view.CoreWebView2.NavigateToString(html);
-            else view.CoreWebView2.Navigate(initialUrl.ToString());
+            if (!skipInitialNavigate)
+            {
+                if (initialUrl.Scheme == "jev" && LocalPage is not null && LocalPage(initialUrl) is { } html) view.CoreWebView2.NavigateToString(html);
+                else view.CoreWebView2.Navigate(initialUrl.ToString());
+            }
             return lease;
         }
         catch
@@ -457,30 +503,49 @@ public sealed class WebView2Lease : IRendererLease
         // while it is still loading, and completion must not forget that.
         core.NavigationCompleted += (_, _) => { lease.Loaded?.Invoke(); };
         // The engine's default for a new-window request is to open an UNMANAGED window that skips renderer admission, Shield and the permission adapter.
-        // It is never allowed to: the request is always handled here, and the app decides whether it becomes a managed tab or is refused.
+        // It is never allowed to: the app always decides, through PopupRequested, whether it becomes a real, opener-linked managed tab (accepted here via
+        // e.NewWindow, which is what keeps window.opener intact) or is refused outright. A deferral is needed because the decision -- and, if accepted,
+        // creating the popup's own renderer -- is asynchronous; the engine will not navigate anything until this completes.
         core.NewWindowRequested += (_, e) =>
         {
-            e.Handled = true;
-            Uri.TryCreate(e.Uri, UriKind.Absolute, out var target);
-            lease.PopupRequested?.Invoke(target, e.IsUserInitiated, lease.NavigationGuard is not null);
+            var deferral = e.GetDeferral();
+            var pending = HandleNewWindowAsync();   // fire-and-forget: `_` is already this lambda's own (typed) sender parameter, not a discard, here
+            async Task HandleNewWindowAsync()
+            {
+                try
+                {
+                    Uri.TryCreate(e.Uri, UriKind.Absolute, out var target);
+                    CoreWebView2? newCore = null;
+                    if (lease.PopupRequested is { } ask) newCore = await ask(target, e.IsUserInitiated, lease.NavigationGuard is not null);
+                    if (newCore is not null) e.NewWindow = newCore; else e.Handled = true;
+                }
+                catch (Exception) { e.Handled = true; }   // a failed adoption is a refusal, never a half-open window
+                finally { deferral.Complete(); }
+            }
         };
         core.IsDocumentPlayingAudioChanged += (_, _) => lease.SetDetected(ProtectionFlags.Audible, core.IsDocumentPlayingAudio);
         core.DownloadStarting += (_, e) =>
         {
             var gate = lease.DownloadGate;
             var deferral = gate is null ? null : e.GetDeferral();
-            void Track(Uri? source)
+            void Track(string name, Uri? source, bool agent)
             {
                 lease._activeDownloads++;
                 lease.SetDetected(ProtectionFlags.DownloadActive, true);
+                try { lease.DownloadStarted?.Invoke(name, source, e.DownloadOperation, agent); } catch (Exception) { }
                 e.DownloadOperation.StateChanged += (d, _) =>
                 {
                     if (d.State == CoreWebView2DownloadState.InProgress) return;
-                    try { var saved = d.ResultFilePath ?? ""; lease.DownloadFinished?.Invoke(Path.GetFileName(saved) is { Length: > 0 } fn ? fn : "a file", saved, source, d.State == CoreWebView2DownloadState.Completed, lease.NavigationGuard is not null); } catch (Exception) { }
+                    try { var saved = d.ResultFilePath ?? ""; lease.DownloadFinished?.Invoke(Path.GetFileName(saved) is { Length: > 0 } fn ? fn : "a file", saved, source, d.State == CoreWebView2DownloadState.Completed, agent); } catch (Exception) { }
                     if (--lease._activeDownloads <= 0) { lease._activeDownloads = 0; lease.SetDetected(ProtectionFlags.DownloadActive, false); }
                 };
             }
-            if (gate is null) { Uri.TryCreate(e.DownloadOperation.Uri, UriKind.Absolute, out var src0); Track(src0); return; }
+            if (gate is null)
+            {
+                Uri.TryCreate(e.DownloadOperation.Uri, UriKind.Absolute, out var src0);
+                Track(Path.GetFileName(e.ResultFilePath ?? "") is { Length: > 0 } n0 ? n0 : "a file", src0, lease.NavigationGuard is not null);
+                return;
+            }
             // The person (or the policy) is asked BEFORE anything is written. Cancel and failure both mean nothing is saved.
             var pending = Decide();   // observed inside: it never throws
             async Task Decide()
@@ -491,7 +556,7 @@ public sealed class WebView2Lease : IRendererLease
                     Uri.TryCreate(e.DownloadOperation.Uri, UriKind.Absolute, out var source);
                     if (!await gate(name, source, lease.NavigationGuard is not null)) { e.Cancel = true; return; }
                     if (lease.DownloadPathOverride is { } path) { e.ResultFilePath = Path.Combine(path, Path.GetFileName(e.ResultFilePath ?? "download.bin")); e.Handled = true; }
-                    Track(source);
+                    Track(name, source, lease.NavigationGuard is not null);
                 }
                 catch (Exception) { try { e.Cancel = true; } catch (Exception) { } }
                 finally { try { deferral!.Complete(); } catch (Exception) { } }
@@ -989,14 +1054,17 @@ public sealed class WebView2Lease : IRendererLease
     /// <summary>The page forwarded a browser shortcut it did not use itself (for example "addr" for Ctrl+L).</summary>
     public Action<string>? ChordRequested { get; set; }
     public event Action<EngineFailure>? EngineFailed;
-    /// <summary>(address, the person did it with a click or key, this is an agent's page). Set by the manager.</summary>
-    public Action<Uri?, bool, bool>? PopupRequested { get; set; }
+    /// <summary>(address, the person did it with a click or key, this is an agent's page) → the popup's ready-to-navigate CoreWebView2 if accepted, else
+    /// null. Set by the manager. Returning a real object here is what lets the engine's own accept-and-navigate keep <c>window.opener</c> intact.</summary>
+    public Func<Uri?, bool, bool, Task<CoreWebView2?>>? PopupRequested { get; set; }
     /// <summary>(file name, where from, this is an agent's page) → may it be saved? Set by the manager; null = no question is asked.</summary>
     public Func<string, Uri?, bool, Task<bool>>? DownloadGate { get; set; }
     /// <summary>Measurement only: save into this folder without the engine's own save UI.</summary>
     public string? DownloadPathOverride { get; set; }
     /// <summary>(file name, saved path, where from, finished, this is an agent's page). Set by the manager.</summary>
     public Action<string, string, Uri?, bool, bool>? DownloadFinished { get; set; }
+    /// <summary>(file name, where from, the live engine object, this is an agent's page). Set by the manager.</summary>
+    public Action<string, Uri?, CoreWebView2DownloadOperation, bool>? DownloadStarted { get; set; }
     /// <summary>The identity the page belonged to when it was created. Null = unknown.</summary>
     public IdentityContainer? OwnerContainer { get; set; }
     public ContextId OwnerWorkspace { get; set; }
@@ -1114,6 +1182,7 @@ public sealed class WebView2Lease : IRendererLease
         PopupRequested = null;
         DownloadGate = null;
         DownloadFinished = null;
+        DownloadStarted = null;
         ZoomRequested = null;
         ChordRequested = null;
     }

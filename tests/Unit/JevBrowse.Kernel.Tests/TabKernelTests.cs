@@ -137,4 +137,28 @@ public class TabKernelTests : IDisposable
         Assert.Single(new TabRepository(_db).LoadAll());
         Assert.Equal(b.Id, _k.Tabs[0].Id);
     }
+
+    [Fact]
+    public void Open_and_OpenIn_use_the_given_presetId_exactly_when_one_is_given()
+    {
+        var id = ResourceId.New();
+        var t = _k.Open(new Uri("https://example.org/a"), presetId: id);
+        Assert.Equal(id, t.Id);
+        Assert.Single(_k.Tabs, x => x.Id == id);
+
+        var ws = _k.CreateWorkspace("Other");
+        var id2 = ResourceId.New();
+        var t2 = _k.OpenIn(ws.Id, new Uri("https://example.org/b"), presetId: id2);
+        Assert.Equal(id2, t2.Id);
+        Assert.Single(_k.Tabs, x => x.Id == id2);
+    }
+
+    [Fact]
+    public void Open_and_OpenIn_still_generate_a_fresh_id_when_none_is_given()
+    {
+        var a = _k.Open(new Uri("https://example.org/a"));
+        var b = _k.Open(new Uri("https://example.org/b"));
+        Assert.NotEqual(a.Id, b.Id);
+        Assert.NotEqual(default, a.Id);
+    }
 }

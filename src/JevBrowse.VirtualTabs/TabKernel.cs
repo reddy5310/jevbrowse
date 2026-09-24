@@ -378,10 +378,10 @@ public sealed class TabKernel
         Changed?.Invoke(new("loaded", default, $"{_tabs.Count} tabs"));
     }
 
-    public VirtualTab Open(Uri url)
+    public VirtualTab Open(Uri url, ResourceId? presetId = null)
     {
         RequireOpenWorkspace(ActiveWorkspace);
-        var t = new VirtualTab(ResourceId.New(), url, "", ActiveWorkspace);
+        var t = new VirtualTab(presetId ?? ResourceId.New(), url, "", ActiveWorkspace);
         _tabs.Add(t);
         Persist(t);
         Changed?.Invoke(new("opened", t.Id, url.Host));
@@ -428,11 +428,16 @@ public sealed class TabKernel
             return applied;
         }, ct);
 
-    /// <summary>Opens a tab in a named workspace WITHOUT switching to it. Open() is for the person; this is for work done on their behalf.</summary>
-    public VirtualTab OpenIn(ContextId workspace, Uri url)
+    /// <summary>
+    /// Opens a tab in a named workspace WITHOUT switching to it. Open() is for the person; this is for work done on their behalf.
+    /// <paramref name="presetId"/> is for adopting a renderer the caller already created outside the normal lazy path (a popup window accepted with its
+    /// opener relationship intact: see MainWindow's popup handling) — the id must match exactly what that renderer was registered under, or activating
+    /// this tab will try to create a second, unrelated renderer for it.
+    /// </summary>
+    public VirtualTab OpenIn(ContextId workspace, Uri url, ResourceId? presetId = null)
     {
         RequireOpenWorkspace(workspace);
-        var t = new VirtualTab(ResourceId.New(), url, "", workspace);
+        var t = new VirtualTab(presetId ?? ResourceId.New(), url, "", workspace);
         _tabs.Add(t);
         Persist(t);
         Changed?.Invoke(new("opened", t.Id, url.Host));

@@ -22,6 +22,11 @@ public sealed partial class MainWindow
     private HistoryRecorder? _historyRecorder;
     // Private-session (or unknown-owner) downloads: memory only, each tied to the workspace it belongs to so ending that session forgets it.
     private readonly List<(DownloadRecord Rec, ContextId Workspace)> _sessionDownloads = [];
+    // In-progress downloads (name, where the file came from, the live engine object for its byte count and Cancel). Session-only by nature: nothing here
+    // is meaningful after the app closes. A download that ends without completing moves to _recentlyFailed so Retry has the address to reopen; the
+    // completed/persisted list (DownloadRepository, above) does not keep the source address, so Retry is only offered for a download from this session.
+    private readonly List<(string Name, Uri? Source, Microsoft.Web.WebView2.Core.CoreWebView2DownloadOperation Op)> _liveDownloads = [];
+    private readonly List<(string Name, Uri? Source)> _recentlyFailed = [];
 
     private void InitLibrary()
     {
@@ -40,6 +45,28 @@ public sealed partial class MainWindow
             try { if (!ordinary) _sessionDownloads.Add((rec, workspace)); else _downloads!.Add(rec); } catch (Exception) { }
             if (PanelOpen && _panelId == "downloads") RefreshPanel(force: true);
             StatusText.Text = ok ? $"Downloaded {name}. Ctrl+J shows your downloads." : $"The download of {name} did not finish.";
+        };
+        _leases.OnDownloadStarted = (id, name, source, op, agent) =>
+        {
+            if (agent) return;
+            var row = (Name: name, Source: source, Op: op);
+            _liveDownloads.Add(row);
+            var lastUiUpdate = DateTime.MinValue;
+            op.BytesReceivedChanged += (_, _) =>
+            {
+                var now = DateTime.UtcNow;
+                if ((now - lastUiUpdate).TotalMilliseconds < 200) return;   // a progress bar does not need every single byte
+                lastUiUpdate = now;
+                if (PanelOpen && _panelId == "downloads") RefreshPanel(force: true);
+            };
+            op.StateChanged += (_, _) =>
+            {
+                if (op.State == Microsoft.Web.WebView2.Core.CoreWebView2DownloadState.InProgress) return;
+                _liveDownloads.RemoveAll(d => ReferenceEquals(d.Op, op));
+                if (op.State != Microsoft.Web.WebView2.Core.CoreWebView2DownloadState.Completed) { _recentlyFailed.Insert(0, (name, source)); if (_recentlyFailed.Count > 20) _recentlyFailed.RemoveAt(20); }
+                if (PanelOpen && _panelId == "downloads") RefreshPanel(force: true);
+            };
+            if (PanelOpen && _panelId == "downloads") RefreshPanel(force: true);
         };
     }
 
@@ -153,6 +180,57 @@ public sealed partial class MainWindow
     {
         if (_downloads is null) return null;
         var repo = _downloads;
+        var live = new ListView { SelectionMode = ListViewSelectionMode.None };
+        foreach (var (name, source, op) in _liveDownloads.ToList())
+        {
+            var row = new Grid { ColumnSpacing = Tokens.Space(8), Padding = Tokens.Inset("JevInsetSlim") };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var text = new StackPanel { Spacing = Tokens.Space(2) };
+            text.Children.Add(new TextBlock { Text = name, TextWrapping = TextWrapping.Wrap, MaxLines = 2, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+            long received = 0, total = 0;
+            try { received = op.BytesReceived; total = Math.Max(0, op.TotalBytesToReceive); } catch (Exception) { }   // -1/0 both mean "unknown total"
+            var pct = total > 0 ? $"{received * 100 / total}%" : $"{received / 1024} KB";
+            text.Children.Add(new TextBlock { Text = $"Downloading · {pct}{(source is { Host.Length: > 0 } ? " · " + source.Host : "")}", FontSize = 12, Foreground = Tokens.Brush("JevTextSecondaryBrush") });
+            if (total > 0)
+            {
+                var bar = new ProgressBar { Minimum = 0, Maximum = 100, Value = received * 100.0 / total, Margin = new Thickness(0, 4, 0, 0) };
+                text.Children.Add(bar);
+            }
+            row.Children.Add(text);
+            var cancel = new Button { Content = "Cancel", Style = (Style)Application.Current.Resources["JevToolButton"] };
+            AutomationProperties.SetName(cancel, $"Cancel downloading {name}");
+            cancel.Click += (_, _) => { try { op.Cancel(); } catch (Exception) { } };
+            Grid.SetColumn(cancel, 1);
+            row.Children.Add(cancel);
+            AutomationProperties.SetName(row, $"Downloading {name}, {pct}");
+            live.Items.Add(row);
+        }
+        var failed = new ListView { SelectionMode = ListViewSelectionMode.None };
+        foreach (var (name, source) in _recentlyFailed.ToList())
+        {
+            var row = new Grid { ColumnSpacing = Tokens.Space(8), Padding = Tokens.Inset("JevInsetSlim") };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var text = new StackPanel { Spacing = Tokens.Space(2) };
+            text.Children.Add(new TextBlock { Text = name, TextWrapping = TextWrapping.Wrap, MaxLines = 2, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+            text.Children.Add(new TextBlock { Text = "Did not finish (cancelled or interrupted)", FontSize = 12, Foreground = Tokens.Brush("JevTextSecondaryBrush") });
+            row.Children.Add(text);
+            var retry = new Button { Content = "Retry", Style = (Style)Application.Current.Resources["JevToolButton"], IsEnabled = source is not null };
+            AutomationProperties.SetName(retry, $"Retry downloading {name}");
+            retry.Click += async (_, _) =>
+            {
+                if (source is null || _kernel is null) return;
+                _recentlyFailed.RemoveAll(f => f.Name == name && f.Source == source);
+                try { var t = _kernel.Open(source); await _kernel.ActivateAsync(t.Id); }
+                catch (Exception ex) { StatusText.Text = "Could not retry the download: " + ex.Message; }
+                if (PanelOpen && _panelId == "downloads") RefreshPanel(force: true);
+            };
+            Grid.SetColumn(retry, 1);
+            row.Children.Add(retry);
+            AutomationProperties.SetName(row, $"{name}. Did not finish.");
+            failed.Items.Add(row);
+        }
         var list = new ListView { SelectionMode = ListViewSelectionMode.None };
         var rows = _sessionDownloads.Select(d => (d: d.Rec, session: true)).Concat(repo.List().Select(d => (d, session: false))).OrderByDescending(x => x.d.FinishedAt).ToList();
         foreach (var (d, session) in rows)
@@ -187,7 +265,11 @@ public sealed partial class MainWindow
         };
         var clear = new Button { Content = "Clear list", Style = (Style)Application.Current.Resources["JevToolButton"], IsEnabled = rows.Count > 0 };
         clear.Click += (_, _) => { repo.Clear(); _sessionDownloads.Clear(); RefreshPanel(force: true); StatusText.Text = "Cleared the downloads list. The files were not deleted."; };
-        return ("Downloads", new StackPanel { Spacing = Tokens.Space(8), Children = { list, note, clear } });
+        var body = new StackPanel { Spacing = Tokens.Space(8) };
+        if (live.Items.Count > 0) body.Children.Add(live);
+        if (failed.Items.Count > 0) body.Children.Add(failed);
+        body.Children.Add(list); body.Children.Add(note); body.Children.Add(clear);
+        return ("Downloads", body);
     }
 
     private void ShowInFolder(string path)

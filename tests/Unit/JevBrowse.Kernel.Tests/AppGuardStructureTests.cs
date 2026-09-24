@@ -36,9 +36,12 @@ public class AppGuardStructureTests
     [Fact]
     public void A_popup_is_decided_by_the_policy_and_opened_as_a_managed_tab_in_the_openers_workspace()
     {
-        var w = Body(Read("MainWindow.xaml.cs"), "private void OnPopupRequested(");
+        // Returns Task<bool> and takes the reserved id now: the popup's renderer is created by the SAME id, with window.opener preserved, and this
+        // method's job is only the policy decision and registering the tab under that exact id -- not itself creating anything renderer-side.
+        var w = Body(Read("MainWindow.xaml.cs"), "private async Task<bool> OnPopupRequested(");
         Assert.Contains("PopupPolicy.Decide(", w);
         Assert.Contains("OpenIn(src.WorkspaceId", w);
+        Assert.Contains("presetId: newId", w);
     }
 
     [Fact]

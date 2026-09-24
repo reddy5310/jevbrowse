@@ -100,6 +100,8 @@ public sealed partial class MainWindow
         addThis.Click += (_, _) => { BookmarkCurrentPage(); Refresh(); };
         var import = new Button { Content = "Import bookmarks file…", Style = (Style)Application.Current.Resources["JevToolButton"] };
         import.Click += async (_, _) => { await ImportBookmarksAsync(); Refresh(); };
+        var export = new Button { Content = "Export bookmarks file…", Style = (Style)Application.Current.Resources["JevToolButton"] };
+        export.Click += async (_, _) => await ExportBookmarksAsync();
         var importHelp = new TextBlock
         {
             FontSize = 12, TextWrapping = TextWrapping.Wrap, Foreground = Tokens.Brush("JevTextSecondaryBrush"),
@@ -123,7 +125,7 @@ public sealed partial class MainWindow
         box.KeyDown += async (_, ev) => { if (ev.Key == Windows.System.VirtualKey.Enter && shown.Count > 0) { ev.Handled = true; await Open(0); } };
         Refresh();
         _panelFocus = box;
-        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = Tokens.Space(8), Children = { addThis, import } };
+        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = Tokens.Space(8), Children = { addThis, import, export } };
         return ("Bookmarks", new StackPanel { Spacing = Tokens.Space(8), Children = { box, actions, list, note, importHelp, engine } });
     }
 
@@ -144,5 +146,23 @@ public sealed partial class MainWindow
             StatusText.Text = $"Imported {added} new bookmark{(added == 1 ? "" : "s")}" + (added < parsed.Count ? $" ({parsed.Count - added} were already saved)." : ".");
         }
         catch (Exception ex) { StatusText.Text = "Could not import that file: " + ex.Message; }
+    }
+
+    private async Task ExportBookmarksAsync()
+    {
+        try
+        {
+            var all = _bookmarks!.List(limit: int.MaxValue);
+            if (all.Count == 0) { StatusText.Text = "There are no bookmarks to export yet."; return; }
+            var picker = new Windows.Storage.Pickers.FileSavePicker();
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+            picker.FileTypeChoices.Add("Bookmarks (HTML)", new List<string> { ".html" });
+            picker.SuggestedFileName = "jevbrowse-bookmarks";
+            var file = await picker.PickSaveFileAsync();
+            if (file is null) return;
+            await File.WriteAllTextAsync(file.Path, BookmarkExport.ToHtml(all));
+            StatusText.Text = $"Exported {all.Count} bookmark{(all.Count == 1 ? "" : "s")} to {file.Name}. Any browser can import this file.";
+        }
+        catch (Exception ex) { StatusText.Text = "Could not export bookmarks: " + ex.Message; }
     }
 }

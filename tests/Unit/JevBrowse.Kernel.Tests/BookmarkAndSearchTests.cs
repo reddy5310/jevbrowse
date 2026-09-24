@@ -104,4 +104,39 @@ public class BookmarkAndSearchTests : IDisposable
             Assert.Contains("a%20b", u.AbsoluteUri);
         }
     }
+
+    [Fact]
+    public void Exported_bookmarks_round_trip_through_import()
+    {
+        var original = new[]
+        {
+            new Bookmark("https://example.org/a", "Example & \"quoted\" <tag>", "", DateTimeOffset.FromUnixTimeSeconds(1600000000)),
+            new Bookmark("https://example.org/w", "Work page", "Work", DateTimeOffset.FromUnixTimeSeconds(1600000100)),
+        };
+        var html = BookmarkExport.ToHtml(original);
+        var reimported = BookmarkImport.Parse(html);
+
+        Assert.Equal(2, reimported.Count);
+        Assert.Contains(reimported, b => b.Url == "https://example.org/a" && b.Title == "Example & \"quoted\" <tag>");
+        Assert.Contains(reimported, b => b.Url == "https://example.org/w" && b.Folder == "Work");
+    }
+
+    [Fact]
+    public void Exported_html_never_contains_an_unescaped_special_character_from_the_title()
+    {
+        var html = BookmarkExport.ToHtml([new Bookmark("https://example.org/x", "<script>alert(1)</script> & \"more\"")]);
+        Assert.DoesNotContain("<script>", html);
+        Assert.Contains("&lt;script&gt;", html);
+    }
+
+    [Fact]
+    public void Export_and_import_agree_end_to_end_through_the_repository()
+    {
+        var repo = new BookmarkRepository(_db);
+        repo.SaveMany(BookmarkImport.Parse(Export));
+        var html = BookmarkExport.ToHtml(repo.List());
+        var reimported = BookmarkImport.Parse(html);
+        Assert.Equal(repo.List().Count, reimported.Count);
+        Assert.All(repo.List(), original => Assert.Contains(reimported, r => r.Url == original.Url));
+    }
 }

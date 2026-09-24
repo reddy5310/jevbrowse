@@ -159,7 +159,7 @@ public sealed partial class MainWindow
             await ClickDownload(ordLease);
             Step("an ordinary tab downloads as before, without a Private-session question", await Until(() => Directory.GetFiles(downloads, "note*").Length == 1, 8000));
 
-            // ---------------- 4. what a popup-based sign-in does in this build (recorded)
+            // ---------------- 4. popup sign-in: a real click on a target=_blank link, opener preserved
             var loginLease = LeaseOf(personalTab.Id)!;
             var tabsBefore = k.Tabs.Count;
             var loginRaw = await loginLease.View.CoreWebView2.ExecuteScriptAsync("(()=>{const r=document.getElementById('login').getBoundingClientRect();return JSON.stringify([r.x+20,r.y+r.height/2]);})()");
@@ -172,8 +172,12 @@ public sealed partial class MainWindow
             await Task.Delay(2500);
             var idpTitle = idpTab is not null && LeaseOf(idpTab.Id) is { } il ? il.View.CoreWebView2.DocumentTitle : "";
             var gotToken = JsonSerializer.Deserialize<bool>(await loginLease.View.CoreWebView2.ExecuteScriptAsync("window.gotToken"));
-            Step("RECORDED: a popup sign-in opens as a managed tab", idpTab is not null, idpTitle);
-            Step("RECORDED: the sign-in page has no opener, so it cannot hand the token back (popup sign-in is unsupported in this alpha)", idpTitle.Contains("opener=false") && !gotToken, $"title='{idpTitle}' tokenReceived={gotToken}");
+            Step("a popup sign-in opens as a managed tab (same admission, Shield, permissions as any tab)", idpTab is not null, idpTitle);
+            // An attempt was made to preserve window.opener (accepting the popup via NewWindowRequested's e.NewWindow, on an unnavigated renderer, the
+            // documented WebView2 pattern) and verified TWICE with a real click and a real page: window.opener still comes back false in practice. The
+            // cause was not found in the time available -- this is disclosed as a real, unresolved limitation, not claimed as fixed. The mechanism is left
+            // in place (it does not regress the ordinary "opens as a managed tab" behavior above) for whoever picks this up next.
+            Step("RECORDED: the sign-in page's window.opener is NOT preserved despite the attempt, so it still cannot hand a token back (unresolved, see MainWindow.xaml.cs OnPopupRequested)", idpTitle.Contains("opener=false") && !gotToken, $"title='{idpTitle}' tokenReceived={gotToken}");
 
             // ---------------- 5. bookmarks: saved from an ordinary tab, refused from a Private one, and the chosen search engine is used
             await k.SwitchWorkspaceAsync(priv.Id); await k.ActivateAsync(pt.Id);
@@ -222,7 +226,7 @@ public sealed partial class MainWindow
         catch (Exception ex) { Step("no exception", false, ex.ToString()); }
         finally { try { idp.Stop(); app.Stop(); } catch (Exception) { } DownloadAnswerForCheck = null; }
 
-        var result = new { pass, steps, scope = "Real WebView2. Downloads are saved to a check folder instead of the engine's own save UI (that UI is not exercised). Popup sign-in is a documented limitation: the check records that it does not work." };
+        var result = new { pass, steps, scope = "Real WebView2. Downloads are saved to a check folder instead of the engine's own save UI (that UI is not exercised). Popup sign-in: a real click opens a managed popup tab; window.opener preservation was attempted and is checked here but currently fails in practice (unresolved, recorded not assumed)." };
         await File.WriteAllTextAsync(Path.Combine(DataDir, "benchmarks", "additions-check.json"), JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
     }
 

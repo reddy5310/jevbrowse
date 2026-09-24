@@ -61,3 +61,34 @@ public static partial class BookmarkImport
 
     private static string Trim(string s, int max) => s.Length <= max ? s : s[..max];
 }
+
+/// <summary>
+/// Writes the same Netscape bookmark-file format <see cref="BookmarkImport"/> reads, so what comes out of JevBrowse can be read back in by JevBrowse or
+/// by any other browser. Pure: takes the list, returns the file text. Bookmarks are grouped by folder (empty folder first, as a flat top-level group),
+/// matching how they were imported; within a folder they keep the order they were given in.
+/// </summary>
+public static class BookmarkExport
+{
+    public static string ToHtml(IEnumerable<Bookmark> bookmarks)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append("<!DOCTYPE NETSCAPE-Bookmark-file-1>\n");
+        sb.Append("<!-- Exported by JevBrowse. This file is readable by Chrome, Edge, Firefox, Brave and Safari's bookmark import, and by JevBrowse's own. -->\n");
+        sb.Append("<META HTTP-EQUIV=\"Content-Type\" CONTENT=\"text/html; charset=UTF-8\">\n<TITLE>Bookmarks</TITLE>\n<H1>Bookmarks</H1>\n<DL><p>\n");
+        foreach (var group in bookmarks.GroupBy(b => b.Folder).OrderBy(g => g.Key.Length == 0 ? 0 : 1))   // no-folder items first, as a flat group
+        {
+            var indent = group.Key.Length == 0 ? "    " : "        ";
+            if (group.Key.Length > 0) sb.Append($"    <DT><H3>{Escape(group.Key)}</H3>\n    <DL><p>\n");
+            foreach (var b in group)
+            {
+                var added = (b.AddedAt ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds();
+                sb.Append($"{indent}<DT><A HREF=\"{Escape(b.Url)}\" ADD_DATE=\"{added}\">{Escape(b.Title)}</A>\n");
+            }
+            if (group.Key.Length > 0) sb.Append("    </DL><p>\n");
+        }
+        sb.Append("</DL><p>\n");
+        return sb.ToString();
+    }
+
+    private static string Escape(string s) => s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("\"", "&quot;");
+}

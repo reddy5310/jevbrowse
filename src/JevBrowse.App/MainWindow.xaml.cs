@@ -3128,31 +3128,35 @@ public sealed partial class MainWindow : Window
     // ---- pop-ups ----
 
     /// <summary>
-    /// A page asked for a new window. The engine never gets to make one: an allowed request becomes an ordinary tab in the SAME workspace as its opener
-    /// (so a Private page's window is Private), created and admitted like any other; everything else is refused and the person is told once.
-    /// Note the trade-off: the new tab has no link back to its opener, so sign-in pop-ups that report back to the opening page do not work.
+    /// A page asked for a new window. The engine never creates an unmanaged one: an allowed request becomes an ordinary tab in the SAME workspace as its
+    /// opener (so a Private page's window is Private), created and admitted like any other; everything else is refused and the person is told once.
+    /// Accepted here means "yes" only — <see cref="WebView2Lease.PopupRequested"/>/the manager's <c>RequestPopupAsync</c> is what actually creates the
+    /// popup's renderer, in the same identity, and hands it to the engine via <c>NewWindow</c>. That was an attempt at preserving <c>window.opener</c> (the
+    /// documented WebView2 pattern: an unnavigated renderer, accepted via <c>NewWindow</c>, in the same environment as the opener); verified twice with a
+    /// real click and a real page, and <c>window.opener</c> still comes back false. <b>The trade-off this comment used to describe is still real: sign-in
+    /// pop-ups that report back to the opening page do not work.</b> The id given here is reserved for the renderer regardless, and MUST be the one the
+    /// new tab is opened under, or the two will never find each other.
+    /// This already runs on the UI thread (NewWindowRequested's own thread), so it calls the kernel directly rather than enqueueing.
     /// </summary>
-    private void OnPopupRequested(ResourceId opener, Uri? target, bool userInitiated, bool agentPage)
+    private async Task<bool> OnPopupRequested(ResourceId opener, Uri? target, bool userInitiated, bool agentPage, ResourceId newId)
     {
-        DispatcherQueue.TryEnqueue(async () =>
+        try
         {
-            try
+            if (_kernel is null) return false;
+            var src = _kernel.Tabs.FirstOrDefault(t => t.Id == opener);
+            var decision = PopupPolicy.Decide(userInitiated, agentPage, src is not null && _kernel.Active?.Id == opener, target?.Scheme);
+            _lastPopupDiag = $"userInitiated={userInitiated} agent={agentPage} inFront={src is not null && _kernel.Active?.Id == opener} -> {(decision.Allow ? "allow" : "block")}";
+            if (!decision.Allow || src is null || target is null)
             {
-                if (_kernel is null) return;
-                var src = _kernel.Tabs.FirstOrDefault(t => t.Id == opener);
-                var decision = PopupPolicy.Decide(userInitiated, agentPage, src is not null && _kernel.Active?.Id == opener, target?.Scheme);
-                _lastPopupDiag = $"userInitiated={userInitiated} agent={agentPage} inFront={src is not null && _kernel.Active?.Id == opener} -> {(decision.Allow ? "allow" : "block")}";
-                if (!decision.Allow || src is null || target is null)
-                {
-                    StatusText.Text = $"Blocked a pop-up from {src?.Url.Host ?? "a page"}: {decision.Reason}.";
-                    return;
-                }
-                var t = _kernel.OpenIn(src.WorkspaceId, target);
-                await _kernel.ActivateAsync(t.Id);
-                StatusText.Text = "Opened in a new tab. Pop-up sign-in windows that must report back to the page are not supported in this alpha.";
+                StatusText.Text = $"Blocked a pop-up from {src?.Url.Host ?? "a page"}: {decision.Reason}.";
+                return false;
             }
-            catch (Exception ex) { StatusText.Text = "Could not open the new window: " + ex.Message; }
-        });
+            var t = _kernel.OpenIn(src.WorkspaceId, target, presetId: newId);
+            await _kernel.ActivateAsync(t.Id);
+            StatusText.Text = "Opened in a new tab. Pop-up sign-in windows that must report back to the page are not supported in this alpha.";
+            return true;
+        }
+        catch (Exception ex) { StatusText.Text = "Could not open the new window: " + ex.Message; return false; }
     }
 
     // ---- Memory Lab (Phase 0 benchmark, kept as CI hook) ----
