@@ -3108,7 +3108,10 @@ public sealed partial class MainWindow : Window
                 return;
             }
             if (e.Key != VirtualKey.Enter) return;
-            var r = AddressInput.Resolve(AddressBox.Text, SearchEngines.Find(UiPrefs.Load(DataDir).SearchEngine));
+            // Ctrl+Enter: the person is explicitly saying "this is a site", the same convention as other browsers (example -> https://www.example.com).
+            var ctrlDown = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+            var engine = SearchEngines.Find(UiPrefs.Load(DataDir).SearchEngine);
+            var r = ctrlDown ? AddressInput.ResolveForceNavigate(AddressBox.Text, engine) : AddressInput.Resolve(AddressBox.Text, engine);
             if (r.Kind == AddressKind.Invalid) { if (!string.IsNullOrEmpty(r.Message)) StatusText.Text = r.Message; return; }
             var url = r.Url!;
             // What was typed is now SUBMITTED, so it is no longer an edit in progress: the address follows the page again once it navigates. (Judged as an

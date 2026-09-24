@@ -78,6 +78,57 @@ public class AddressInputTests
     }
 }
 
+public class CtrlEnterTests
+{
+    [Theory]
+    [InlineData("example", "https://www.example.com/")]
+    [InlineData("Example", "https://www.example.com/")]
+    [InlineData("example.com", "https://www.example.com/")]
+    [InlineData("www.example.com", "https://www.example.com/")]
+    [InlineData("example.co.uk", "https://www.example.co.uk/")]
+    [InlineData("  example  ", "https://www.example.com/")]
+    public void A_bare_word_becomes_www_dot_word_dot_com(string typed, string expected)
+    {
+        var r = AddressInput.ResolveForceNavigate(typed);
+        Assert.Equal(AddressKind.Navigate, r.Kind);
+        Assert.Equal(expected, r.Url!.ToString());
+    }
+
+    [Fact]
+    public void An_address_that_already_has_a_scheme_is_left_alone()
+    {
+        var r = AddressInput.ResolveForceNavigate("http://example.com/path");
+        Assert.Equal(AddressKind.Navigate, r.Kind);
+        Assert.Equal("http://example.com/path", r.Url!.ToString());
+    }
+
+    [Fact]
+    public void Localhost_is_not_turned_into_a_dot_com()
+    {
+        var r = AddressInput.ResolveForceNavigate("localhost:3000");
+        Assert.Equal(AddressKind.Navigate, r.Kind);
+        Assert.Equal("http://localhost:3000/", r.Url!.ToString());
+    }
+
+    [Theory]
+    [InlineData("two words")]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Anything_with_a_space_or_empty_is_still_a_search_or_invalid_not_forced_into_a_url(string typed)
+    {
+        var r = AddressInput.ResolveForceNavigate(typed);
+        Assert.NotEqual(AddressKind.Navigate, r.Kind);
+    }
+
+    [Fact]
+    public void The_chosen_search_engine_still_applies_when_Ctrl_Enter_falls_back_to_a_search()
+    {
+        var r = AddressInput.ResolveForceNavigate("two words", SearchEngines.Find("bing"));
+        Assert.Equal(AddressKind.Search, r.Kind);
+        Assert.StartsWith("https://www.bing.com/search", r.Url!.ToString());
+    }
+}
+
 public class PopupPolicyTests
 {
     [Fact] public void A_clicked_link_in_the_page_in_front_opens_a_tab() => Assert.True(PopupPolicy.Decide(true, false, true, "https").Allow);
