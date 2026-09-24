@@ -4,7 +4,14 @@
 
 A Windows browser that keeps hundreds of tabs open without hundreds of pages running, keeps each part of your life in its own workspace, and can tell you *why* it did anything. Open source (MPL-2.0), built on WebView2 (the same engine as Edge), no account, no telemetry.
 
-> **Status: private alpha, candidate 0.1.0-alpha.7, not yet published.** It works and is heavily tested (unit suite + real-engine checks + a local interaction pass on the exact release ZIP), but it is unsigned, has had no compatibility sweep beyond one development machine, and two things stand between this candidate and the first testers: a clean-Windows acceptance pass on a machine that has never run JevBrowse or a dev tool, and an independent review of the security fix that stops a web page from forging a browser shortcut or a zoom change (added this candidate; see [the release record](docs/releases/0.1.0-alpha.7.md)). Read [what is and is not proven](docs/EVIDENCE_MATRIX.md) and [the release runbook](docs/RELEASE_RUNBOOK.md) before trusting it with anything important.
+> **Status: public alpha (0.1.x).** Open source under MPL-2.0 and usable every day, but expect rough edges. Builds are **unsigned** (Windows SmartScreen will warn), have only been exercised on one development machine so far, and the security fix that stops a web page forging a browser shortcut has not yet had an independent review. [What is and is not proven](docs/EVIDENCE_MATRIX.md) lists every claim with its test or measurement; the [release notes](docs/releases/) say what each build has and has not been through. Please [report bugs](../../issues), especially compatibility problems on your own sites.
+
+## See it
+
+| | |
+|---|---|
+| ![Receipt](docs/img/receipt.png)<br>**Receipt**: what a site did during your visit: requests checked, sent to other sites, blocked, memory, and how JevBrowse treated the page. | ![Welcome](docs/img/hero-welcome.png)<br>**Open many. Run few.** Every tab is a saved record; only the ones you use hold a live renderer. |
+| ![Shield](docs/img/shield-panel.png)<br>**Shield** shows its work and turns off per site in one click. | ![RAM](docs/img/ram-benchmark-chart.png)<br>**Measured, not claimed** (`--memory-lab`, Debug build, one machine): disposing 4 of 5 renderers cut private memory 58%; suspending only 19%. |
 
 ## What is different
 
@@ -36,7 +43,7 @@ Download the latest zip from the [releases page](../../releases), extract anywhe
 Requirements: Windows 11, the .NET 10 SDK, Git. No Visual Studio.
 
 ```powershell
-git clone <this repo> ; cd jevbrowse
+git clone https://github.com/reddy5310/jevbrowse ; cd jevbrowse
 . .\scripts\env.ps1          # optional: keeps SDK, caches and data on the drive you choose
 .\scripts\dev.ps1 test       # all unit tests (~600, about a minute)
 .\scripts\dev.ps1 run        # build and start the app
